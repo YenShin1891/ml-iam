@@ -3,7 +3,7 @@ import numpy as np
 import logging
 import os
 
-from src.utils.plot import plot_time_series
+from utils.plotting import plot_time_series
 from utils.utils import setup_logging, load_session_state
 
 def make_filters(test_data):
