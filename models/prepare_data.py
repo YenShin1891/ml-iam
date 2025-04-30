@@ -1,0 +1,111 @@
+import os
+import pandas as pd
+import numpy as np
+import logging
+
+from models.config import (
+    DATA_PATH,
+    YEAR_STARTS_AT, DATASET_NAME,
+    OUTPUT_VARIABLES, INDEX_COLUMNS, NON_FEATURE_COLUMNS
+)
+
+def split_data(prepared):
+    groups = list(prepared.groupby(INDEX_COLUMNS))
+    n_groups = len(groups)
+    n_test_groups = int(n_groups * 0.1)
+    n_train_groups = n_groups - n_test_groups
+
+    np.random.shuffle(groups)
+
+    train_groups = groups[:n_train_groups]
+    test_groups = groups[n_train_groups:]
+
+    train_data = pd.concat([group[1] for group in train_groups]).reset_index(drop=True)
+    test_data = pd.concat([group[1] for group in test_groups]).reset_index(drop=True)
+
+    return train_data, test_data
+
+def encode_categorical_columns(data, columns):
+    for col in columns:
+        if col in data.columns:
+            data[col] = data[col].astype('category').cat.codes
+    return data
+
+def prepare_data(prepared, targets, features):
+    train_data, test_data = split_data(prepared)
+
+    X_train = train_data[features].copy()
+    y_train = train_data[targets].values.copy()
+    X_test_with_index = test_data[list(set(features + INDEX_COLUMNS))].copy()
+    y_test = test_data[targets].values.copy()
+
+    categorical_columns = ['Region', 'Model_Family']
+    X_train = encode_categorical_columns(X_train, categorical_columns)
+    X_test_with_index = encode_categorical_columns(X_test_with_index, categorical_columns)
+
+    return X_train, y_train, X_test_with_index, y_test, test_data
+
+def load_and_process_data() -> pd.DataFrame:
+    logging.info("Loading and processing data...")
+    processed_series = pd.read_csv(os.path.join(DATA_PATH, DATASET_NAME))
+    processed_series = processed_series.loc[:, :'2100']
+    year_columns = processed_series.columns[YEAR_STARTS_AT:]
+    non_year_columns = processed_series.columns[:YEAR_STARTS_AT]
+    year_melted = processed_series.melt(
+        id_vars=non_year_columns, value_vars=year_columns,
+        var_name='Year', value_name='value'
+    )
+    var_pivoted = year_melted.pivot_table(
+        index=['Model', 'Model_Family', 'Scenario', 'Scenario_Category', 'Region', 'Year'],
+        columns='Variable', values='value'
+    ).reset_index()
+    return var_pivoted
+
+def add_prev_outputs_twice(group: pd.DataFrame, output_variables: list) -> pd.DataFrame:
+    prev_output_df = group[output_variables].shift(1)
+    prev_output_df.columns = ['prev_' + col for col in prev_output_df.columns]
+    prev_output_df2 = group[output_variables].shift(2)
+    prev_output_df2.columns = ['prev2_' + col for col in prev_output_df2.columns]
+    combined = pd.concat([group, prev_output_df, prev_output_df2], axis=1).iloc[2:]
+    return combined
+
+def prepare_features_and_targets(data: pd.DataFrame) -> tuple:
+    logging.info("Preparing features and targets...")
+    prepared = data.groupby(INDEX_COLUMNS).apply(
+        add_prev_outputs_twice, output_variables = OUTPUT_VARIABLES
+    ).reset_index(drop=True)
+    prepared['Year'] = prepared['Year'].astype(int)
+    targets = OUTPUT_VARIABLES
+    features = [col for col in prepared.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
+    return prepared, features, targets
+
+
+def remove_rows_with_missing_outputs(X, y, X2=None):
+    """
+    Remove rows with missing outputs from the dataset.
+    Args:
+        X (pd.DataFrame or np.ndarray): Feature DataFrame.
+        y (pd.DataFrame or np.ndarray): Target DataFrame or array.
+        X2 (pd.DataFrame or np.ndarray, optional): Additional feature DataFrame.
+    """
+    mask = ~np.isnan(y).any(axis=1)
+    logging.info(f"Removing {mask.sum()} rows with missing outputs")
+
+    if isinstance(X, pd.DataFrame):
+        X = X[mask].reset_index(drop=True)
+    else:
+        X = X[mask]
+
+    if isinstance(y, pd.DataFrame):
+        y = y[mask].reset_index(drop=True)
+    else:
+        y = y[mask]
+
+    if X2 is not None:
+        if isinstance(X2, pd.DataFrame):
+            X2 = X2[mask].reset_index(drop=True)
+        else:
+            X2 = X2[mask]
+        return X, y, X2
+    else:
+        return X, y

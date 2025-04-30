@@ -1,0 +1,112 @@
+from sklearn.model_selection import RandomizedSearchCV
+from xgboost import XGBRegressor
+import os
+import logging
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+from models.config import RESULTS_PATH
+
+PARAM_DIST = {
+        'max_depth': [8, 10, 12],
+        'learning_rate': [0.1, 0.2, 0.3],
+        'n_estimators': [300, 500, 700],
+        'subsample': [0.7, 0.8, 0.9],
+        'colsample_bytree': [0.6, 0.8, 1.0],
+        'gamma': [0, 1, 5],
+        'reg_alpha': [0.1, 1, 10],
+        'reg_lambda': [10, 100, 1000],
+        'scale_pos_weight': [10, 100, 1000],
+    }
+
+PARAM_PAIRS = [
+    ('max_depth', 'learning_rate'),
+    ('n_estimators', 'subsample'),
+    ('colsample_bytree', 'gamma'),
+    ('reg_alpha', 'reg_lambda')
+]
+
+SEARCH_ITER_N = 1
+N_FOLDS = 2
+
+
+def visualize_multiple_hyperparam_searches(random_search_results, run_id):
+    """
+    Visualizes the hyperparameter search results using multiple heatmaps for different parameter pairs.
+    """
+    results_df = pd.DataFrame(random_search_results)
+    results_df['mean_test_score'] = random_search_results['mean_test_score']
+
+    param_search_dir = os.path.join(RESULTS_PATH, run_id, "config")
+    os.makedirs(param_search_dir, exist_ok=True)
+
+    for param1, param2 in PARAM_PAIRS:
+        heatmap_data = results_df.pivot_table(
+            index=f'param_{param1}',
+            columns=f'param_{param2}',
+            values='mean_test_score',
+            aggfunc='mean'
+        )
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(
+            heatmap_data,
+            annot=True,
+            fmt=".1f",
+            cmap="coolwarm",
+            cbar_kws={'label': 'Mean Test Score'},
+            linewidths=.5
+        )
+        plt.title(f"Hyperparameter Search: {param1} vs {param2}")
+        plt.xlabel(param2)
+        plt.ylabel(param1)
+        plt.tight_layout()
+
+        filename = f"hyperparam_search_{param1}_vs_{param2}.png"
+        plt.savefig(os.path.join(param_search_dir, filename))
+        plt.close()
+
+def hyperparameter_search(X_train, y_train):
+    # Create the XGBRegressor instance
+    xgb = XGBRegressor(
+        objective='reg:squarederror',
+        n_jobs=-1,
+        random_state=0,
+    )
+
+    # Set up RandomizedSearchCV
+    random_search = RandomizedSearchCV(
+        estimator=xgb,
+        param_distributions=PARAM_DIST,
+        scoring='neg_mean_squared_error',
+        cv=N_FOLDS,
+        verbose=2,
+        n_jobs=-1,
+        n_iter=SEARCH_ITER_N,  # Number of parameter settings sampled
+        random_state=0
+    )
+
+    logging.info("Starting hyperparameter search...")
+    random_search.fit(X_train, y_train)
+    logging.info("Hyperparameter search completed.")
+
+    # Output the best parameters and score
+    logging.info(f"Best parameters: {random_search.best_params_}")
+    logging.info(f"Best score: {random_search.best_score_}")
+    logging.info(random_search.cv_results_)
+
+    return random_search.best_estimator_, random_search.cv_results_
+
+# def train_xgb_per_target(X_train, y_train, target_names):
+#     models = {}
+#     for i, target in enumerate(target_names):
+#         valid_rows = ~np.isnan(y_train[:, i])
+#         X_train_filtered = X_train[valid_rows]
+#         y_train_filtered = y_train[valid_rows, i]
+
+#         logging.info(f"Training model for target: {target}")
+#         xgb = get_xgb_model()
+#         xgb.fit(X_train_filtered, y_train_filtered, verbose=10)
+#         models[target] = xgb
+#     return models
