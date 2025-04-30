@@ -3,8 +3,8 @@ import numpy as np
 import logging
 import os
 
-from src.plot import plot_time_series
-from src.utils import setup_logging, load_session_state
+from src.utils.plot import plot_time_series
+from utils.utils import setup_logging, load_session_state
 
 def make_filters(test_data):
     logging.info("Creating filters for test data...")

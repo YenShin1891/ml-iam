@@ -7,7 +7,7 @@ import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-from models.config import RESULTS_PATH
+from configs.config import RESULTS_PATH
 
 PARAM_DIST = {
         'max_depth': [8, 10, 12],

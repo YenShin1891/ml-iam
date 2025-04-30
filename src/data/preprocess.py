@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import logging
 
-from models.config import (
+from configs.config import (
     DATA_PATH,
     YEAR_STARTS_AT, DATASET_NAME,
     OUTPUT_VARIABLES, INDEX_COLUMNS, NON_FEATURE_COLUMNS

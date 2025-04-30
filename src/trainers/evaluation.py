@@ -6,7 +6,7 @@ import pandas as pd
 import concurrent.futures
 from tqdm import tqdm
 
-from models.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
+from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
 
 def group_test_data(X_test_with_index):
     """

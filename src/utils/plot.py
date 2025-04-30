@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import os
 
-from models.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
+from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
 
 def preprocess_data(test_data, y_test, preds, target_index):
     mask = ~np.isnan(y_test[:, target_index]) & ~np.isnan(preds[:, target_index])
