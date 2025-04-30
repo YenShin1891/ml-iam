@@ -4,8 +4,7 @@ import os
 import pickle
 from datetime import datetime, timezone, timedelta
 
-PARENT_DIR = os.path.dirname(os.path.abspath(__file__))
-RESULTS_DIR = os.path.join(os.path.dirname(PARENT_DIR), "results")
+from configs.config import RESULTS_PATH
 
 # for logging
 class KSTFormatter(logging.Formatter):
@@ -23,7 +22,7 @@ def setup_logging(run_id, log_file=None):
         caller_filename = inspect.stack()[1].filename
         log_file = os.path.basename(caller_filename).split('.')[0] + ".log"
 
-    log_dir = os.path.join(RESULTS_DIR, run_id, "logs")
+    log_dir = os.path.join(RESULTS_PATH, run_id, "logs")
     os.makedirs(log_dir, exist_ok=True)
 
     handlers = [logging.StreamHandler()]
@@ -47,7 +46,7 @@ def save_session_state(session_state, run_id):
     Save the session state to a file under the specified run directory.
     """
     file_name = "session_state.pkl"  # Fixed name for the latest session state
-    run_dir = os.path.join(RESULTS_DIR, run_id, "checkpoints")
+    run_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints")
     os.makedirs(run_dir, exist_ok=True)
     file_path = os.path.join(run_dir, file_name)
     with open(file_path, "wb") as f:
@@ -55,7 +54,7 @@ def save_session_state(session_state, run_id):
     logging.info("Session state saved to %s.", file_path)
 
 def load_session_state(file_name):
-    file_path = os.path.join(RESULTS_DIR, "checkpoints", file_name)
+    file_path = os.path.join(RESULTS_PATH, "checkpoints", file_name)
     try:
         with open(file_path, "rb") as f:
             return pickle.load(f)
@@ -64,15 +63,15 @@ def load_session_state(file_name):
         return {}
 
 
-def get_next_run_id(results_dir="results"):
+def get_next_run_id():
     """
     Generate the next run_id by checking existing run directories in the results folder.
     """
-    os.makedirs(results_dir, exist_ok=True)
+    os.makedirs(RESULTS_PATH, exist_ok=True)
 
     existing_runs = [
-        d for d in os.listdir(results_dir)
-        if os.path.isdir(os.path.join(results_dir, d)) and d.startswith("run_")
+        d for d in os.listdir(RESULTS_PATH)
+        if os.path.isdir(os.path.join(RESULTS_PATH, d)) and d.startswith("run_")
     ]
 
     # Extract numeric parts of run IDs and find the next available number
