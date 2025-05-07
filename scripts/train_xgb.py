@@ -69,7 +69,7 @@ def plot_xgb(session_state, run_id):
     plot_shap(run_id, model, X_test_with_index, features, targets)
 
 def main():
-    full_pipeline = False
+    full_pipeline = True
 
     if full_pipeline:
         run_id = get_next_run_id()
@@ -81,30 +81,20 @@ def main():
         save_session_state(session_state, run_id)
         plot_xgb(session_state, run_id)
     else:
-        run_id = "run_0"
+        run_id = "run_03"
         setup_logging(run_id)
         session_state = load_session_state(run_id)
         ### implement ###
-        from configs.config import RESULTS_PATH, NON_FEATURE_COLUMNS
-        from src.utils.plotting import transform_outputs_to_former_inputs, draw_shap_plot
-        import os
-
-        targets = session_state["targets"]
-        features = session_state["features"]
-        X_test_with_index = session_state["X_test_with_index"]
-
-        X_test = X_test_with_index.drop(columns=NON_FEATURE_COLUMNS, errors="ignore")
-        X_test = X_test.reset_index(drop=True)
-
-        # Subsample if needed
-        if X_test.shape[0] > 100:
-            indices = np.random.choice(X_test.shape[0], 100, replace=False)
-            X_test = X_test.iloc[indices]
-
-        shap_values = np.load(os.path.join(RESULTS_PATH, run_id, "plots", "shap_values.npy"), allow_pickle=True)
-        shap_values = transform_outputs_to_former_inputs(run_id, shap_values, targets, features)
-        logging.info("Drawing SHAP plots...")
-        draw_shap_plot(run_id, shap_values, X_test, features, targets)
+        # test with sampled train data
+        session_state["X_test_with_index"] = session_state["X_train"].sample(1000)
+        session_state["y_test"] = session_state["y_train"].sample(1000)
+        # impute data with nan output
+        session_state["X_test_with_index"], session_state["y_test"] = remove_rows_with_missing_outputs(
+            session_state["X_test_with_index"], session_state["y_test"]
+        )
+        preds = test_xgb(session_state, run_id)
+        session_state["preds"] = preds
+        plot_xgb(session_state, run_id)
         #################
         # save_session_state(session_state, "session_state1.pkl")
 

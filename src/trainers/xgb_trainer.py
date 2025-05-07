@@ -21,6 +21,19 @@ PARAM_DIST = {
         'scale_pos_weight': [10, 100, 1000],
     }
 
+# # for debugging
+# PARAM_DIST = {
+#         'max_depth': [10],
+#         'learning_rate': [0.2],
+#         'n_estimators': [500],
+#         'subsample': [0.8],
+#         'colsample_bytree': [0.8],
+#         'gamma': [1],
+#         'reg_alpha': [1],
+#         'reg_lambda': [100],
+#         'scale_pos_weight': [100],
+#     }
+
 PARAM_PAIRS = [
     ('max_depth', 'learning_rate'),
     ('n_estimators', 'subsample'),
@@ -36,6 +49,10 @@ def visualize_multiple_hyperparam_searches(random_search_results, run_id):
     """
     Visualizes the hyperparameter search results using multiple heatmaps for different parameter pairs.
     """
+    if random_search_results is None:
+        logging.error("No random search results provided.")
+        return
+    
     results_df = pd.DataFrame(random_search_results)
     results_df['mean_test_score'] = random_search_results['mean_test_score']
 
@@ -73,6 +90,8 @@ def hyperparameter_search(X_train, y_train):
         objective='reg:squarederror',
         n_jobs=-1,
         random_state=0,
+        tree_method='gpu_hist',
+        gpu_id=0
     )
 
     # Set up RandomizedSearchCV
@@ -98,15 +117,31 @@ def hyperparameter_search(X_train, y_train):
 
     return random_search.best_estimator_, random_search.cv_results_
 
-# def train_xgb_per_target(X_train, y_train, target_names):
-#     models = {}
-#     for i, target in enumerate(target_names):
-#         valid_rows = ~np.isnan(y_train[:, i])
-#         X_train_filtered = X_train[valid_rows]
-#         y_train_filtered = y_train[valid_rows, i]
+# # for debugging
+# def hyperparameter_search(X_train, y_train):
+#     # Create the XGBRegressor instance
+#     xgb = XGBRegressor(
+#         objective='reg:squarederror',
+#         n_jobs=-1,
+#         random_state=0,
+#         max_depth=10,
+#         learning_rate=0.2,
+#         n_estimators=500,
+#         subsample=0.8,
+#         colsample_bytree=0.8,
+#         gamma=1,
+#         reg_alpha=1,
+#         reg_lambda=100,
+#         scale_pos_weight=100,
+#         enable_categorical=True
+#     )
+#     logging.info("Training XGBRegressor with fixed parameters...")
+#     xgb.fit(
+#         X_train, 
+#         y_train, 
+#         eval_set=[(X_train, y_train)], 
+#         verbose=True
+#     )
+#     logging.info("Training completed.")
 
-#         logging.info(f"Training model for target: {target}")
-#         xgb = get_xgb_model()
-#         xgb.fit(X_train_filtered, y_train_filtered, verbose=10)
-#         models[target] = xgb
-#     return models
+#     return xgb, None
