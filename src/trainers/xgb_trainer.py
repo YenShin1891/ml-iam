@@ -11,7 +11,7 @@ from configs.config import RESULTS_PATH
 
 PARAM_DIST = {
         'max_depth': [8, 10, 12],
-        'learning_rate': [0.1, 0.2, 0.3],
+        'learning_rate': [0.01, 0.1, 0.2],
         'n_estimators': [300, 500, 700],
         'subsample': [0.7, 0.8, 0.9],
         'colsample_bytree': [0.6, 0.8, 1.0],
