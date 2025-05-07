@@ -28,8 +28,8 @@ PARAM_PAIRS = [
     ('reg_alpha', 'reg_lambda')
 ]
 
-SEARCH_ITER_N = 1
-N_FOLDS = 2
+SEARCH_ITER_N = 30
+N_FOLDS = 3
 
 
 def visualize_multiple_hyperparam_searches(random_search_results, run_id):
