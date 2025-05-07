@@ -6,6 +6,9 @@ from datetime import datetime, timezone, timedelta
 
 from configs.config import RESULTS_PATH
 
+# constants
+CHECKPOINT_FILE_NAME = "session_state.pkl"
+
 # for logging
 class KSTFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
@@ -45,16 +48,15 @@ def save_session_state(session_state, run_id):
     """
     Save the session state to a file under the specified run directory.
     """
-    file_name = "session_state.pkl"  # Fixed name for the latest session state
     run_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints")
     os.makedirs(run_dir, exist_ok=True)
-    file_path = os.path.join(run_dir, file_name)
+    file_path = os.path.join(run_dir, CHECKPOINT_FILE_NAME)
     with open(file_path, "wb") as f:
         pickle.dump(session_state, f)
     logging.info("Session state saved to %s.", file_path)
 
-def load_session_state(file_name):
-    file_path = os.path.join(RESULTS_PATH, "checkpoints", file_name)
+def load_session_state(run_id):
+    file_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", CHECKPOINT_FILE_NAME)
     try:
         with open(file_path, "rb") as f:
             return pickle.load(f)

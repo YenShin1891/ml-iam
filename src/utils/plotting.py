@@ -10,6 +10,7 @@ from PIL import Image
 import numpy as np
 import pandas as pd
 import os
+import json
 
 from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
 
@@ -32,7 +33,8 @@ def configure_axes(ax, use_log, min_val, max_val, xlabel, ylabel):
     ax.set_ylabel(ylabel)
 
 
-def plot_scatter(test_data, y_test, preds, targets, use_log=False):
+def plot_scatter(run_id, test_data, y_test, preds, targets, use_log=False):
+    logging.info("Creating scatter plot...")
     rows, cols = 3, 3
     fig, axes = plt.subplots(rows, cols, figsize=(20, 20))
 
@@ -65,8 +67,8 @@ def plot_scatter(test_data, y_test, preds, targets, use_log=False):
 
     plt.tight_layout()
     filename = "scatter_plot_log.png" if use_log else "scatter_plot.png"
-    os.makedirs(os.path.join(RESULTS_PATH, "plots"), exist_ok=True)
-    plt.savefig(os.path.join(os.path.join(RESULTS_PATH, "plots"), filename), bbox_inches='tight')
+    os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots"), exist_ok=True)
+    plt.savefig(os.path.join(RESULTS_PATH, run_id, "plots", filename), bbox_inches='tight')
     plt.close()
 
 
@@ -103,7 +105,7 @@ def plot_time_series(test_data, y_test, preds, targets, alpha=0.5, linewidth=0.5
     st.pyplot(plt)
 
 
-def get_shap_values(xgb, X_test):
+def get_shap_values(run_id, xgb, X_test):
     """
     Create SHAP plots for the XGBoost model.
     Args:
@@ -116,11 +118,11 @@ def get_shap_values(xgb, X_test):
     explainer = shap.TreeExplainer(xgb, approximate=True)
     logging.info("Calculating SHAP values...")
     shap_values = explainer.shap_values(X_test)
-    np.save(os.path.join(RESULTS_PATH, "plots", "shap_values.npy"), shap_values)
+    np.save(os.path.join(RESULTS_PATH, run_id, "plots", "shap_values.npy"), shap_values)
     logging.info("SHAP values saved to shap_values.npy")
 
 
-def transform_outputs_to_former_inputs(shap_values, targets, features):
+def transform_outputs_to_former_inputs(run_id, shap_values, targets, features):
     """
     Convert the output SHAP values to input SHAP values. For output variables in the 
     TOP 10 SHAP values, switch them to the inputs that influenced them, multiplying 
@@ -139,15 +141,18 @@ def transform_outputs_to_former_inputs(shap_values, targets, features):
         })
         sorted_df = sorted_df.sort_values(by="Importance", ascending=False)
         sorted_df_list.append(sorted_df)
-        sorted_df.to_csv(os.path.join(RESULTS_PATH, "plots", f"shap{i+1}_{target}.csv"), index=False)
+        sorted_df.to_csv(os.path.join(RESULTS_PATH, run_id, "plots", f"shap{i+1}_{target}.csv"), index=False)
         # divide all shap values by target_value
         shap_values[:, :, i] = shap_values[:, :, i] / target_value
 
     input_only = shap_values.copy()
+    feature_renaming = {}
     for i, target in enumerate(targets):
-        # transform outputs in top 7 features
-        num_features = len(shap_values.shape[1])
-        for j in range(7):
+        # transform outputs in top 20 features
+        num_features = shap_values.shape[1]
+        new_feature_list = features.copy()
+        feature_renaming[target] = {}
+        for j in range(20):
             output = sorted_df_list[i].iloc[j]["Feature"]   # e.g. output = "prev_Primary Energy|Coal"
             if output.startswith("prev") and not output.endswith(target):
                 num, output_name = output.split("_")    # e.g. num = "prev", output = "Primary Energy|Coal"
@@ -158,25 +163,38 @@ def transform_outputs_to_former_inputs(shap_values, targets, features):
                 for k in range(10):
                     new_input = sorted_df_list[output_index].iloc[k]["Feature"]
                     if not new_input.startswith("prev"):
-                        new_input_index = features.index(new_input)
+                        new_input_index = new_feature_list.index(new_input)
                         new_features = shap_values[:, new_input_index, output_index] * old_feature
-                        # make input_only[:, j, i] all zero
-                        input_only[:, j, i] = 0
-                        # append new_features at input_only[:, num_features, i]
-                        input_only[:, num_features, i] = new_features
+                        # replace input_only[:, j, i]
+                        input_only[:, j, i] = new_features
+                        # feature renamed to new_input
+                        if num == 1:
+                            feature_renaming[target][output] = "prev_" + new_input
+                        else:
+                            feature_renaming[target][output] = "prev" + str(num) + "_" + new_input
                         break
                     if k == 9:
                         logging.error(f"Input not found in the top 10 features for target {output_name}.")
-                
-                # append the SHAP values to input_only
 
+        assert input_only.shape[1] == len(new_feature_list), f"input_only: {input_only.shape[1]}" + "\n" + f"new_feature_list: {len(new_feature_list)}"
 
-        sorted_df.to_csv(os.path.join(RESULTS_PATH, "plots", f"shap{i+1}_{target}.csv"), index=False)
-    
+        new_mean_shap_values = np.mean(input_only[:, :, i], axis=0)  # Mean SHAP values for each feature
+        new_target_value = np.sum(new_mean_shap_values)
+        new_importance = new_mean_shap_values / new_target_value
+        new_sorted_df = pd.DataFrame({
+            "Feature": new_feature_list,
+            "Importance": new_importance
+        })
+        new_sorted_df = new_sorted_df.sort_values(by="Importance", ascending=False)
+        new_sorted_df.to_csv(os.path.join(RESULTS_PATH, run_id, "plots", f"shap{i+1}_{target}_input_only.csv"), index=False)
+
+    with open(os.path.join(RESULTS_PATH, run_id, "plots", "feature_renaming.json"), 'w') as json_file:
+        json.dump(feature_renaming, json_file, indent=4)
+
     return input_only
 
 
-def draw_shap_plot(shap_values, X_test, features, targets):
+def draw_shap_plot(run_id, shap_values, X_test, features, targets):
     units = ["Mt CO2/yr", "Mt CH4/yr", "Mt N2O/yr", "PJ/yr", "PJ/yr", "PJ/yr", "PJ/yr", "PJ/yr", "PJ/yr"]
     n = 8
 
@@ -205,12 +223,12 @@ def draw_shap_plot(shap_values, X_test, features, targets):
             ax.axis('off')
 
     plt.tight_layout()
-    os.makedirs(os.path.join(RESULTS_PATH, "plots"), exist_ok=True)
-    plt.savefig(os.path.join(RESULTS_PATH, "plots", "shap_plot.png"))
+    os.makedirs(os.path.join(RESULTS_PATH, run_id,  "plots"), exist_ok=True)
+    plt.savefig(os.path.join(RESULTS_PATH, run_id, "plots", "shap_plot.png"))
     plt.close()
 
 
-def plot_shap(xgb, X_test_with_index, features, targets):
+def plot_shap(run_id, xgb, X_test_with_index, features, targets):
     logging.info("Creating SHAP plots...")
     # Remove non-feature columns from X_test if they exist
     X_test = X_test_with_index.drop(columns=NON_FEATURE_COLUMNS, errors="ignore")
@@ -221,11 +239,12 @@ def plot_shap(xgb, X_test_with_index, features, targets):
         indices = np.random.choice(X_test.shape[0], 100, replace=False)
         X_test = X_test.iloc[indices]
 
-    get_shap_values(xgb, X_test)
-    logging.info("Loading SHAP values...")
-    shap_values = np.load(os.path.join(RESULTS_PATH, "plots", "shap_values.npy"), allow_pickle=True)
-    transform_outputs_to_former_inputs(shap_values, targets, features)
-    draw_shap_plot(shap_values, X_test, features, targets)
+    get_shap_values(run_id, xgb, X_test)
+    logging.info("Transforming outputs to former inputs...")
+    shap_values = np.load(os.path.join(RESULTS_PATH, run_id, "plots", "shap_values.npy"), allow_pickle=True)
+    shap_values = transform_outputs_to_former_inputs(run_id, shap_values, targets, features)
+    logging.info("Drawing SHAP plots...")
+    draw_shap_plot(run_id, shap_values, X_test, features, targets)
 
 
 # def shap_plot_per_target(models, X_test, features, targets):

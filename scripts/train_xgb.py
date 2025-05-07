@@ -55,7 +55,7 @@ def test_xgb(session_state, run_id):
     return preds
 
 
-def plot_xgb(session_state):
+def plot_xgb(session_state, run_id):
     model = session_state["model"]
     features = session_state["features"]
     targets = session_state["targets"]
@@ -64,31 +64,47 @@ def plot_xgb(session_state):
     preds = session_state["preds"]
     test_data = session_state["test_data"]
 
-    plot_scatter(test_data, y_test, preds, targets)
-    plot_scatter(test_data, y_test, preds, targets, use_log=True)
-    plot_shap(model, X_test_with_index, features, targets)
+    plot_scatter(run_id, test_data, y_test, preds, targets)
+    plot_scatter(run_id, test_data, y_test, preds, targets, use_log=True)
+    plot_shap(run_id, model, X_test_with_index, features, targets)
 
 def main():
-    run_id = get_next_run_id()
-    setup_logging(run_id)
+    full_pipeline = False
 
-    full_pipeline = True
     if full_pipeline:
+        run_id = get_next_run_id()
+        setup_logging(run_id)
         session_state = train_xgb(run_id)
         save_session_state(session_state, run_id)
         preds = test_xgb(session_state, run_id)
         session_state["preds"] = preds
         save_session_state(session_state, run_id)
-        plot_xgb(session_state)
+        plot_xgb(session_state, run_id)
     else:
-        session_state = load_session_state("session_state1.pkl")
+        run_id = "run_0"
+        setup_logging(run_id)
+        session_state = load_session_state(run_id)
         ### implement ###
-        preds = test_xgb(session_state, "run_debug")
-        session_state["preds"] = preds
-        save_session_state(session_state, "run_debug")
+        from configs.config import RESULTS_PATH, NON_FEATURE_COLUMNS
+        from src.utils.plotting import transform_outputs_to_former_inputs, draw_shap_plot
+        import os
 
-        plot_xgb(session_state)
-        # plot_shap(None, X_test_with_index, features, targets)
+        targets = session_state["targets"]
+        features = session_state["features"]
+        X_test_with_index = session_state["X_test_with_index"]
+
+        X_test = X_test_with_index.drop(columns=NON_FEATURE_COLUMNS, errors="ignore")
+        X_test = X_test.reset_index(drop=True)
+
+        # Subsample if needed
+        if X_test.shape[0] > 100:
+            indices = np.random.choice(X_test.shape[0], 100, replace=False)
+            X_test = X_test.iloc[indices]
+
+        shap_values = np.load(os.path.join(RESULTS_PATH, run_id, "plots", "shap_values.npy"), allow_pickle=True)
+        shap_values = transform_outputs_to_former_inputs(run_id, shap_values, targets, features)
+        logging.info("Drawing SHAP plots...")
+        draw_shap_plot(run_id, shap_values, X_test, features, targets)
         #################
         # save_session_state(session_state, "session_state1.pkl")
 
