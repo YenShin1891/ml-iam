@@ -33,17 +33,24 @@ def encode_categorical_columns(data, columns):
 
 def prepare_data(prepared, targets, features):
     train_data, test_data = split_data(prepared)
+    val_data = train_data.sample(frac=0.1, random_state=42)
+    train_data = train_data.drop(val_data.index).reset_index(drop=True)
+    val_data = val_data.reset_index(drop=True)
+    test_data = test_data.reset_index(drop=True)
 
     X_train = train_data[features].copy()
     y_train = train_data[targets].values.copy()
+    X_val = val_data[features].copy()
+    y_val = val_data[targets].values.copy()
     X_test_with_index = test_data[list(set(features + INDEX_COLUMNS))].copy()
     y_test = test_data[targets].values.copy()
 
     categorical_columns = ['Region', 'Model_Family']
     X_train = encode_categorical_columns(X_train, categorical_columns)
+    X_val = encode_categorical_columns(X_val, categorical_columns)
     X_test_with_index = encode_categorical_columns(X_test_with_index, categorical_columns)
 
-    return X_train, y_train, X_test_with_index, y_test, test_data
+    return X_train, y_train, X_val, y_val, X_test_with_index, y_test, test_data
 
 def load_and_process_data() -> pd.DataFrame:
     logging.info("Loading and processing data...")

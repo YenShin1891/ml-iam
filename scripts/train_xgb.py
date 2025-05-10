@@ -14,17 +14,19 @@ def train_xgb(run_id):
     prepared, features, targets = prepare_features_and_targets(data)
     (
         X_train, y_train, 
+        X_val, y_val,
         X_test_with_index, y_test, 
         test_data
     ) = prepare_data(prepared, targets, features)
 
     X_train, y_train = remove_rows_with_missing_outputs(X_train, y_train)
+    X_val, y_val = remove_rows_with_missing_outputs(X_val, y_val)
     X_test_with_index, y_test, test_data = remove_rows_with_missing_outputs(X_test_with_index, y_test, test_data)
 
     assert not np.any(np.isnan(y_train)), "y_train contains NaN values."
     assert not np.any(np.isinf(y_train)), "y_train contains Inf values."
 
-    best_model, cv_results = hyperparameter_search(X_train, y_train)
+    best_model, cv_results = hyperparameter_search(X_train, y_train, X_val, y_val)
     visualize_multiple_hyperparam_searches(cv_results, run_id)
 
     return {
@@ -85,16 +87,11 @@ def main():
         setup_logging(run_id)
         session_state = load_session_state(run_id)
         ### implement ###
-        # test with sampled train data
-        session_state["X_test_with_index"] = session_state["X_train"].sample(1000)
-        session_state["y_test"] = session_state["y_train"].sample(1000)
-        # impute data with nan output
-        session_state["X_test_with_index"], session_state["y_test"] = remove_rows_with_missing_outputs(
-            session_state["X_test_with_index"], session_state["y_test"]
-        )
-        preds = test_xgb(session_state, run_id)
-        session_state["preds"] = preds
-        plot_xgb(session_state, run_id)
+        X_train = session_state["X_train"]
+        y_train = session_state["y_train"]
+        best_model, cv_results = hyperparameter_search(X_train, y_train)
+        visualize_multiple_hyperparam_searches(cv_results, run_id)
+
         #################
         # save_session_state(session_state, "session_state1.pkl")
 

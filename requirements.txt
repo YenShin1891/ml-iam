@@ -6,3 +6,12 @@ scikit-learn
 xgboost
 streamlit
 shap
+
+# cupy-cuda118
+# cudf-cu11
+# dask-cudf-cu11
+# --extra-index-url https://pypi.nvidia.com
+
+dask 
+dask-ml 
+dask-xgboost
