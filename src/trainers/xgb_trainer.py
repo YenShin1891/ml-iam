@@ -23,8 +23,7 @@ PARAM_DIST = {
         'colsample_bytree': [0.6, 0.8, 1.0],
         'gamma': [0, 1, 5],
         'reg_alpha': [0.1, 1, 10],
-        'reg_lambda': [10, 100, 1000],
-        'scale_pos_weight': [10, 100, 1000],
+        'reg_lambda': [1, 10, 100],
     }
 
 # # for debugging
