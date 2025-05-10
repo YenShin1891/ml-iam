@@ -1,3 +1,4 @@
+import argparse
 import logging
 import numpy as np
 
@@ -68,8 +69,16 @@ def plot_xgb(session_state, run_id):
     plot_scatter(run_id, test_data, y_test, preds, targets, use_log=True)
     plot_shap(run_id, model, X_test_with_index, features, targets)
 
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Train and test XGBoost model.")
+    parser.add_argument("--run_id", type=str, help="Run ID for logging.", required=False)
+    args = parser.parse_args()
+    return args.run_id
+
+
 def main():
-    full_pipeline = True
+    full_pipeline = False
 
     if full_pipeline:
         run_id = get_next_run_id()
@@ -81,22 +90,27 @@ def main():
         save_session_state(session_state, run_id)
         plot_xgb(session_state, run_id)
     else:
-        run_id = "run_03"
+        run_id = parse_arguments()
         setup_logging(run_id)
         session_state = load_session_state(run_id)
         ### implement ###
-        # test with sampled train data
-        session_state["X_test_with_index"] = session_state["X_train"].sample(1000)
-        session_state["y_test"] = session_state["y_train"].sample(1000)
-        # impute data with nan output
-        session_state["X_test_with_index"], session_state["y_test"] = remove_rows_with_missing_outputs(
-            session_state["X_test_with_index"], session_state["y_test"]
-        )
+        data = load_and_process_data()
+        prepared, features, targets = prepare_features_and_targets(data)
+        (
+            _, _, 
+            X_test_with_index, y_test, 
+            test_data
+        ) = prepare_data(prepared, targets, features)
+        X_test_with_index, y_test, test_data = remove_rows_with_missing_outputs(X_test_with_index, y_test, test_data)
+        session_state["X_test_with_index"] = X_test_with_index
+        save_session_state(session_state, run_id)
+
         preds = test_xgb(session_state, run_id)
         session_state["preds"] = preds
+        save_session_state(session_state, run_id)
         plot_xgb(session_state, run_id)
         #################
-        # save_session_state(session_state, "session_state1.pkl")
+        save_session_state(session_state, run_id)
 
 
 if __name__ == "__main__":

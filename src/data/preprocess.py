@@ -36,7 +36,7 @@ def prepare_data(prepared, targets, features):
 
     X_train = train_data[features].copy()
     y_train = train_data[targets].values.copy()
-    X_test_with_index = test_data[list(set(features + INDEX_COLUMNS))].copy()
+    X_test_with_index = test_data[features + [col for col in INDEX_COLUMNS if col not in features]].copy()
     y_test = test_data[targets].values.copy()
 
     categorical_columns = ['Region', 'Model_Family']
