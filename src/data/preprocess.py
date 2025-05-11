@@ -13,9 +13,9 @@ from configs.config import (
 def split_data(prepared):
     groups = list(prepared.groupby(INDEX_COLUMNS))
     n_groups = len(groups)
-    # split 8:1:1
-    n_train_groups = int(n_groups * 0.8)
-    n_val_groups = int(n_groups * 0.1)
+    # split 6:2:2
+    n_train_groups = int(n_groups * 0.6)
+    n_val_groups = int(n_groups * 0.2)
     
     np.random.shuffle(groups)
 
@@ -26,6 +26,8 @@ def split_data(prepared):
     train_data = pd.concat([group[1] for group in train_groups]).reset_index(drop=True)
     val_data = pd.concat([group[1] for group in val_groups]).reset_index(drop=True)
     test_data = pd.concat([group[1] for group in test_groups]).reset_index(drop=True)
+    
+    logging.info(f"Train: {len(train_data)} rows, Validation: {len(val_data)} rows, Test: {len(test_data)} rows")
 
     return train_data, val_data, test_data
 

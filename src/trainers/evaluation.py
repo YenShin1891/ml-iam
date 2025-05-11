@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import concurrent.futures
 from tqdm import tqdm
-from src.utils.utils import masked_mse
+import xgboost as xgb
 from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
 from pytorch_forecasting import TimeSeriesDataSet
 from configs.models import TFTDatasetConfig
@@ -53,9 +53,15 @@ def autoregressive_predictions(model, group_indices, group_matrix, prev_indices,
     return preds_target
 
 
-def test_xgb_autoregressively(model, X_test_with_index, y_test):
+def test_xgb_autoregressively(run_id, X_test_with_index, y_test):
+    """
+    Test the model autoregressively on the test set.
+    """
     group_indices_list, group_matrices, prev_indices_list, prev2_indices_list = group_test_data(X_test_with_index)
     full_preds = np.full(y_test.shape, np.nan, dtype=float)
+    
+    model = xgb.XGBRegressor()
+    model.load_model(os.path.join(RESULTS_PATH, run_id, "checkpoints", "final_best.json"))
 
     def process_group(args):
         group_indices, group_matrix, prev_indices, prev2_indices = args
@@ -75,24 +81,11 @@ def test_xgb_autoregressively(model, X_test_with_index, y_test):
             full_preds[pos, :] = preds_target
 
     mse = mean_squared_error(y_test, full_preds)
-    logging.info(f"Mean Squared Error: {mse:.2f}")
+    logging.info(f"Root Mean Squared Error: {np.sqrt(mse)}")
 
     return full_preds
 
-
-def test_rnn(model, X_test, y_test):
-    # Reshape data into 3D array for RNN
-    scaler = StandardScaler()
-    X_test_scaled = scaler.fit_transform(X_test).reshape((X_test.shape[0], 1, X_test.shape[1]))
-    if y_test.ndim == 1:
-        y_test = y_test.reshape(-1, 1)  # Convert to 2D if only one target variable
-
-    # Make predictions using the trained RNN model
-    preds = model.predict(X_test_scaled)
-    test_auc = masked_mse(y_true=y_test,y_pred=preds)
-    print("Mean Square Error:", f"{test_auc:.2f}")
-    return preds
-
+    
 
 def save_metrics(run_id, y_true, y_pred):
     """
