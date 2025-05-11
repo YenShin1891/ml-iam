@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import concurrent.futures
 from tqdm import tqdm
+import xgboost as xgb
 
 from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
 
@@ -48,23 +49,16 @@ def autoregressive_predictions(model, group_indices, group_matrix, prev_indices,
 
     return preds_target
 
-# def autoregressive_predictions_per_target(models, target, group_indices, group_matrix, prev_indices, prev2_indices, y_test, start_pos):
-#     preds_target = np.full(len(group_indices), np.nan, dtype=float)
-#     preds_target[start_pos] = models[target].predict(group_matrix[start_pos:start_pos + 1])[0]
 
-#     for t in range(start_pos + 1, len(group_indices)):
-#         X_test_curr = group_matrix[t].copy()
-#         if t - 1 >= start_pos:
-#             X_test_curr[prev_indices] = preds_target[t - 1]
-#         if t - 2 >= start_pos:
-#             X_test_curr[prev2_indices] = preds_target[t - 2]
-#         preds_target[t] = models[target].predict(X_test_curr.reshape(1, -1))[0]
-
-#     return preds_target
-
-def test_xgb_autoregressively(model, X_test_with_index, y_test):
+def test_xgb_autoregressively(run_id, X_test_with_index, y_test):
+    """
+    Test the model autoregressively on the test set.
+    """
     group_indices_list, group_matrices, prev_indices_list, prev2_indices_list = group_test_data(X_test_with_index)
     full_preds = np.full(y_test.shape, np.nan, dtype=float)
+    
+    model = xgb.XGBRegressor()
+    model.load_model(os.path.join(RESULTS_PATH, run_id, "checkpoints", "final_best.json"))
 
     def process_group(args):
         group_indices, group_matrix, prev_indices, prev2_indices = args
@@ -84,29 +78,9 @@ def test_xgb_autoregressively(model, X_test_with_index, y_test):
             full_preds[pos, :] = preds_target
 
     mse = mean_squared_error(y_test, full_preds)
-    logging.info(f"Mean Squared Error: {mse:.2f}")
+    logging.info(f"Root Mean Squared Error: {np.sqrt(mse)}")
 
     return full_preds
-
-# def test_xgb_per_target_autoregressively(models, X_test_with_index, y_test, target_names):
-#     full_preds = np.full(y_test.shape, np.nan, dtype=float)
-
-#     for i, target in enumerate(target_names):
-#         group_indices_list, group_matrices, prev_indices_list, prev2_indices_list = group_test_data(X_test_with_index)
-
-#         for group_indices, group_matrix, prev_indices, prev2_indices in zip(group_indices_list, group_matrices, prev_indices_list, prev2_indices_list):
-#             start_pos = next((pos for pos, idx in enumerate(group_indices) if not np.isnan(y_test[idx, i])), None)
-#             if start_pos is None:
-#                 continue
-
-#             preds_target = autoregressive_predictions_per_target(models, target, group_indices, group_matrix, prev_indices, prev2_indices, y_test, start_pos)
-#             full_preds[group_indices, i] = preds_target
-
-#         mask = ~np.isnan(y_test[:, i])
-#         test_auc = mean_squared_error(y_pred=full_preds[mask, i], y_true=y_test[mask, i])
-#         logging.info(f"Mean Square Error for {target}: {test_auc:.2f}")
-
-#     return full_preds
 
 
 def save_metrics(run_id, y_true, y_pred):
