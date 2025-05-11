@@ -23,22 +23,21 @@ def train_xgb(run_id):
     X_val, y_val = remove_rows_with_missing_outputs(X_val, y_val)
     X_test_with_index, y_test, test_data = remove_rows_with_missing_outputs(X_test_with_index, y_test, test_data)
 
-    assert not np.any(np.isnan(y_train)), "y_train contains NaN values."
-    assert not np.any(np.isinf(y_train)), "y_train contains Inf values."
-
-    best_model, cv_results = hyperparameter_search(X_train, y_train, X_val, y_val)
-    visualize_multiple_hyperparam_searches(cv_results, run_id)
+    best_params, best_score, cv_results_dict = hyperparameter_search(X_train, y_train, X_val, y_val, targets)
+    visualize_multiple_hyperparam_searches(cv_results_dict, run_id)
 
     return {
         "features": features,
         "targets": targets,
         "X_train": X_train,
         "y_train": y_train,
+        "X_val": X_val,
+        "y_val": y_val,
         "X_test_with_index": X_test_with_index,
         "y_test": y_test,
         "test_data": test_data,
-        "model": best_model,
-        # "preds": preds,
+        "best_params": best_params,
+        "best_score": best_score,
         "trained": True
     }
 
@@ -71,7 +70,7 @@ def plot_xgb(session_state, run_id):
     plot_shap(run_id, model, X_test_with_index, features, targets)
 
 def main():
-    full_pipeline = True
+    full_pipeline = False
 
     if full_pipeline:
         run_id = get_next_run_id()
@@ -83,17 +82,25 @@ def main():
         save_session_state(session_state, run_id)
         plot_xgb(session_state, run_id)
     else:
-        run_id = "run_03"
+        run_id = "run_05"
         setup_logging(run_id)
         session_state = load_session_state(run_id)
         ### implement ###
         X_train = session_state["X_train"]
         y_train = session_state["y_train"]
-        best_model, cv_results = hyperparameter_search(X_train, y_train)
-        visualize_multiple_hyperparam_searches(cv_results, run_id)
+        X_val = session_state["X_val"]
+        y_val = session_state["y_val"]
+        targets = session_state["targets"]
+        
+        best_params, best_score, cv_results_dict = hyperparameter_search(X_train, y_train, X_val, y_val, targets)
+        visualize_multiple_hyperparam_searches(cv_results_dict, run_id)
 
+        session_state["best_params"] = best_params
+        session_state["best_score"] = best_score
+        
+        
         #################
-        # save_session_state(session_state, "session_state1.pkl")
+        save_session_state(session_state, run_id)
 
 
 if __name__ == "__main__":

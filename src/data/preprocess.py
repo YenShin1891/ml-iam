@@ -12,18 +12,21 @@ from configs.config import (
 def split_data(prepared):
     groups = list(prepared.groupby(INDEX_COLUMNS))
     n_groups = len(groups)
-    n_test_groups = int(n_groups * 0.1)
-    n_train_groups = n_groups - n_test_groups
-
+    # split 8:1:1
+    n_train_groups = int(n_groups * 0.8)
+    n_val_groups = int(n_groups * 0.1)
+    
     np.random.shuffle(groups)
 
     train_groups = groups[:n_train_groups]
-    test_groups = groups[n_train_groups:]
+    val_groups = groups[n_train_groups:n_train_groups + n_val_groups]
+    test_groups = groups[n_train_groups + n_val_groups:]
 
     train_data = pd.concat([group[1] for group in train_groups]).reset_index(drop=True)
+    val_data = pd.concat([group[1] for group in val_groups]).reset_index(drop=True)
     test_data = pd.concat([group[1] for group in test_groups]).reset_index(drop=True)
 
-    return train_data, test_data
+    return train_data, val_data, test_data
 
 def encode_categorical_columns(data, columns):
     for col in columns:
@@ -32,11 +35,7 @@ def encode_categorical_columns(data, columns):
     return data
 
 def prepare_data(prepared, targets, features):
-    train_data, test_data = split_data(prepared)
-    val_data = train_data.sample(frac=0.1, random_state=42)
-    train_data = train_data.drop(val_data.index).reset_index(drop=True)
-    val_data = val_data.reset_index(drop=True)
-    test_data = test_data.reset_index(drop=True)
+    train_data, val_data, test_data = split_data(prepared)
 
     X_train = train_data[features].copy()
     y_train = train_data[targets].values.copy()
