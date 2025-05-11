@@ -1,3 +1,4 @@
+import argparse
 import logging
 import numpy as np
 
@@ -69,6 +70,14 @@ def plot_xgb(session_state, run_id):
     plot_scatter(run_id, test_data, y_test, preds, targets, use_log=True)
     plot_shap(run_id, model, X_test_with_index, features, targets)
 
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Train and test XGBoost model.")
+    parser.add_argument("--run_id", type=str, help="Run ID for logging.", required=False)
+    args = parser.parse_args()
+    return args.run_id
+
+
 def main():
     full_pipeline = False
 
@@ -97,8 +106,6 @@ def main():
 
         session_state["best_params"] = best_params
         session_state["best_score"] = best_score
-        
-        
         #################
         save_session_state(session_state, run_id)
 
