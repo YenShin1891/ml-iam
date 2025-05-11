@@ -12,18 +12,21 @@ from configs.config import (
 def split_data(prepared):
     groups = list(prepared.groupby(INDEX_COLUMNS))
     n_groups = len(groups)
-    n_test_groups = int(n_groups * 0.1)
-    n_train_groups = n_groups - n_test_groups
-
+    # split 8:1:1
+    n_train_groups = int(n_groups * 0.8)
+    n_val_groups = int(n_groups * 0.1)
+    
     np.random.shuffle(groups)
 
     train_groups = groups[:n_train_groups]
-    test_groups = groups[n_train_groups:]
+    val_groups = groups[n_train_groups:n_train_groups + n_val_groups]
+    test_groups = groups[n_train_groups + n_val_groups:]
 
     train_data = pd.concat([group[1] for group in train_groups]).reset_index(drop=True)
+    val_data = pd.concat([group[1] for group in val_groups]).reset_index(drop=True)
     test_data = pd.concat([group[1] for group in test_groups]).reset_index(drop=True)
 
-    return train_data, test_data
+    return train_data, val_data, test_data
 
 def encode_categorical_columns(data, columns):
     for col in columns:
@@ -32,18 +35,21 @@ def encode_categorical_columns(data, columns):
     return data
 
 def prepare_data(prepared, targets, features):
-    train_data, test_data = split_data(prepared)
+    train_data, val_data, test_data = split_data(prepared)
 
     X_train = train_data[features].copy()
     y_train = train_data[targets].values.copy()
+    X_val = val_data[features].copy()
+    y_val = val_data[targets].values.copy()
     X_test_with_index = test_data[features + [col for col in INDEX_COLUMNS if col not in features]].copy()
     y_test = test_data[targets].values.copy()
 
     categorical_columns = ['Region', 'Model_Family']
     X_train = encode_categorical_columns(X_train, categorical_columns)
+    X_val = encode_categorical_columns(X_val, categorical_columns)
     X_test_with_index = encode_categorical_columns(X_test_with_index, categorical_columns)
 
-    return X_train, y_train, X_test_with_index, y_test, test_data
+    return X_train, y_train, X_val, y_val, X_test_with_index, y_test, test_data
 
 def load_and_process_data() -> pd.DataFrame:
     logging.info("Loading and processing data...")
