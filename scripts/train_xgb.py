@@ -10,7 +10,7 @@ from src.utils.plotting import plot_scatter, plot_shap
 
 np.random.seed(0)
 
-def train_xgb(run_id):
+def process_data():
     data = load_and_process_data()
     prepared, features, targets = prepare_features_and_targets(data)
     (
@@ -24,9 +24,6 @@ def train_xgb(run_id):
     X_val, y_val = remove_rows_with_missing_outputs(X_val, y_val)
     X_test_with_index, y_test, test_data = remove_rows_with_missing_outputs(X_test_with_index, y_test, test_data)
 
-    best_params, cv_results_dict = hyperparameter_search(X_train, y_train, X_val, y_val, targets)
-    visualize_multiple_hyperparam_searches(cv_results_dict, run_id)
-
     return {
         "features": features,
         "targets": targets,
@@ -36,10 +33,20 @@ def train_xgb(run_id):
         "y_val": y_val,
         "X_test_with_index": X_test_with_index,
         "y_test": y_test,
-        "test_data": test_data,
-        "best_params": best_params,
-        "trained": True
+        "test_data": test_data
     }
+
+def train_xgb(session_state, run_id):
+    X_train = session_state["X_train"]
+    y_train = session_state["y_train"]
+    X_val = session_state["X_val"]
+    y_val = session_state["y_val"]
+    targets = session_state["targets"]
+    
+    best_params, cv_results_dict = hyperparameter_search(X_train, y_train, X_val, y_val, targets)
+    visualize_multiple_hyperparam_searches(cv_results_dict, run_id)
+
+    return best_params
 
 def test_xgb(session_state, run_id):
     X_test_with_index = session_state["X_test_with_index"]
@@ -78,33 +85,26 @@ def parse_arguments():
 
 
 def main():
-    full_pipeline = True
+    full_pipeline = False
 
     if full_pipeline:
         run_id = get_next_run_id()
-        run_id = "run_05"
         setup_logging(run_id)
-        session_state = train_xgb(run_id)
+        session_state = process_data()
+        save_session_state(session_state, run_id)
+        best_params = train_xgb(session_state, run_id)
+        session_state["best_params"] = best_params
         save_session_state(session_state, run_id)
         preds = test_xgb(session_state, run_id)
         session_state["preds"] = preds
         save_session_state(session_state, run_id)
         plot_xgb(session_state, run_id)
     else:
-        run_id = "run_05"
+        run_id = "run_02"
         setup_logging(run_id)
         session_state = load_session_state(run_id)
         ### implement ###
-        X_train = session_state["X_train"]
-        y_train = session_state["y_train"]
-        X_val = session_state["X_val"]
-        y_val = session_state["y_val"]
-        targets = session_state["targets"]
-        
-        best_params, cv_results_dict = hyperparameter_search(X_train, y_train, X_val, y_val, targets)
-        visualize_multiple_hyperparam_searches(cv_results_dict, run_id)
-
-        session_state["best_params"] = best_params
+        session_state.pop("model", None)
         #################
         save_session_state(session_state, run_id)
 

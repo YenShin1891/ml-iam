@@ -1,5 +1,5 @@
 # Directories
-DATA_PATH = "/mnt/nas2/kcp/data"
+DATA_PATH = "/mnt/nas2/kcp/data/processed"
 RESULTS_PATH = "/mnt/nas2/kcp/results"
 
 # Constants
