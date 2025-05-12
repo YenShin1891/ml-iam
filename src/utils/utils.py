@@ -90,12 +90,15 @@ class DowngradeUnpickler(pickle.Unpickler):
             # Generic mapping for other _core modules
             module = module.replace('numpy._core', 'numpy.core')
         return super().find_class(module, name)
+    
 
 def load_session_state(run_id):
-    file_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", CHECKPOINT_FILE_NAME)
+    run_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints")
+    file_path = os.path.join(run_dir, CHECKPOINT_FILE_NAME)
     try:
         with open(file_path, "rb") as f:
             return DowngradeUnpickler(f).load()
+        
     except FileNotFoundError:
         logging.error("No saved session state found at %s.", file_path)
         return {}
