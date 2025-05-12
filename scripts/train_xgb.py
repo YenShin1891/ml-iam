@@ -24,7 +24,7 @@ def train_xgb(run_id):
     X_val, y_val = remove_rows_with_missing_outputs(X_val, y_val)
     X_test_with_index, y_test, test_data = remove_rows_with_missing_outputs(X_test_with_index, y_test, test_data)
 
-    best_params, best_score, cv_results_dict = hyperparameter_search(X_train, y_train, X_val, y_val, targets)
+    best_params, cv_results_dict = hyperparameter_search(X_train, y_train, X_val, y_val, targets)
     visualize_multiple_hyperparam_searches(cv_results_dict, run_id)
 
     return {
@@ -38,7 +38,6 @@ def train_xgb(run_id):
         "y_test": y_test,
         "test_data": test_data,
         "best_params": best_params,
-        "best_score": best_score,
         "trained": True
     }
 
@@ -79,10 +78,11 @@ def parse_arguments():
 
 
 def main():
-    full_pipeline = False
+    full_pipeline = True
 
     if full_pipeline:
         run_id = get_next_run_id()
+        run_id = "run_05"
         setup_logging(run_id)
         session_state = train_xgb(run_id)
         save_session_state(session_state, run_id)
@@ -101,11 +101,10 @@ def main():
         y_val = session_state["y_val"]
         targets = session_state["targets"]
         
-        best_params, best_score, cv_results_dict = hyperparameter_search(X_train, y_train, X_val, y_val, targets)
+        best_params, cv_results_dict = hyperparameter_search(X_train, y_train, X_val, y_val, targets)
         visualize_multiple_hyperparam_searches(cv_results_dict, run_id)
 
         session_state["best_params"] = best_params
-        session_state["best_score"] = best_score
         #################
         save_session_state(session_state, run_id)
 

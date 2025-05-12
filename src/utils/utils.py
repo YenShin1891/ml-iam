@@ -55,11 +55,27 @@ def save_session_state(session_state, run_id):
         pickle.dump(session_state, f)
     logging.info("Session state saved to %s.", file_path)
 
+class DowngradeUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        # Map new numpy modules to old ones
+        if module == 'numpy._core._exceptions':
+            module = 'numpy.core._exceptions'
+        elif module == 'numpy._core._dtype':
+            module = 'numpy.core._dtype'
+        elif module == 'numpy._core._internal':
+            module = 'numpy.core._internal'
+        elif module == 'numpy._core._methods':
+            module = 'numpy.core._methods'
+        elif module.startswith('numpy._core'):
+            # Generic mapping for other _core modules
+            module = module.replace('numpy._core', 'numpy.core')
+        return super().find_class(module, name)
+
 def load_session_state(run_id):
     file_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", CHECKPOINT_FILE_NAME)
     try:
         with open(file_path, "rb") as f:
-            return pickle.load(f)
+            return DowngradeUnpickler(f).load()
     except FileNotFoundError:
         logging.error("No saved session state found at %s.", file_path)
         return {}

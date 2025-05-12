@@ -1,10 +1,9 @@
 import streamlit as st
 import numpy as np
 import logging
-import os
 
-from utils.plotting import plot_time_series
-from utils.utils import setup_logging, load_session_state
+from src.utils.plotting import plot_time_series
+from src.utils.utils import setup_logging, load_session_state
 
 def make_filters(test_data):
     logging.info("Creating filters for test data...")
@@ -80,11 +79,11 @@ def filter_and_plot():
     )
 
 def main():
-    cur_dir = os.path.dirname(os.path.abspath(__file__))
-    setup_logging(run_id="dashboard")
+    run_id = "run_03"
+    setup_logging(run_id)
 
     st.title("ML IAM Emulation Dashboard")
-    session_state = load_session_state()
+    session_state = load_session_state(run_id)
     if not session_state:
         st.error("No trained model found. Run train_test.py first.")
         return
