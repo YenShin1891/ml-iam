@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from typing import List, Tuple
 import gc
 import time
+import dask
 from dask.distributed import Client
 import dask.dataframe as dd
 from xgboost.dask import DaskDMatrix, train as dask_train, predict as dask_predict
