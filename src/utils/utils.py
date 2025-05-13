@@ -43,6 +43,26 @@ def setup_logging(run_id, log_file=None):
     logging.info("Logging is set up for %s.", run_id)
 
 
+# for run_id
+def get_next_run_id():
+    """
+    Generate the next run_id by checking existing run directories in the results folder.
+    """
+    os.makedirs(RESULTS_PATH, exist_ok=True)
+
+    existing_runs = [
+        d for d in os.listdir(RESULTS_PATH)
+        if os.path.isdir(os.path.join(RESULTS_PATH, d)) and d.startswith("run_")
+    ]
+
+    # Extract numeric parts of run IDs and find the next available number
+    run_numbers = [
+        int(d.split("_")[1]) for d in existing_runs if d.split("_")[1].isdigit()
+    ]
+    next_run_number = max(run_numbers, default=0) + 1
+    return f"run_{next_run_number:02d}"
+
+
 # for model checkpoints
 def save_session_state(session_state, run_id):
     """
@@ -82,22 +102,3 @@ def load_session_state(run_id):
     except FileNotFoundError:
         logging.error("No saved session state found at %s.", file_path)
         return {}
-
-
-def get_next_run_id():
-    """
-    Generate the next run_id by checking existing run directories in the results folder.
-    """
-    os.makedirs(RESULTS_PATH, exist_ok=True)
-
-    existing_runs = [
-        d for d in os.listdir(RESULTS_PATH)
-        if os.path.isdir(os.path.join(RESULTS_PATH, d)) and d.startswith("run_")
-    ]
-
-    # Extract numeric parts of run IDs and find the next available number
-    run_numbers = [
-        int(d.split("_")[1]) for d in existing_runs if d.split("_")[1].isdigit()
-    ]
-    next_run_number = max(run_numbers, default=0) + 1
-    return f"run_{next_run_number:02d}"
