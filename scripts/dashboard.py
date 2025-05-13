@@ -66,6 +66,9 @@ def apply_filters():
     
     st.session_state.test_mask = mask_td
     logging.info(f"Test data filter applied: {mask_td.sum()} rows selected.")
+    logging.info(f"Selected Categories: {selected_categories}")
+    logging.info(f"Selected Regions: {selected_regions}")
+    logging.info(f"Selected Model Families: {selected_families}")
 
     selected_positions = np.where(mask_td)[0]
 
@@ -112,6 +115,7 @@ def main():
             st.warning("No data selected with the current filters.")
         else:
             filter_and_plot()
+        st.session_state.apply_filters_clicked = False
 
 if __name__ == "__main__":
     main()
