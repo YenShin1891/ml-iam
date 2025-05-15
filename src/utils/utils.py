@@ -3,6 +3,7 @@ import logging
 import os
 import pickle
 from datetime import datetime, timezone, timedelta
+from dask.distributed import Client
 
 from configs.config import RESULTS_PATH
 
@@ -102,3 +103,29 @@ def load_session_state(run_id):
     except FileNotFoundError:
         logging.error("No saved session state found at %s.", file_path)
         return {}
+    
+def load_model(run_id):
+    run_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints")
+    file_path = os.path.join(run_dir, "best_model.json")
+    try:
+        import xgboost as xgb
+        model = xgb.Booster()
+        model.load_model(file_path)
+        return model
+    except Exception as e:
+        logging.error("Error loading model: %s", str(e))
+        return None
+
+# dask
+def create_dask_client():
+    """
+    Create a Dask client for distributed computing.
+    """
+    return Client(
+        n_workers=1,
+        threads_per_worker=2,
+        memory_limit='4GB',
+        silence_logs=logging.WARNING,
+        dashboard_address=None,
+        local_directory='/tmp/dask-worker-space'  
+    )

@@ -9,11 +9,12 @@ import matplotlib.pyplot as plt
 from typing import List, Tuple
 import gc
 import time
-import dask
-from dask.distributed import Client
 import dask.dataframe as dd
 from xgboost.dask import DaskDMatrix, train as dask_train, predict as dask_predict
 from configs.config import RESULTS_PATH
+from configs.dask_config import *
+
+from src.utils.utils import create_dask_client
 
 PARAM_DIST = {
     'max_depth': [8, 10, 12],
@@ -36,17 +37,8 @@ PARAM_PAIRS = [
 SEARCH_ITER_N = 50
 N_FOLDS = 3
 
-dask.config.set({
-    'distributed.worker.memory.target': 0.7,  # Target 70% memory
-    'distributed.worker.memory.spill': 0.8,   # Spill at 80%
-    'distributed.worker.memory.pause': 0.85,  # Pause at 85%
-    'distributed.worker.memory.terminate': 0.95,  # Terminate at 95%
-    'distributed.worker.memory.recent-to-old-time': '30s',
-    'distributed.logging.distributed': 'warning',
-})
 
-
-def hyperparameter_search(X_train: pd.DataFrame, y_train: np.array, X_val: pd.DataFrame, y_val: np.array, targets: List[str]) -> Tuple[dict, float, dict]:
+def hyperparameter_search(run_id: str, X_train: pd.DataFrame, y_train: np.array, X_val: pd.DataFrame, y_val: np.array, targets: List[str]) -> Tuple[dict, float, dict]:
     """
     Alternative approach using DaskDMatrix since using DaskXGBRegressor has serialization issues.
     Use one GPU at a time, cycling through all available GPUs.
@@ -67,15 +59,7 @@ def hyperparameter_search(X_train: pd.DataFrame, y_train: np.array, X_val: pd.Da
         
         try:
             # Create simple client with minimal configuration
-            with Client(
-                n_workers=1,
-                threads_per_worker=2,
-                memory_limit='4GB',
-                silence_logs=logging.WARNING,
-                dashboard_address=None,
-                local_directory='/tmp/dask-worker-space'                
-            ) as client:
-                
+            with create_dask_client() as client:
                 logging.info(f"Dask Dashboard URL: {client.dashboard_link}")
                 logging.info(f"Using GPU {gpu_id} for iteration {i+1}")
                 
@@ -142,6 +126,18 @@ def hyperparameter_search(X_train: pd.DataFrame, y_train: np.array, X_val: pd.Da
                 if score > best_score:  # Higher neg RMSE is better
                     best_score = score
                     best_params = params
+                    
+                    model = dask_train(
+                        client,
+                        xgb_params,
+                        dtrain,
+                        evals=[(dval, 'validation')],
+                        early_stopping_rounds=10,
+                        verbose_eval=False
+                    )
+                    model_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", f"best_model.json")
+                    model.save_model(model_path)
+                    logging.info(f"Model saved to {model_path}")
                     
                 logging.info(f"Parameters: {params}")
                 logging.info(f"Negative RMSE: {score:.4f}")
