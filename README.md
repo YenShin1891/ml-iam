@@ -5,7 +5,7 @@ This repository contains a machine learning pipeline for Integrated Assessment M
 ## Installation
 ### Prerequisites
 - Python 3.9
-- CUDA-enabled GPU (optional for GPU acceleration)
+- CUDA 11.6
 - Streamlit port 8501-8509
 
 ### Install Dependencies
