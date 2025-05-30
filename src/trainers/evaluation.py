@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import concurrent.futures
 from tqdm import tqdm
+from xgboost import DMatrix
 
 from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
 
@@ -32,11 +33,14 @@ def group_test_data(X_test_with_index):
     return group_indices_list, group_matrices, prev_indices_list, prev2_indices_list
 
 def autoregressive_predictions(model, group_indices, group_matrix, prev_indices, prev2_indices, start_pos):
-    num_targets = model.predict(group_matrix[start_pos:start_pos + 1]).shape[1]
+    init_dmatrix = DMatrix(group_matrix[start_pos:start_pos + 1])
+    print("Feature Names:", init_dmatrix.feature_names)
+    
+    num_targets = model.predict(init_dmatrix).shape[1]
     preds_target = np.full((len(group_indices), num_targets), np.nan, dtype=float)
     
     # Set initial predictions for all targets
-    preds_target[start_pos, :] = model.predict(group_matrix[start_pos:start_pos + 1])[0]
+    preds_target[start_pos, :] = model.predict(init_dmatrix)[0]
 
     for t in range(start_pos + 1, len(group_indices)):
         X_test_curr = group_matrix[t].copy()
@@ -44,23 +48,11 @@ def autoregressive_predictions(model, group_indices, group_matrix, prev_indices,
             X_test_curr[prev_indices] = preds_target[t - 1, :]  # Use predictions from t-1 for all targets
         if t - 2 >= start_pos:
             X_test_curr[prev2_indices] = preds_target[t - 2, :]  # Use predictions from t-2 for all targets
-        preds_target[t, :] = model.predict(X_test_curr.reshape(1, -1))[0]  # Predict for all targets
+        dmatrix = DMatrix(X_test_curr.reshape(1, -1))
+        preds_target[t, :] = model.predict(dmatrix)[0]  # Predict for all targets
 
     return preds_target
 
-# def autoregressive_predictions_per_target(models, target, group_indices, group_matrix, prev_indices, prev2_indices, y_test, start_pos):
-#     preds_target = np.full(len(group_indices), np.nan, dtype=float)
-#     preds_target[start_pos] = models[target].predict(group_matrix[start_pos:start_pos + 1])[0]
-
-#     for t in range(start_pos + 1, len(group_indices)):
-#         X_test_curr = group_matrix[t].copy()
-#         if t - 1 >= start_pos:
-#             X_test_curr[prev_indices] = preds_target[t - 1]
-#         if t - 2 >= start_pos:
-#             X_test_curr[prev2_indices] = preds_target[t - 2]
-#         preds_target[t] = models[target].predict(X_test_curr.reshape(1, -1))[0]
-
-#     return preds_target
 
 def test_xgb_autoregressively(model, X_test_with_index, y_test):
     group_indices_list, group_matrices, prev_indices_list, prev2_indices_list = group_test_data(X_test_with_index)
