@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import concurrent.futures
 from tqdm import tqdm
-
+from src.utils.utils import masked_mse
 from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
 
 def group_test_data(X_test_with_index):
@@ -88,6 +88,18 @@ def test_xgb_autoregressively(model, X_test_with_index, y_test):
 
     return full_preds
 
+def test_rnn(model, X_test, y_test):
+    # Reshape data into 3D array for RNN
+    scaler = StandardScaler()
+    X_test_scaled = scaler.fit_transform(X_test).reshape((X_test.shape[0], 1, X_test.shape[1]))
+    if y_test.ndim == 1:
+        y_test = y_test.reshape(-1, 1)  # Convert to 2D if only one target variable
+
+    # Make predictions using the trained RNN model
+    preds = model.predict(X_test_scaled)
+    test_auc = masked_mse(y_true=y_test,y_pred=preds)
+    print("Mean Square Error:", f"{test_auc:.2f}")
+    return preds
 # def test_xgb_per_target_autoregressively(models, X_test_with_index, y_test, target_names):
 #     full_preds = np.full(y_test.shape, np.nan, dtype=float)
 
