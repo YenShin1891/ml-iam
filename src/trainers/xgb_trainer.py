@@ -22,7 +22,7 @@ from src.utils.utils import create_dask_client
 
 # Stage 1: Tree Structure
 STAGE_1_PARAMS = {
-    'max_depth': [5, 7, 9, 11, 13],
+    'max_depth': [5, 9, 13, 17],
     'min_child_weight': [10, 12, 15, 20],
     'gamma': [0],  # Keep gamma at 0 initially
     'eta': [0.1],  # Fixed learning rate
@@ -51,7 +51,7 @@ STAGE_3_PARAMS = {
     'max_depth': None,  # Will be set from stage 1 best
     'min_child_weight': None,  # Will be set from stage 1 best
     'gamma': [0],  # Keep at 0
-    'eta': [0.01, 0.1, 0.2, 0.3],
+    'eta': [0.01, 0.1, 0.2, 0.3, 0.4],
     'num_boost_round': [300, 500],
     'subsample': None,  # Will be set from stage 2 best
     'colsample_bytree': None,  # Will be set from stage 2 best

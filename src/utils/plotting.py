@@ -47,15 +47,7 @@ def configure_axes(
     ax.set_ylabel(ylabel)
 
 
-def plot_scatter(
-    run_id: str,
-    test_data: pd.DataFrame,
-    y_test: np.ndarray,
-    preds: np.ndarray,
-    targets: List[str],
-    use_log: bool = False,
-    model_label: str = "XGBoost"
-) -> None:
+def plot_scatter(run_id: str, test_data: pd.DataFrame, y_test: np.ndarray, preds: np.ndarray, targets: List[str], use_log: bool = False, model_label: str = "XGBoost", filename: Optional[str] = None) -> None:
     logging.info("Creating scatter plot...")
     rows, cols = 3, 3
     fig, axes = plt.subplots(rows, cols, figsize=(20, 20))
@@ -93,11 +85,12 @@ def plot_scatter(
         ax.legend(title='Year', loc='upper left', bbox_to_anchor=(1, 1), fontsize='small')
 
     plt.tight_layout()
-    # Preserve legacy filenames for XGBoost
-    if model_label == "XGBoost":
-        filename = "scatter_plot_log.png" if use_log else "scatter_plot.png"
-    else:
-        filename = f"scatter_plot_{model_label.lower()}_log.png" if use_log else f"scatter_plot_{model_label.lower()}.png"
+    # Determine filename
+    if filename is None:
+        if model_label == "XGBoost":
+            filename = "scatter_plot_log.png" if use_log else "scatter_plot.png"
+        else:
+            filename = f"scatter_plot_{model_label.lower()}_log.png" if use_log else f"scatter_plot_{model_label.lower()}.png"
     os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots"), exist_ok=True)
     plt.savefig(os.path.join(RESULTS_PATH, run_id, "plots", filename), bbox_inches='tight')
     plt.close()

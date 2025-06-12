@@ -65,13 +65,13 @@ def get_next_run_id():
 
 
 # for model checkpoints
-def save_session_state(session_state, run_id):
+def save_session_state(session_state, run_id, checkpoint_file_name=CHECKPOINT_FILE_NAME):
     """
     Save the session state to a file under the specified run directory.
     """
     run_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints")
     os.makedirs(run_dir, exist_ok=True)
-    file_path = os.path.join(run_dir, CHECKPOINT_FILE_NAME)
+    file_path = os.path.join(run_dir, checkpoint_file_name)
     with open(file_path, "wb") as f:
         pickle.dump(session_state, f)
     logging.info("Session state saved to %s.", file_path)
@@ -93,9 +93,8 @@ class DowngradeUnpickler(pickle.Unpickler):
         return super().find_class(module, name)
     
 
-def load_session_state(run_id):
-    run_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints")
-    file_path = os.path.join(run_dir, CHECKPOINT_FILE_NAME)
+def load_session_state(run_id, checkpoint_file_name=CHECKPOINT_FILE_NAME):
+    file_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", checkpoint_file_name)
     try:
         with open(file_path, "rb") as f:
             return DowngradeUnpickler(f).load()
@@ -106,7 +105,7 @@ def load_session_state(run_id):
     
 def load_model(run_id):
     run_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints")
-    file_path = os.path.join(run_dir, "best_model.json")
+    file_path = os.path.join(run_dir, "final_best.json")
     try:
         import xgboost as xgb
         model = xgb.XGBRegressor()
