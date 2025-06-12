@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import logging
+from sklearn.preprocessing import StandardScaler
 
 from configs.config import (
     DATA_PATH,
@@ -43,15 +44,41 @@ def prepare_data(prepared, targets, features):
     y_train = train_data[targets].values.copy()
     X_val = val_data[features].copy()
     y_val = val_data[targets].values.copy()
-    X_test_with_index = test_data[features + [col for col in INDEX_COLUMNS if col not in features]].copy()
+    X_test = test_data[features].copy()
+    X_test_index_columns = test_data[[col for col in INDEX_COLUMNS if col not in features]].copy()
     y_test = test_data[targets].values.copy()
 
     categorical_columns = ['Region', 'Model_Family']
     X_train = encode_categorical_columns(X_train, categorical_columns)
     X_val = encode_categorical_columns(X_val, categorical_columns)
-    X_test_with_index = encode_categorical_columns(X_test_with_index, categorical_columns)
+    X_test = encode_categorical_columns(X_test, categorical_columns)
+    
+    x_scaler = StandardScaler()
+    X_train_scaled = x_scaler.fit_transform(X_train)
+    X_val_scaled = x_scaler.transform(X_val)
+    X_test_scaled = x_scaler.transform(X_test)
 
-    return X_train, y_train, X_val, y_val, X_test_with_index, y_test, test_data
+    X_train_scaled = pd.DataFrame(X_train_scaled, columns=X_train.columns, index=X_train.index)
+    X_val_scaled = pd.DataFrame(X_val_scaled, columns=X_val.columns, index=X_val.index)
+    X_test_scaled = pd.DataFrame(X_test_scaled, columns=X_test.columns, index=X_test.index)
+    
+    y_scaler = StandardScaler()
+    y_train_scaled = y_scaler.fit_transform(y_train)
+    y_val_scaled = y_scaler.transform(y_val)
+    y_test_scaled = y_scaler.transform(y_test)
+    
+    X_test_with_index_scaled = pd.concat(
+        [X_test_scaled.reset_index(drop=True), X_test_index_columns.reset_index(drop=True)],
+        axis=1
+    )
+
+    return (
+        X_train_scaled, y_train_scaled,
+        X_val_scaled, y_val_scaled,
+        X_test_with_index_scaled, y_test_scaled,
+        test_data,
+        x_scaler, y_scaler
+    )
 
 def load_and_process_data() -> pd.DataFrame:
     logging.info("Loading and processing data...")

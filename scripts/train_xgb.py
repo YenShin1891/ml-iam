@@ -9,15 +9,17 @@ from src.utils.plotting import plot_scatter, plot_shap
 
 np.random.seed(0)
 
-def preprocessing():
+def preprocessing(run_id):
     data = load_and_process_data()
     prepared, features, targets = prepare_features_and_targets(data)
     (
         X_train, y_train, 
         X_val, y_val,
         X_test_with_index, y_test, 
-        test_data
+        test_data,
+        x_scaler, y_scaler
     ) = prepare_data(prepared, targets, features)
+    save_session_state(y_scaler, run_id, "y_scaler.pkl")
 
     X_train, y_train = remove_rows_with_missing_outputs(X_train, y_train)
     X_val, y_val = remove_rows_with_missing_outputs(X_val, y_val)
@@ -71,16 +73,17 @@ def plot_xgb(session_state, run_id):
     test_data = session_state["test_data"]
 
     plot_scatter(run_id, test_data, y_test, preds, targets)
-    plot_scatter(run_id, test_data, y_test, preds, targets, use_log=True)
+    y_scaler = load_session_state(run_id, "y_scaler.pkl")
+    plot_scatter(run_id, X_test_with_index, y_scaler.inverse_transform(y_test), y_scaler.inverse_transform(preds), targets, filename="scatter_plot_inversed.png")
     plot_shap(run_id, X_test_with_index, features, targets)
 
 def main():
-    full_pipeline = False
+    full_pipeline = True
 
     if full_pipeline:
         run_id = get_next_run_id()
         setup_logging(run_id)
-        session_state = preprocessing()
+        session_state = preprocessing(run_id)
         save_session_state(session_state, run_id)
         best_params = train_xgb(session_state, run_id)
         session_state["best_params"] = best_params
