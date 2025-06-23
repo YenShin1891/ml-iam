@@ -146,3 +146,43 @@ def save_metrics(run_id, y_true, y_pred):
     metrics_file = os.path.join(metrics_dir, "performance.csv")
     metrics.to_csv(metrics_file, index=False)
     logging.info("Metrics saved to %s.", metrics_file)
+
+def test_tft_autoregressively(model, X_test_with_index, y_test):
+    """
+    TFT 모델을 그룹별로 순차 예측 후 전체 결과 반환
+    """
+    full_preds = np.full(y_test.shape, np.nan, dtype=float)
+
+    grouped = X_test_with_index.groupby(["Region", "Scenario"])
+    
+    for (region, scenario), group_df in tqdm(grouped, desc="TFT Group Inference"):
+        
+        group_df_sorted = group_df.sort_values("Year")
+        
+        dataset = TimeSeriesDataSet(
+            group_df_sorted,
+            time_idx="Year",
+            target=model.hparams.target,  # 학습 당시 설정과 동일
+            group_ids=["Region", "Scenario"],
+            max_encoder_length=30,
+            max_prediction_length=10,
+            time_varying_known_reals=["Year"],
+            time_varying_unknown_reals=[model.hparams.target],
+            static_categoricals=["Region", "Model_Family"],
+            add_relative_time_idx=True,
+            add_target_scales=True,
+        )
+
+        dataloader = dataset.to_dataloader(train=False, batch_size=64)
+        
+        predictions = model.predict(dataloader, mode="prediction")
+
+        # 결과 매핑
+        group_indices = group_df_sorted.index.tolist()
+        pos = X_test_with_index.index.get_indexer(group_indices)
+        full_preds[pos, 0] = predictions.flatten()
+
+    mse = mean_squared_error(y_test[:, 0], full_preds[:, 0])
+    logging.info(f"TFT Mean Squared Error: {mse:.4f}")
+
+    return full_preds

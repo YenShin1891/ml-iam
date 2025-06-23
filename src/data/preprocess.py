@@ -86,6 +86,22 @@ def prepare_features_and_targets(data: pd.DataFrame) -> tuple:
     return prepared, features, targets
 
 
+def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
+    logging.info("Preparing features and targets...")
+    prepared = data.groupby(INDEX_COLUMNS).apply(
+        add_prev_outputs_twice, output_variables=OUTPUT_VARIABLES
+    ).reset_index(drop=True)
+
+    prepared['Year'] = prepared['Year'].astype(int)
+    targets = OUTPUT_VARIABLES
+
+    group_id_columns = ['Model', 'Model_Family', 'Scenario', 'Scenario_Category', 'Region']
+    features = [col for col in prepared.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
+    features = list(set(features) | set(group_id_columns))  # 중복 제거 포함
+
+    return prepared, features, targets
+
+
 def remove_rows_with_missing_outputs(X, y, X2=None):
     """
     Remove rows with missing outputs from the dataset.
