@@ -1,6 +1,6 @@
 # Directories
-DATA_PATH = "/mnt/nas2/kcp/data/processed"
-RESULTS_PATH = "/mnt/nas2/kcp/results"
+DATA_PATH = "/mnt/nas3/kcp-yeeun/data/processed"
+RESULTS_PATH = "/mnt/nas3/kcp-yeeun/results"
 
 # Constants
 YEAR_STARTS_AT = 6

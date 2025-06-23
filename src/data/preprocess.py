@@ -10,26 +10,23 @@ from configs.config import (
     OUTPUT_VARIABLES, INDEX_COLUMNS, NON_FEATURE_COLUMNS
 )
 
-def split_data(prepared):
+def split_data(prepared, test_size=0.1):
     groups = list(prepared.groupby(INDEX_COLUMNS))
     n_groups = len(groups)
-    # split 6:2:2
-    n_train_groups = int(n_groups * 0.6)
-    n_val_groups = int(n_groups * 0.2)
+
+    n_train_groups = int(n_groups * (1 - test_size))
     
     np.random.shuffle(groups)
 
     train_groups = groups[:n_train_groups]
-    val_groups = groups[n_train_groups:n_train_groups + n_val_groups]
-    test_groups = groups[n_train_groups + n_val_groups:]
+    test_groups = groups[n_train_groups:]
 
     train_data = pd.concat([group[1] for group in train_groups]).reset_index(drop=True)
-    val_data = pd.concat([group[1] for group in val_groups]).reset_index(drop=True)
     test_data = pd.concat([group[1] for group in test_groups]).reset_index(drop=True)
     
-    logging.info(f"Train: {len(train_data)} rows, Validation: {len(val_data)} rows, Test: {len(test_data)} rows")
+    logging.info(f"Train: {len(train_data)} rows, Test: {len(test_data)} rows")
 
-    return train_data, val_data, test_data
+    return train_data, test_data
 
 def encode_categorical_columns(data, columns):
     for col in columns:
@@ -38,46 +35,44 @@ def encode_categorical_columns(data, columns):
     return data
 
 def prepare_data(prepared, targets, features):
-    train_data, val_data, test_data = split_data(prepared)
+    train_data, test_data = split_data(prepared)
 
     X_train = train_data[features].copy()
     y_train = train_data[targets].values.copy()
-    X_val = val_data[features].copy()
-    y_val = val_data[targets].values.copy()
+    X_train_index_columns = train_data[[col for col in INDEX_COLUMNS if col not in features]].copy()
     X_test = test_data[features].copy()
     X_test_index_columns = test_data[[col for col in INDEX_COLUMNS if col not in features]].copy()
     y_test = test_data[targets].values.copy()
 
     categorical_columns = ['Region', 'Model_Family']
     X_train = encode_categorical_columns(X_train, categorical_columns)
-    X_val = encode_categorical_columns(X_val, categorical_columns)
     X_test = encode_categorical_columns(X_test, categorical_columns)
     
     x_scaler = StandardScaler()
     X_train_scaled = x_scaler.fit_transform(X_train)
-    X_val_scaled = x_scaler.transform(X_val)
     X_test_scaled = x_scaler.transform(X_test)
 
     X_train_scaled = pd.DataFrame(X_train_scaled, columns=X_train.columns, index=X_train.index)
-    X_val_scaled = pd.DataFrame(X_val_scaled, columns=X_val.columns, index=X_val.index)
     X_test_scaled = pd.DataFrame(X_test_scaled, columns=X_test.columns, index=X_test.index)
     
     y_scaler = StandardScaler()
     y_train_scaled = y_scaler.fit_transform(y_train)
-    y_val_scaled = y_scaler.transform(y_val)
     y_test_scaled = y_scaler.transform(y_test)
     
     X_test_with_index_scaled = pd.concat(
         [X_test_scaled.reset_index(drop=True), X_test_index_columns.reset_index(drop=True)],
         axis=1
     )
+    
+    train_groups = train_data[INDEX_COLUMNS].astype(str).agg('_'.join, axis=1).values
 
     return (
         X_train_scaled, y_train_scaled,
-        X_val_scaled, y_val_scaled,
+        X_train_index_columns,
         X_test_with_index_scaled, y_test_scaled,
         test_data,
-        x_scaler, y_scaler
+        x_scaler, y_scaler,
+        train_groups
     )
 
 def load_and_process_data() -> pd.DataFrame:
@@ -113,34 +108,3 @@ def prepare_features_and_targets(data: pd.DataFrame) -> tuple:
     targets = OUTPUT_VARIABLES
     features = [col for col in prepared.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
     return prepared, features, targets
-
-
-def remove_rows_with_missing_outputs(X, y, X2=None):
-    """
-    Remove rows with missing outputs from the dataset.
-    Args:
-        X (pd.DataFrame or np.ndarray): Feature DataFrame.
-        y (pd.DataFrame or np.ndarray): Target DataFrame or array.
-        X2 (pd.DataFrame or np.ndarray, optional): Additional feature DataFrame.
-    """
-    mask = ~np.isnan(y).any(axis=1)
-    logging.info(f"Removing {mask.sum()} rows with missing outputs")
-
-    if isinstance(X, pd.DataFrame):
-        X = X[mask].reset_index(drop=True)
-    else:
-        X = X[mask]
-
-    if isinstance(y, pd.DataFrame):
-        y = y[mask].reset_index(drop=True)
-    else:
-        y = y[mask]
-
-    if X2 is not None:
-        if isinstance(X2, pd.DataFrame):
-            X2 = X2[mask].reset_index(drop=True)
-        else:
-            X2 = X2[mask]
-        return X, y, X2
-    else:
-        return X, y
