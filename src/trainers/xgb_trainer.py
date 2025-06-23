@@ -24,6 +24,10 @@ from src.trainers.evaluation import test_xgb_autoregressively
 SEARCH_ITER_N_PER_STAGE = 15  # Iterations per stage
 N_FOLDS = 5
 
+os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4'
+os.environ['XGB_CUDA_MAX_MEMORY_PERCENT'] = '80'
+os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
+
 
 def group_k_fold_split(groups: np.array, n_splits: int, shuffle: bool = True, random_state: int = 42):
     """
@@ -170,6 +174,20 @@ def train_and_evaluate_single_config_cv(
         except Exception as e:
             logging.error(f"Error training config {params}: {str(e)}", exc_info=True)
             raise
+        finally:
+            try:
+                if 'dtrain' in locals():
+                    del dtrain
+                if 'deval' in locals():
+                    del deval
+                if 'model' in locals():
+                    del model
+                if 'regular_model' in locals():
+                    del regular_model
+                client.run(gc.collect)
+                gc.collect()
+            except:
+                pass
 
 
 def build_param_dist(stage_params: dict, best_params: dict) -> dict:
@@ -270,7 +288,7 @@ def hyperparameter_search(
                 for i, params in enumerate(param_sampler):
                     logging.info(f"{stage_name} - Iteration {i+1}/{SEARCH_ITER_N_PER_STAGE}")
                     
-                    gpu_id = i % 8
+                    gpu_id = i % 5
                     
                     try:
                         params_copy, score = train_and_evaluate_single_config_cv(
@@ -334,6 +352,7 @@ def hyperparameter_search(
 def train_and_save_model(
     X_train: pd.DataFrame,
     y_train: np.array,
+    train_groups: np.array,
     targets: List[str],
     best_params: Dict,
     run_id: str
@@ -343,10 +362,20 @@ def train_and_save_model(
     with cuda_device("0"):  # Use GPU 0 for final training
         with dask_client_context(**CLIENT_CONFIGS) as client:
             try:
-                y_train_df = pd.DataFrame(y_train, columns=targets)
+                train_train_idx, train_eval_idx = next(group_k_fold_split(train_groups, n_splits=5, shuffle=True, random_state=42))
                 
-                X_train_dask, y_train_dask = scatter_to_dask(client, X_train, y_train_df)
-                dtrain = DaskDMatrix(client, X_train_dask, y_train_dask)
+                X_train_train = X_train.iloc[train_train_idx]
+                X_train_eval = X_train.iloc[train_eval_idx]
+                y_train_train = y_train[train_train_idx]
+                y_train_eval = y_train[train_eval_idx]
+                
+                y_train_train_df = pd.DataFrame(y_train_train, columns=targets)
+                y_train_eval_df = pd.DataFrame(y_train_eval, columns=targets)
+                
+                X_train_train_dask, y_train_train_dask = scatter_to_dask(client, X_train_train, y_train_train_df)
+                X_train_eval_dask, y_train_eval_dask = scatter_to_dask(client, X_train_eval, y_train_eval_df)
+                dtrain = DaskDMatrix(client, X_train_train_dask, y_train_train_dask)
+                deval = DaskDMatrix(client, X_train_eval_dask, y_train_eval_dask)
 
                 xgb_params = get_xgb_params(best_params)
                 num_boost_round = xgb_params.pop('num_boost_round')
@@ -355,9 +384,9 @@ def train_and_save_model(
                     xgb_params,
                     dtrain,
                     num_boost_round=num_boost_round,
-                    evals=[(dtrain, 'train')],
-                    early_stopping_rounds=50,
-                    verbose_eval=True
+                    evals=[(deval, 'eval')],
+                    early_stopping_rounds=15,
+                    verbose_eval=25
                 )
 
                 model_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", f"final_best.json")
@@ -527,7 +556,7 @@ def train_and_evaluate_single_config_cv(
     Returns:
         Tuple[Dict, float]: A tuple containing the parameters and the average negative RMSE score across folds.
     """
-    with cuda_device(str(gpu_id)):
+    with cuda_device(str(gpu_id % 5)):
         try:
             scores = []
             fold_cache = {}
@@ -537,14 +566,27 @@ def train_and_evaluate_single_config_cv(
                 X_train = X.iloc[train_idx]
                 X_val_with_index = X_with_index.iloc[val_idx]
                 y_train, y_val = y[train_idx], y[val_idx]
-                y_train_df = pd.DataFrame(y_train, columns=targets)
+                
+                # Split training data further for evaluation monitoring
+                train_groups_fold = train_groups[train_idx]
+                train_train_idx, train_eval_idx = next(group_k_fold_split(train_groups_fold, n_splits=5, shuffle=True, random_state=42))
+                
+                X_train_train = X_train.iloc[train_train_idx]
+                X_train_eval = X_train.iloc[train_eval_idx]
+                y_train_train = y_train[train_train_idx]
+                y_train_eval = y_train[train_eval_idx]
+                
+                y_train_train_df = pd.DataFrame(y_train_train, columns=targets)
+                y_train_eval_df = pd.DataFrame(y_train_eval, columns=targets)
                 
                 cache_key = f"fold_{fold}"
                 if cache_key not in fold_cache:
                     fold_cache[cache_key] = {}
                 
-                X_train_dask, y_train_dask = scatter_to_dask(client, X_train, y_train_df)
-                dtrain = DaskDMatrix(client, X_train_dask, y_train_dask)
+                X_train_train_dask, y_train_train_dask = scatter_to_dask(client, X_train_train, y_train_train_df)
+                X_train_eval_dask, y_train_eval_dask = scatter_to_dask(client, X_train_eval, y_train_eval_df)
+                dtrain = DaskDMatrix(client, X_train_train_dask, y_train_train_dask)
+                deval = DaskDMatrix(client, X_train_eval_dask, y_train_eval_dask)
                 
                 xgb_params = get_xgb_params(params)
                 num_boost_round = xgb_params.pop('num_boost_round')
@@ -553,9 +595,9 @@ def train_and_evaluate_single_config_cv(
                     xgb_params,
                     dtrain,
                     num_boost_round=num_boost_round,
-                    evals=[(dtrain, 'train')], # Monitor training only in CV setup
-                    early_stopping_rounds=50,
-                    verbose_eval=False
+                    evals=[(deval, 'eval')],
+                    early_stopping_rounds=15,
+                    verbose_eval=25
                 )
                 with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as tmp_file:
                     temp_model_path = tmp_file.name
@@ -585,8 +627,8 @@ def train_and_evaluate_single_config_cv(
                 scores.append(rmse)
                 
                 try:
-                    del dtrain, model, regular_model, predictions
-                    del X_train_dask, y_train_dask
+                    del dtrain, deval, model, regular_model, predictions
+                    del X_train_train_dask, y_train_train_dask, X_train_eval_dask, y_train_eval_dask
                 except:
                     logging.warning("Error cleaning up objects", exc_info=True)
                     
