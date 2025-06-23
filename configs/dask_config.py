@@ -8,13 +8,17 @@ dask.config.set({
     'distributed.worker.memory.terminate': 0.95,
     'distributed.worker.memory.recent-to-old-time': '30s',
     'distributed.logging.distributed': 'warning',
+    'distributed.worker.daemon': False,
+    'distributed.comm.compression': 'lz4',  # Fast compression
+    'distributed.worker.use-file-locking': False,  # Better for NFS/shared storage
 })
 
 CLIENT_CONFIGS = {
     'n_workers': 1,
-    'threads_per_worker': 2,
-    'memory_limit': '4GB',
+    'threads_per_worker': 5,
+    'memory_limit': '16GB',
     'silence_logs': logging.WARNING,
     'dashboard_address': None,
-    'local_directory': '/tmp/dask-worker-space'
+    'local_directory': '/tmp/dask-worker-space',
+    'death_timeout': 60,
 }
