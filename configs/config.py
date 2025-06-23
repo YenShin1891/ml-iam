@@ -1,4 +1,10 @@
+<<<<<<< HEAD
 """Configuration constants for ML-IAM project."""
+=======
+# Directories
+DATA_PATH = "/mnt/nas3/kcp-yeeun/data/processed"
+RESULTS_PATH = "/mnt/nas3/kcp-yeeun/results"
+>>>>>>> fix: changed val set evaluation from teacher forcing to free-running
 
 # Data paths
 DATA_PATH = "/mnt/nas2/kcp-yeeun/data/processed"

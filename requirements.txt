@@ -7,11 +7,10 @@ scikit-learn==1.6.1
 
 # XGBoost with GPU support
 xgboost[gpu]==2.1.4
-
 # Dask and Distributed Computing
+dask[dataframe]
 dask==2024.8.0
 distributed==2024.8.0
-
 # Visualization
 matplotlib==3.9.4
 seaborn==0.13.2 
@@ -28,8 +27,3 @@ streamlit==1.45.0
 
 # RNN
 tensorflow
-
-# TFT
-torch
-lightning
-pytorch_forecasting

@@ -4,6 +4,377 @@ import os
 import logging
 import pandas as pd
 import numpy as np
+import json
+from typing import List, Tuple, Dict
+import time
+from dask.distributed import Client
+import dask.dataframe as dd
+import gc
+import tempfile
+from dask import delayed
+from contextlib import contextmanager
+from xgboost import XGBRegressor
+from xgboost.dask import DaskDMatrix, train as dask_train
+
+from configs.config import RESULTS_PATH
+from configs.dask_config import CLIENT_CONFIGS
+from configs.model.xgb import STAGE_1_PARAMS, STAGE_2_PARAMS, STAGE_3_PARAMS
+from src.trainers.evaluation import test_xgb_autoregressively
+
+SEARCH_ITER_N_PER_STAGE = 15  # Iterations per stage
+N_FOLDS = 5
+
+
+def group_k_fold_split(groups: np.array, n_splits: int, shuffle: bool = True, random_state: int = 42):
+    """
+    Create k-fold splits ensuring each group appears exactly once in test set across all folds.
+    """
+    unique_groups = np.unique(groups)
+    n_groups = len(unique_groups)
+    
+    if n_groups < n_splits:
+        raise ValueError(f"Number of unique groups ({n_groups}) must be at least equal to n_splits ({n_splits})")
+    
+    if shuffle:
+        rng = np.random.RandomState(random_state)
+        unique_groups = rng.permutation(unique_groups)
+    group_folds = np.array_split(unique_groups, n_splits)
+    
+    for fold_idx in range(n_splits):
+        test_groups = set(group_folds[fold_idx])
+        
+        test_indices = np.where(np.isin(groups, list(test_groups)))[0]
+        train_indices = np.where(~np.isin(groups, list(test_groups)))[0]
+        
+        yield train_indices, test_indices
+
+
+@contextmanager
+def cuda_device(device_id: str):
+    old_cuda = os.environ.get('CUDA_VISIBLE_DEVICES', '')
+    os.environ['CUDA_VISIBLE_DEVICES'] = device_id
+    try:
+        yield
+    finally:
+        if old_cuda:
+            os.environ['CUDA_VISIBLE_DEVICES'] = old_cuda
+        else:
+            os.environ.pop('CUDA_VISIBLE_DEVICES', None)
+            
+
+@contextmanager
+def dask_client_context(**kwargs):
+    client = Client(**kwargs)
+    try:
+        yield client
+    finally:
+        try:
+            client.run(gc.collect)
+        except Exception:
+            pass
+        client.close()
+
+
+def scatter_to_dask(client, X, y):
+    scatter_kwargs = {'hash': False, 'broadcast': True}
+    X_future = client.scatter(X, **scatter_kwargs)
+    y_future = client.scatter(y, **scatter_kwargs)
+    X_dask = dd.from_delayed([delayed(lambda x: x)(X_future)], meta=X)
+    y_dask = dd.from_delayed([delayed(lambda x: x)(y_future)], meta=y)
+    return X_dask, y_dask
+
+
+def get_xgb_params(base_params: dict) -> dict:
+    return {
+        'tree_method': 'hist',
+        'device': 'cuda',
+        'eval_metric': 'rmse',
+        'verbosity': 0,
+        'max_bin': 256,
+        **base_params
+    }
+
+
+def train_and_evaluate_single_config_cv(
+    X, y, X_with_index, train_groups, targets, params, gpu_id, client, n_folds=N_FOLDS
+) -> Tuple[Dict, float]:
+    """
+    Train and evaluate a single parameter configuration using k-fold cross-validation.
+    Returns a tuple of (params, negative average RMSE).
+    """
+    with cuda_device(str(gpu_id)):
+        try:
+            scores = []
+            fold_cache = {}
+            for fold, (train_idx, val_idx) in enumerate(group_k_fold_split(train_groups, n_splits=n_folds, shuffle=True, random_state=42)):
+                logging.info(f"Fold {fold+1}/{n_folds} for params: {params}")
+                
+                X_train = X.iloc[train_idx]
+                X_val_with_index = X_with_index.iloc[val_idx]
+                y_train, y_val = y[train_idx], y[val_idx]
+                y_train_df = pd.DataFrame(y_train, columns=targets)
+                
+                X_train_dask, y_train_dask = scatter_to_dask(client, X_train, y_train_df)
+                dtrain = DaskDMatrix(client, X_train_dask, y_train_dask)
+                
+                xgb_params = get_xgb_params(params)
+                num_boost_round = xgb_params.pop('num_boost_round')
+                model = dask_train(
+                    client,
+                    xgb_params,
+                    dtrain,
+                    num_boost_round=num_boost_round,
+                    evals=[(dtrain, 'train')],  # Monitor training only in CV setup
+                    early_stopping_rounds=50,
+                    verbose_eval=False
+                )
+                with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as tmp_file:
+                    temp_model_path = tmp_file.name
+                try:
+                    model['booster'].save_model(temp_model_path)
+                    regular_model = XGBRegressor(**xgb_params)
+                    regular_model.load_model(temp_model_path)
+                    
+                    try:
+                        client.run(gc.collect)
+                    except Exception:
+                        pass
+                    
+                    predictions = test_xgb_autoregressively(
+                        X_val_with_index, 
+                        y_val, 
+                        model=regular_model, 
+                        disable_progress=True, 
+                        cache=fold_cache.setdefault(f"fold_{fold}", {})
+                    )
+                finally:
+                    try:
+                        os.unlink(temp_model_path)
+                    except Exception:
+                        pass
+                
+                rmse = np.sqrt(mean_squared_error(y_val, predictions))
+                logging.info(f"Fold {fold+1} RMSE: {rmse:.4f}")
+                scores.append(rmse)
+                
+                try:
+                    del dtrain, model, regular_model, predictions
+                except Exception:
+                    logging.warning("Error cleaning up objects", exc_info=True)
+                    
+            avg_rmse = np.mean(scores)
+            score = -avg_rmse
+
+            return params, score
+            
+        except Exception as e:
+            logging.error(f"Error training config {params}: {str(e)}", exc_info=True)
+            raise
+
+
+def build_param_dist(stage_params: dict, best_params: dict) -> dict:
+    """
+    Merge current stage params with best params from previous stages.
+    If a param is None in stage_params, use the value from best_params.
+    """
+    param_dist = {}
+    for param, values in stage_params.items():
+        if values is None:
+            if param in best_params:
+                param_dist[param] = [best_params[param]]
+            else:
+                raise ValueError(f"Parameter '{param}' required from previous stage but not found in best_params.")
+        else:
+            param_dist[param] = values
+    return param_dist
+
+
+def hyperparameter_search(
+    X_train: pd.DataFrame, 
+    y_train: np.array, 
+    X_train_with_index: pd.DataFrame,
+    train_groups: np.array,
+    targets: List[str], 
+    run_id: str, 
+    start_stage: int = 1
+) -> Tuple[Dict, Dict]:
+    """
+    Perform staged hyperparameter search for XGBoost using CV on groups.
+    Stages:
+      1. Tree structure
+      2. Learning rate & trees
+      3. Regularization
+    """
+    os.makedirs(os.path.join(RESULTS_PATH, run_id, "checkpoints"), exist_ok=True)
+    checkpoint_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints", "staged_search")
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    
+    all_results = {
+        'stage_1': [],
+        'stage_2': [],
+        'stage_3': []
+    }
+    
+    best_params = {}
+    overall_best_score = float('-inf')
+    overall_best_params = None
+    stages = [
+        ("Stage 1: Tree Structure", STAGE_1_PARAMS),
+        ("Stage 2: Learning Rate & Trees", STAGE_2_PARAMS),
+        ("Stage 3: Regularization", STAGE_3_PARAMS)
+    ]
+    
+    # Load checkpoints from completed stages before start_stage
+    for stage_num in range(1, start_stage):
+        checkpoint_file = os.path.join(checkpoint_dir, f"stage_{stage_num}_best.json")
+        if os.path.exists(checkpoint_file):
+            logging.info(f"Loading best parameters from stage {stage_num}")
+            with open(checkpoint_file, 'r') as f:
+                stage_data = json.load(f)
+                best_params.update(stage_data['params'])
+                if stage_data['score'] > overall_best_score:
+                    overall_best_score = stage_data['score']
+                    overall_best_params = stage_data['params'].copy()
+        else:
+            raise FileNotFoundError(f"Cannot start from stage {start_stage} without completing stage {stage_num}")
+    
+    try:
+        # Create one client per stage instead of per iteration
+        with dask_client_context(**CLIENT_CONFIGS) as client:
+            for stage_idx, (stage_name, stage_params) in enumerate(stages):
+                stage_num = stage_idx + 1
+                
+                if stage_num < start_stage:
+                    continue
+                
+                logging.info(f"{'='*50}")
+                logging.info(f"Starting {stage_name}")
+                logging.info(f"{'='*50}")
+                
+                current_param_dist = build_param_dist(stage_params, best_params)
+                
+                if not current_param_dist:
+                    logging.warning(f"No parameters to search in {stage_name}, skipping...")
+                    continue
+                
+                stage_results = []
+                stage_best_score = float('-inf')
+                stage_best_params = None
+                
+                param_sampler = ParameterSampler(
+                    current_param_dist, 
+                    n_iter=SEARCH_ITER_N_PER_STAGE, 
+                    random_state=stage_idx
+                )
+                
+                for i, params in enumerate(param_sampler):
+                    logging.info(f"{stage_name} - Iteration {i+1}/{SEARCH_ITER_N_PER_STAGE}")
+                    
+                    gpu_id = i % 8
+                    
+                    try:
+                        params_copy, score = train_and_evaluate_single_config_cv(
+                            X_train, y_train, X_train_with_index, train_groups, targets, params, gpu_id, client
+                        )
+                        
+                        result = params_copy.copy()
+                        result['mean_test_score'] = score
+                        result['stage'] = stage_num
+                        stage_results.append(result)
+                        
+                        if score > stage_best_score:
+                            stage_best_score = score
+                            stage_best_params = params_copy.copy()
+                        
+                        if score > overall_best_score:
+                            overall_best_score = score
+                            overall_best_params = params_copy.copy()
+                            
+                        logging.info(f"RMSE: {-score:.4f}")
+                        
+                    except Exception as e:
+                        logging.error(f"Error in {stage_name} iteration {i+1}: {str(e)}", exc_info=True)
+                        raise
+            
+                # Update best_params with stage results
+                if stage_best_params:
+                    for param in current_param_dist.keys():
+                        if param in stage_best_params:
+                            best_params[param] = stage_best_params[param]
+                    
+                    checkpoint_file = os.path.join(checkpoint_dir, f"stage_{stage_num}_best.json")
+                    with open(checkpoint_file, 'w') as f:
+                        json.dump({
+                            'stage': stage_num,
+                            'params': stage_best_params,
+                            'score': stage_best_score,
+                            'rmse': -stage_best_score
+                        }, f, indent=2)
+                
+                stage_key = f'stage_{stage_num}'
+                all_results[stage_key] = stage_results
+                
+                logging.info(f"\n{stage_name} Complete")
+                logging.info(f"Stage Best RMSE: {-stage_best_score:.4f}")
+                logging.info(f"Stage Best Params: {stage_best_params}")
+        
+        logging.info(f"{'='*50}")
+        logging.info("STAGED SEARCH COMPLETE")
+        logging.info(f"{'='*50}")
+        logging.info(f"Overall Best RMSE: {-overall_best_score:.4f}")
+        logging.info(f"Final Best Parameters: {overall_best_params}")
+        
+        return overall_best_params, all_results
+        
+    except Exception as e:
+        logging.error(f"Error in staged hyperparameter search: {str(e)}", exc_info=True)
+        raise
+
+
+def train_and_save_model(
+    X_train: pd.DataFrame,
+    y_train: np.array,
+    targets: List[str],
+    best_params: Dict,
+    run_id: str
+    ) -> None:
+    logging.info("Training final model with best parameters...")
+
+    with cuda_device("0"):  # Use GPU 0 for final training
+        with dask_client_context(**CLIENT_CONFIGS) as client:
+            try:
+                y_train_df = pd.DataFrame(y_train, columns=targets)
+                
+                X_train_dask, y_train_dask = scatter_to_dask(client, X_train, y_train_df)
+                dtrain = DaskDMatrix(client, X_train_dask, y_train_dask)
+
+                xgb_params = get_xgb_params(best_params)
+                num_boost_round = xgb_params.pop('num_boost_round')
+                model = dask_train(
+                    client,
+                    xgb_params,
+                    dtrain,
+                    num_boost_round=num_boost_round,
+                    evals=[(dtrain, 'train')],
+                    early_stopping_rounds=50,
+                    verbose_eval=True
+                )
+
+                model_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", f"final_best.json")
+                booster = model['booster']
+                booster.save_model(model_path)
+                logging.info(f"Model saved to {model_path}")
+
+            except Exception as e:
+                logging.error(f"Error during final model training: {str(e)}", exc_info=True)
+                raise
+
+from sklearn.model_selection import ParameterSampler
+from sklearn.metrics import mean_squared_error
+import os
+import logging
+import pandas as pd
+import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 import json
@@ -12,8 +383,9 @@ import time
 from dask.distributed import Client
 import dask.dataframe as dd
 import gc
-import dask
+import tempfile
 from dask import delayed
+<<<<<<< HEAD
 from xgboost.dask import DaskDMatrix, train as dask_train, predict as dask_predict
 from configs.config import RESULTS_PATH
 from configs.dask_config import *
@@ -45,189 +417,211 @@ STAGE_2_PARAMS = {
     'reg_alpha': [0],  # Fixed initially
     'reg_lambda': [1],  # Fixed initially
 }
+=======
+from contextlib import contextmanager
+from xgboost import XGBRegressor
+from xgboost.dask import DaskDMatrix, train as dask_train
+>>>>>>> fix: changed val set evaluation from teacher forcing to free-running
 
-# Stage 3: Learning Rate and Number of Trees
-STAGE_3_PARAMS = {
-    'max_depth': None,  # Will be set from stage 1 best
-    'min_child_weight': None,  # Will be set from stage 1 best
-    'gamma': [0],  # Keep at 0
-    'eta': [0.01, 0.1, 0.2, 0.3, 0.4],
-    'num_boost_round': [300, 500],
-    'subsample': None,  # Will be set from stage 2 best
-    'colsample_bytree': None,  # Will be set from stage 2 best
-    'reg_alpha': [0],  # Fixed initially
-    'reg_lambda': [1],  # Fixed initially
-}
-
-# Stage 4: Regularization
-STAGE_4_PARAMS = {
-    'max_depth': None,  # Will be set from stage 1 best
-    'min_child_weight': None,  # Will be set from stage 1 best
-    'gamma': [0, 0.1],
-    'eta': None,  # Will be set from stage 3 best
-    'num_boost_round': None,  # Will be set from stage 3 best
-    'subsample': None,  # Will be set from stage 2 best
-    'colsample_bytree': None,  # Will be set from stage 2 best
-    'reg_alpha': [0, 1, 5, 10],
-    'reg_lambda': [0.1, 1, 10]
-}
+from configs.config import RESULTS_PATH
+from configs.dask_config import *
+from configs.model.xgb import *
+from src.trainers.evaluation import test_xgb_autoregressively
 
 SEARCH_ITER_N_PER_STAGE = 15  # Iterations per stage
 N_FOLDS = 5
 
-dask.config.set({
-    'distributed.worker.memory.target': 0.7,  # Target 70% memory
-    'distributed.worker.memory.spill': 0.8,   # Spill at 80%
-    'distributed.worker.memory.pause': 0.85,  # Pause at 85%
-    'distributed.worker.memory.terminate': 0.95,  # Terminate at 95%
-    'distributed.worker.memory.recent-to-old-time': '30s',
-    'distributed.logging.distributed': 'warning',
-})
 
-
-def train_and_evaluate_single_config(X_train, y_train, X_val, y_val, targets, params, gpu_id, client, model_path=None) -> Tuple[Dict, float]:
+def group_k_fold_split(groups: np.array, n_splits: int, shuffle: bool = True, random_state: int = 42):
     """
-    Train and evaluate a single parameter configuration.
+    Create k-fold splits ensuring each group appears exactly once in test set across all folds.
     
+    Parameters:
+    -----------
+    groups : np.array
+        Array of group labels for each sample
+    n_splits : int, default=5
+        Number of folds
+    shuffle : bool, default=True
+        Whether to shuffle groups before splitting
+    random_state : int, default=None
+        Random state for reproducibility
+        
     Returns:
     --------
-    Tuple[Dict, float]
-        A tuple containing the parameters and the negative RMSE score.
-    """
-    # Select GPU for this iteration
-    old_cuda = os.environ.get('CUDA_VISIBLE_DEVICES', '')
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+    Generator yielding (train_indices, test_indices) tuples
     
+    Raises:
+    -------
+    ValueError: If number of unique groups is less than n_splits
+    """
+    unique_groups = np.unique(groups)
+    n_groups = len(unique_groups)
+    
+    if n_groups < n_splits:
+        raise ValueError(f"Number of unique groups ({n_groups}) must be at least equal to n_splits ({n_splits})")
+    
+    if shuffle:
+        rng = np.random.RandomState(random_state)
+        unique_groups = rng.permutation(unique_groups)
+    group_folds = np.array_split(unique_groups, n_splits)
+    
+    for fold_idx in range(n_splits):
+        test_groups = set(group_folds[fold_idx])
+        
+        test_indices = np.where(np.isin(groups, list(test_groups)))[0]
+        train_indices = np.where(~np.isin(groups, list(test_groups)))[0]
+        
+        yield train_indices, test_indices
+
+
+@contextmanager
+def cuda_device(device_id: str):
+    old_cuda = os.environ.get('CUDA_VISIBLE_DEVICES', '')
+    os.environ['CUDA_VISIBLE_DEVICES'] = device_id
     try:
-        logging.info(f"Training with params: {params}")
-        
-        # Prepare data
-        y_train_df = pd.DataFrame(y_train, columns=targets)
-        y_val_df = pd.DataFrame(y_val, columns=targets)
-        
-        # Scatter data with more conservative settings
-        scatter_kwargs = {'hash': False, 'broadcast': True}
-        
-        # Scatter data in chunks if necessary
-        try:
-            X_train_future = client.scatter(X_train, **scatter_kwargs)
-            y_train_future = client.scatter(y_train_df, **scatter_kwargs)
-            X_val_future = client.scatter(X_val, **scatter_kwargs)
-            y_val_future = client.scatter(y_val_df, **scatter_kwargs)
-        except Exception as scatter_error:
-            logging.warning(f"Direct scatter failed, trying chunked approach: {scatter_error}")
-            # If scatter fails due to memory, try chunking
-            chunk_size = len(X_train) // 4
-            X_train_chunks = [X_train.iloc[i:i+chunk_size] for i in range(0, len(X_train), chunk_size)]
-            y_train_chunks = [y_train_df.iloc[i:i+chunk_size] for i in range(0, len(y_train), chunk_size)]
-            X_val_chunks = [X_val.iloc[i:i+chunk_size] for i in range(0, len(X_val), chunk_size)]
-            y_val_chunks = [y_val_df.iloc[i:i+chunk_size] for i in range(0, len(y_val), chunk_size)]
-            
-            X_train_futures = [client.scatter(chunk, **scatter_kwargs) for chunk in X_train_chunks]
-            y_train_futures = [client.scatter(chunk, **scatter_kwargs) for chunk in y_train_chunks]
-            X_val_futures = [client.scatter(chunk, **scatter_kwargs) for chunk in X_val_chunks]
-            y_val_futures = [client.scatter(chunk, **scatter_kwargs) for chunk in y_val_chunks]
-            
-            # Combine chunks on workers
-            X_train_future = client.submit(pd.concat, X_train_futures, **scatter_kwargs)
-            y_train_future = client.submit(pd.concat, y_train_futures, **scatter_kwargs)
-            X_val_future = client.submit(pd.concat, X_val_futures, **scatter_kwargs)
-            y_val_future = client.submit(pd.concat, y_val_futures, **scatter_kwargs)
-        
-        # Create DataFrames from futures using delayed
-        X_train_dask = dd.from_delayed([delayed(lambda x: x)(X_train_future)], meta=X_train)
-        y_train_dask = dd.from_delayed([delayed(lambda x: x)(y_train_future)], meta=y_train_df)
-        X_val_dask = dd.from_delayed([delayed(lambda x: x)(X_val_future)], meta=X_val)
-        y_val_dask = dd.from_delayed([delayed(lambda x: x)(y_val_future)], meta=y_val_df)
-        
-        # Create DaskDMatrix
-        dtrain = DaskDMatrix(client, X_train_dask, y_train_dask)
-        dval = DaskDMatrix(client, X_val_dask, y_val_dask)
-        
-        # Set XGBoost parameters
-        xgb_params = {
-            'tree_method': 'hist',
-            'device': 'cuda',
-            'eval_metric': 'rmse',
-            'verbosity': 0,
-            'max_bin': 256,  # Reduce memory usage
-            **params
-        }
-        
-        # Train model
-        model = dask_train(
-            client,
-            xgb_params,
-            dtrain,
-            evals=[(dval, 'validation')],
-            early_stopping_rounds=10,
-            verbose_eval=False
-        )
-        
-        # Make predictions with retry and better error handling
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                client.run(gc.collect)  # Force garbage collection
-                
-                predictions = dask_predict(client, model, dval)
-                
-                # Compute predictions in worker memory
-                if hasattr(predictions, 'compute'):
-                    predictions = predictions.compute()
-                elif hasattr(predictions, 'result'):
-                    predictions = predictions.result()
-                
-                break
-            except Exception as pred_error:
-                if attempt == max_retries - 1:
-                    raise pred_error
-                logging.warning(f"Prediction attempt {attempt + 1} failed, retrying...")
-                
-                # Force cleanup and retry
-                try:
-                    if 'dval' in locals():
-                        del dval
-                        dval = DaskDMatrix(client, X_val_dask, y_val_dask)
-                    client.run(gc.collect)
-                    time.sleep(2)
-                except:
-                    pass
-        
-        # Calculate negative RMSE (higher is better)
-        rmse = np.sqrt(mean_squared_error(y_val, predictions))
-        score = -rmse  # Negative RMSE for maximization
-        
-        if model_path:
-            model['booster'].save_model(model_path)
-            logging.info(f"Model saved to {model_path}")
-        
-        # Explicit cleanup
-        try:
-            del dtrain, dval, model, predictions
-            del X_train_future, y_train_future, X_val_future, y_val_future
-            client.cancel([X_train_future, y_train_future, X_val_future, y_val_future])
-        except:
-            pass
-            
-        return params, score
-        
-    except Exception as e:
-        logging.error(f"Error training config {params}: {str(e)}")
-        raise
+        yield
     finally:
-        # Restore original CUDA setting
         if old_cuda:
             os.environ['CUDA_VISIBLE_DEVICES'] = old_cuda
         else:
             os.environ.pop('CUDA_VISIBLE_DEVICES', None)
+            
+
+@contextmanager
+def dask_client_context(**kwargs):
+    client = Client(**kwargs)
+    try:
+        yield client
+    finally:
+        client.run(gc.collect)
+        client.close()
+
+
+def scatter_to_dask(client, X, y):
+    scatter_kwargs = {'hash': False, 'broadcast': True}
+    X_future = client.scatter(X, **scatter_kwargs)
+    y_future = client.scatter(y, **scatter_kwargs)
+    X_dask = dd.from_delayed([delayed(lambda x: x)(X_future)], meta=X)
+    y_dask = dd.from_delayed([delayed(lambda x: x)(y_future)], meta=y)
+    return X_dask, y_dask
+
+
+def get_xgb_params(base_params: dict) -> dict:
+    return {
+        'tree_method': 'hist',
+        'device': 'cuda',
+        'eval_metric': 'rmse',
+        'verbosity': 0,
+        'max_bin': 256,
+        **base_params
+    }
+
+
+def train_and_evaluate_single_config_cv(
+    X, y, X_with_index, train_groups, targets, params, gpu_id, client, n_folds=N_FOLDS
+) -> Tuple[Dict, float]:
+    """
+    Train and evaluate a single parameter configuration using k-fold cross-validation.
+    --------
+    Returns:
+        Tuple[Dict, float]: A tuple containing the parameters and the average negative RMSE score across folds.
+    """
+    with cuda_device(str(gpu_id)):
+        try:
+            scores = []
+            fold_cache = {}
+            for fold, (train_idx, val_idx) in enumerate(group_k_fold_split(train_groups, n_splits=n_folds, shuffle=True, random_state=42)):
+                logging.info(f"Fold {fold+1}/{n_folds} for params: {params}")
+                
+                X_train = X.iloc[train_idx]
+                X_val_with_index = X_with_index.iloc[val_idx]
+                y_train, y_val = y[train_idx], y[val_idx]
+                y_train_df = pd.DataFrame(y_train, columns=targets)
+                
+                cache_key = f"fold_{fold}"
+                if cache_key not in fold_cache:
+                    fold_cache[cache_key] = {}
+                
+                X_train_dask, y_train_dask = scatter_to_dask(client, X_train, y_train_df)
+                dtrain = DaskDMatrix(client, X_train_dask, y_train_dask)
+                
+                xgb_params = get_xgb_params(params)
+                num_boost_round = xgb_params.pop('num_boost_round')
+                model = dask_train(
+                    client,
+                    xgb_params,
+                    dtrain,
+                    num_boost_round=num_boost_round,
+                    evals=[(dtrain, 'train')], # Monitor training only in CV setup
+                    early_stopping_rounds=50,
+                    verbose_eval=False
+                )
+                with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as tmp_file:
+                    temp_model_path = tmp_file.name
+                try:
+                    model['booster'].save_model(temp_model_path)
+                    regular_model = XGBRegressor(**xgb_params)
+                    regular_model.load_model(temp_model_path)
+                    
+                    client.run(gc.collect)
+                    
+                    predictions = test_xgb_autoregressively(
+                        X_val_with_index, 
+                        y_val, 
+                        model=regular_model, 
+                        disable_progress=True, 
+                        cache=fold_cache[cache_key]
+                    )
+                finally:
+                    try:
+                        os.unlink(temp_model_path)
+                    except:
+                        pass
+                
+                # Calculate negative RMSE (higher is better)
+                rmse = np.sqrt(mean_squared_error(y_val, predictions))
+                logging.info(f"Fold {fold+1} RMSE: {rmse:.4f}")
+                scores.append(rmse)
+                
+                try:
+                    del dtrain, model, regular_model, predictions
+                    del X_train_dask, y_train_dask
+                except:
+                    logging.warning("Error cleaning up objects", exc_info=True)
+                    
+            avg_rmse = np.mean(scores)
+            score = -avg_rmse
+
+            return params, score
+            
+        except Exception as e:
+            logging.error(f"Error training config {params}: {str(e)}", exc_info=True)
+            raise
+
+
+def build_param_dist(stage_params: dict, best_params: dict) -> dict:
+    """
+    Merge current stage params with best params from previous stages.
+    If a param is None in stage_params, use the value from best_params.
+    """
+    param_dist = {}
+    for param, values in stage_params.items():
+        if values is None:
+            if param in best_params:
+                param_dist[param] = [best_params[param]]
+            else:
+                raise ValueError(f"Parameter '{param}' required from previous stage but not found in best_params.")
+        else:
+            param_dist[param] = values
+    return param_dist
 
 
 def hyperparameter_search(
     X_train: pd.DataFrame, 
     y_train: np.array, 
-    X_val: pd.DataFrame, 
-    y_val: np.array, 
+    X_train_with_index: pd.DataFrame,
+    train_groups: np.array,
     targets: List[str], 
     run_id: str, 
     start_stage: int = 1
@@ -235,11 +629,10 @@ def hyperparameter_search(
     """
     Perform staged hyperparameter search for XGBoost.
     
-    This function performs hyperparameter search in 4 stages:
+    This function performs hyperparameter search in 3 stages:
     1. Tree structure (max_depth, min_child_weight)
-    2. Stochastic parameters (subsample, colsample_bytree)
-    3. Learning rate and number of trees (eta, num_boost_round)
-    4. Regularization (gamma, reg_alpha, reg_lambda)
+    2. Learning rate and number of trees (eta, num_boost_round)
+    3. Regularization (gamma, reg_alpha, reg_lambda)
     
     Returns:
     --------
@@ -248,45 +641,42 @@ def hyperparameter_search(
         - best_params (Dict): The final best hyperparameter combination
         - all_results (Dict): Results from all stages for visualization
     """
-    # Create checkpoint directory
+    os.makedirs(os.path.join(RESULTS_PATH, run_id, "checkpoints"), exist_ok=True)
     checkpoint_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints", "staged_search")
     os.makedirs(checkpoint_dir, exist_ok=True)
     
-    # Store original CUDA_VISIBLE_DEVICES
-    original_cuda_devices = os.environ.get('CUDA_VISIBLE_DEVICES', '')
-    
-    # Initialize results tracking
     all_results = {
         'stage_1': [],
         'stage_2': [],
-        'stage_3': [],
-        'stage_4': []
+        'stage_3': []
     }
     
     best_params = {}
     overall_best_score = float('-inf')
     overall_best_params = None
-    os.makedirs(os.path.join(RESULTS_PATH, run_id, "checkpoints"), exist_ok=True)
-    
-    # Define the stages
     stages = [
         ("Stage 1: Tree Structure", STAGE_1_PARAMS),
-        ("Stage 2: Stochastic Parameters", STAGE_2_PARAMS),
-        ("Stage 3: Learning Rate & Trees", STAGE_3_PARAMS),
-        ("Stage 4: Regularization", STAGE_4_PARAMS)
+        ("Stage 2: Learning Rate & Trees", STAGE_2_PARAMS),
+        ("Stage 3: Regularization", STAGE_3_PARAMS)
     ]
-    # Load best parameters from previous stages if resuming
-    for stage_idx in range(start_stage - 1):
-        checkpoint_file = os.path.join(checkpoint_dir, f"stage_{stage_idx + 1}_best.json")
+    
+    # Load checkpoints from completed stages before start_stage
+    for stage_num in range(1, start_stage):
+        checkpoint_file = os.path.join(checkpoint_dir, f"stage_{stage_num}_best.json")
         if os.path.exists(checkpoint_file):
-            logging.info(f"Loading best parameters from {checkpoint_file}")
+            logging.info(f"Loading best parameters from stage {stage_num}")
             with open(checkpoint_file, 'r') as f:
                 stage_data = json.load(f)
                 best_params.update(stage_data['params'])
+                if stage_data['score'] > overall_best_score:
+                    overall_best_score = stage_data['score']
+                    overall_best_params = stage_data['params'].copy()
         else:
-            logging.warning(f"Checkpoint for Stage {stage_idx + 1} not found. Starting fresh.")
+            logging.error(f"Required checkpoint for Stage {stage_num} not found at {checkpoint_file}", exc_info=True)
+            raise FileNotFoundError(f"Cannot start from stage {start_stage} without completing stage {stage_num}")
     
     try:
+<<<<<<< HEAD
         for stage_idx, (stage_name, stage_params) in enumerate(stages):
             if stage_idx + 1 < start_stage:
                 continue
@@ -349,91 +739,101 @@ def hyperparameter_search(
                     result['mean_test_score'] = score
                     result['stage'] = stage_idx + 1
                     stage_results.append(result)
+=======
+        # Create one client per stage instead of per iteration
+        with dask_client_context(**CLIENT_CONFIGS) as client:
+            for stage_idx, (stage_name, stage_params) in enumerate(stages):
+                stage_num = stage_idx + 1
+                
+                if stage_num < start_stage:
+                    continue
+                
+                logging.info(f"{'='*50}")
+                logging.info(f"Starting {stage_name}")
+                logging.info(f"{'='*50}")
+                
+                current_param_dist = build_param_dist(stage_params, best_params)
+                
+                if not current_param_dist:
+                    logging.warning(f"No parameters to search in {stage_name}, skipping...")
+                    continue
+                
+                stage_results = []
+                stage_best_score = float('-inf')
+                stage_best_params = None
+                
+                param_sampler = ParameterSampler(
+                    current_param_dist, 
+                    n_iter=SEARCH_ITER_N_PER_STAGE, 
+                    random_state=stage_idx
+                )
+                
+                for i, params in enumerate(param_sampler):
+                    logging.info(f"{stage_name} - Iteration {i+1}/{SEARCH_ITER_N_PER_STAGE}")
+>>>>>>> fix: changed val set evaluation from teacher forcing to free-running
                     
-                    # Track stage best
-                    if score > stage_best_score:
-                        stage_best_score = score
-                        stage_best_params = params_copy.copy()
+                    gpu_id = i % 8
                     
-                    # Track overall best
-                    if score > overall_best_score:
-                        overall_best_score = score
-                        overall_best_params = params_copy.copy()
-                        
-                        model_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", f"final_best.json")
-                        train_and_evaluate_single_config(
-                            X_train, y_train, X_val, y_val, targets, params_copy, gpu_id, client, model_path
+                    try:
+                        params_copy, score = train_and_evaluate_single_config_cv(
+                            X_train, y_train, X_train_with_index, train_groups, targets, params, gpu_id, client
                         )
                         
-                    logging.info(f"RMSE: {-score:.4f}")
-                    
-                except Exception as e:
-                    logging.error(f"Error in {stage_name} iteration {i+1}: {str(e)}")
-                    logging.error(f"Full error details:", exc_info=True)
-                    continue
-                    
-                finally:
-                    # Ensure client is properly closed
-                    if client is not None:
-                        try:
-                            client.run(gc.collect)
-                            client.close()
-                        except:
-                            pass
-                    
-                    # Force local garbage collection
-                    gc.collect()
-                    
-                    # Small delay to allow cleanup
-                    time.sleep(0.5)
+                        result = params_copy.copy()
+                        result['mean_test_score'] = score
+                        result['stage'] = stage_num
+                        stage_results.append(result)
+                        
+                        if score > stage_best_score:
+                            stage_best_score = score
+                            stage_best_params = params_copy.copy()
+                        
+                        if score > overall_best_score:
+                            overall_best_score = score
+                            overall_best_params = params_copy.copy()
+                            
+                        logging.info(f"RMSE: {-score:.4f}")
+                        
+                    except Exception as e:
+                        logging.error(f"Error in {stage_name} iteration {i+1}: {str(e)}", exc_info=True)
+                        raise
             
-            # Update best_params with stage results
-            if stage_best_params:
-                for param in current_param_dist.keys():
-                    if param in stage_best_params:
-                        best_params[param] = stage_best_params[param]
+                # Update best_params with stage results
+                if stage_best_params:
+                    for param in current_param_dist.keys():
+                        if param in stage_best_params:
+                            best_params[param] = stage_best_params[param]
+                    
+                    checkpoint_file = os.path.join(checkpoint_dir, f"stage_{stage_num}_best.json")
+                    with open(checkpoint_file, 'w') as f:
+                        json.dump({
+                            'stage': stage_num,
+                            'params': stage_best_params,
+                            'score': stage_best_score,
+                            'rmse': -stage_best_score
+                        }, f, indent=2)
                 
-                # Save stage checkpoint
-                checkpoint_file = os.path.join(checkpoint_dir, f"stage_{stage_idx + 1}_best.json")
-                with open(checkpoint_file, 'w') as f:
-                    json.dump({
-                        'stage': stage_idx + 1,
-                        'params': stage_best_params,
-                        'score': stage_best_score,
-                        'rmse': -stage_best_score
-                    }, f, indent=2)
-            
-            # Store stage results
-            stage_key = f'stage_{stage_idx + 1}'
-            all_results[stage_key] = stage_results
-            
-            logging.info(f"\n{stage_name} Complete")
-            logging.info(f"Stage Best RMSE: {-stage_best_score:.4f}")
-            logging.info(f"Stage Best Params: {stage_best_params}")
-            
-        # Restore original CUDA_VISIBLE_DEVICES
-        if original_cuda_devices:
-            os.environ['CUDA_VISIBLE_DEVICES'] = original_cuda_devices
-        else:
-            os.environ.pop('CUDA_VISIBLE_DEVICES', None)
+                stage_key = f'stage_{stage_num}'
+                all_results[stage_key] = stage_results
+                
+                logging.info(f"\n{stage_name} Complete")
+                logging.info(f"Stage Best RMSE: {-stage_best_score:.4f}")
+                logging.info(f"Stage Best Params: {stage_best_params}")
         
-        # Final summary
         logging.info(f"{'='*50}")
         logging.info("STAGED SEARCH COMPLETE")
         logging.info(f"{'='*50}")
         logging.info(f"Overall Best RMSE: {-overall_best_score:.4f}")
         logging.info(f"Final Best Parameters: {overall_best_params}")
         
-        # Save final results
-        final_checkpoint = os.path.join(checkpoint_dir, "final_best.json")
-        
         return overall_best_params, all_results
         
     except Exception as e:
-        logging.error(f"Error in staged hyperparameter search: {str(e)}")
+        logging.error(f"Error in staged hyperparameter search: {str(e)}", exc_info=True)
         raise
 
 
+<<<<<<< HEAD
 def visualize_staged_search_results(all_results: Dict, run_id: str):
     """
     Visualize the results from staged hyperparameter search.
@@ -528,8 +928,26 @@ def visualize_staged_search_results(all_results: Dict, run_id: str):
         stage_key = f'stage_{stage_num}'
         if stage_key in all_results and all_results[stage_key]:
             visualize_single_stage(all_results[stage_key], stage_num, vis_dir)
+=======
+def train_and_save_model(
+    X_train: pd.DataFrame,
+    y_train: np.array,
+    targets: List[str],
+    best_params: Dict,
+    run_id: str
+    ) -> None:
+    logging.info("Training final model with best parameters...")
+>>>>>>> fix: changed val set evaluation from teacher forcing to free-running
 
+    with cuda_device("0"):  # Use GPU 0 for final training
+        with dask_client_context(**CLIENT_CONFIGS) as client:
+            try:
+                y_train_df = pd.DataFrame(y_train, columns=targets)
+                
+                X_train_dask, y_train_dask = scatter_to_dask(client, X_train, y_train_df)
+                dtrain = DaskDMatrix(client, X_train_dask, y_train_dask)
 
+<<<<<<< HEAD
 def visualize_single_stage(stage_results: List[Dict], stage_num: int, vis_dir: str):
     """
     Create visualization for a single stage of hyperparameter search.
@@ -593,3 +1011,25 @@ def visualize_single_stage(stage_results: List[Dict], stage_num: int, vis_dir: s
     plt.tight_layout()
     plt.savefig(os.path.join(vis_dir, f'stage_{stage_num}_analysis.png'), dpi=300, bbox_inches='tight')
     plt.close()
+=======
+                xgb_params = get_xgb_params(best_params)
+                num_boost_round = xgb_params.pop('num_boost_round')
+                model = dask_train(
+                    client,
+                    xgb_params,
+                    dtrain,
+                    num_boost_round=num_boost_round,
+                    evals=[(dtrain, 'train')],
+                    early_stopping_rounds=50,
+                    verbose_eval=True
+                )
+
+                model_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", f"final_best.json")
+                booster = model['booster']
+                booster.save_model(model_path)
+                logging.info(f"Model saved to {model_path}")
+
+            except Exception as e:
+                logging.error(f"Error during final model training: {str(e)}", exc_info=True)
+                raise
+>>>>>>> fix: changed val set evaluation from teacher forcing to free-running
