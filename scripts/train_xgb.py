@@ -22,6 +22,7 @@ def preprocessing(run_id):
         x_scaler, y_scaler,
         train_groups
     ) = prepare_data(prepared, targets, features)
+    save_session_state(x_scaler, run_id, "x_scaler.pkl")
     save_session_state(y_scaler, run_id, "y_scaler.pkl")
     
     return {
@@ -71,12 +72,13 @@ def plot_xgb(session_state, run_id):
     test_data = session_state["test_data"]
 
     plot_scatter(run_id, test_data, y_test, preds, targets)
+    x_scaler = load_session_state(run_id, "x_scaler.pkl")
     y_scaler = load_session_state(run_id, "y_scaler.pkl")
-    plot_scatter(run_id, X_test_with_index, y_scaler.inverse_transform(y_test), y_scaler.inverse_transform(preds), targets, filename="scatter_plot_inversed.png")
+    plot_scatter(run_id, test_data, y_scaler.inverse_transform(y_test), y_scaler.inverse_transform(preds), targets, filename="scatter_plot_inversed.png")
     plot_shap(run_id, X_test_with_index, features, targets)
 
 def main():
-    full_pipeline = True
+    full_pipeline = False
 
     if full_pipeline:
         run_id = get_next_run_id()
@@ -91,15 +93,11 @@ def main():
         save_session_state(session_state, run_id)
         plot_xgb(session_state, run_id)
     else:
-        run_id = "run_01"
+        run_id = "run_03"
         setup_logging(run_id)
         session_state = load_session_state(run_id)
         ### implement ###
-        best_params = {'subsample': 0.9, 'scale_pos_weight': 100, 'reg_lambda': 10, 'reg_alpha': 10, 'num_boost_round': 300, 'max_depth': 12, 'eta': 0.01, 'gamma': 1, 'colsample_bytree': 0.6}
-        X_train = session_state["X_train"]
-        y_train = session_state["y_train"]
-        targets = session_state["targets"]
-        train_and_save_model(X_train, y_train, targets, best_params, run_id)
+        best_params = train_xgb(session_state, run_id)
         session_state["best_params"] = best_params
         save_session_state(session_state, run_id)
         preds = test_xgb(session_state, run_id)
