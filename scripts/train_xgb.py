@@ -43,7 +43,7 @@ def train_xgb(session_state, run_id):
     y_val = session_state["y_val"]
     targets = session_state["targets"]
     
-    best_params, cv_results_dict = hyperparameter_search(X_train, y_train, X_val, y_val, targets)
+    best_params, cv_results_dict = hyperparameter_search(run_id, X_train, y_train, X_val, y_val, targets)
     visualize_multiple_hyperparam_searches(cv_results_dict, run_id)
 
     return best_params
@@ -52,10 +52,7 @@ def test_xgb(session_state, run_id):
     X_test_with_index = session_state["X_test_with_index"]
     y_test = session_state["y_test"]
 
-    if "model" in session_state:
-        model = session_state["model"]
-    else:
-        model = load_model(run_id)
+    model = load_model(run_id)
             
     logging.info("Testing the model...")
     preds = test_xgb_autoregressively(
@@ -68,7 +65,7 @@ def test_xgb(session_state, run_id):
 
 
 def plot_xgb(session_state, run_id):
-    model = session_state["model"]
+    model = load_model(run_id)
     features = session_state["features"]
     targets = session_state["targets"]
     X_test_with_index = session_state["X_test_with_index"]
@@ -104,13 +101,10 @@ def main():
         save_session_state(session_state, run_id)
         plot_xgb(session_state, run_id)
     else:
-        run_id = "run_05"
+        run_id = "run_30"
         setup_logging(run_id)
         session_state = load_session_state(run_id)
         ### implement ###
-        preds = test_xgb(session_state, run_id)
-        session_state["preds"] = preds
-        save_session_state(session_state, run_id)
         plot_xgb(session_state, run_id)
         #################
         save_session_state(session_state, run_id)

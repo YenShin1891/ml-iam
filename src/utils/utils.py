@@ -109,7 +109,7 @@ def load_model(run_id):
     file_path = os.path.join(run_dir, "best_model.json")
     try:
         import xgboost as xgb
-        model = xgb.Booster()
+        model = xgb.XGBRegressor()
         model.load_model(file_path)
         return model
     except Exception as e:

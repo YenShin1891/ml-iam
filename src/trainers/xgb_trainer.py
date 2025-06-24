@@ -91,12 +91,14 @@ def hyperparameter_search(run_id: str, X_train: pd.DataFrame, y_train: np.array,
                     'verbosity': 1,
                     **params
                 }
+                num_boost_round = xgb_params.pop('num_boost_round')
                 
                 # Train model
                 model = dask_train(
                     client,
                     xgb_params,
                     dtrain,
+                    num_boost_round=num_boost_round,
                     evals=[(dval, 'validation')],
                     early_stopping_rounds=10,
                     verbose_eval=False
@@ -131,12 +133,13 @@ def hyperparameter_search(run_id: str, X_train: pd.DataFrame, y_train: np.array,
                         client,
                         xgb_params,
                         dtrain,
+                        num_boost_round=num_boost_round,
                         evals=[(dval, 'validation')],
                         early_stopping_rounds=10,
                         verbose_eval=False
                     )
                     model_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", f"best_model.json")
-                    model.save_model(model_path)
+                    model['booster'].save_model(model_path)
                     logging.info(f"Model saved to {model_path}")
                     
                 logging.info(f"Parameters: {params}")
