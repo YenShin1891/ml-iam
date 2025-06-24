@@ -16,7 +16,7 @@ STAGE_2_PARAMS = {
     'min_child_weight': None,  # Will be set from stage 1 best
     'gamma': [0],  # Keep at 0
     'eta': [0.1, 0.3, 0.4, 0.5],
-    'num_boost_round': [300, 500, 1000],
+    'num_boost_round': [300, 500, 700, 1000],
     'reg_alpha': [0],  # Fixed initially
     'reg_lambda': [1],  # Fixed initially
 }

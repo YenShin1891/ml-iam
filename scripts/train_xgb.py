@@ -48,7 +48,7 @@ def train_xgb(session_state, run_id, start_stage=1):
     
     X_train_with_index = pd.concat([X_train, X_train_index_columns], axis=1)
     best_params, all_results = hyperparameter_search(X_train, y_train, X_train_with_index, train_groups, targets, run_id, start_stage)
-    train_and_save_model(X_train, y_train, targets, best_params, run_id)
+    train_and_save_model(X_train, y_train, train_groups, targets, best_params, run_id)
 
     return best_params
 
@@ -108,7 +108,13 @@ def main():
         setup_logging(run_id)
         session_state = load_session_state(run_id)
         ### implement ###
-        best_params = train_xgb(session_state, run_id)
+        targets = session_state["targets"]
+        X_train = session_state["X_train"]
+        y_train = session_state["y_train"]
+        train_groups = session_state["train_groups"]
+        best_params = {'reg_lambda': 10, 'reg_alpha': 1, 'num_boost_round': 1000, 'min_child_weight': 15, 'max_depth': 5, 'gamma': 0, 'eta': 0.4}
+        train_and_save_model(X_train, y_train, train_groups, targets, best_params, run_id)
+        
         session_state["best_params"] = best_params
         save_session_state(session_state, run_id)
         preds = test_xgb(session_state, run_id)
