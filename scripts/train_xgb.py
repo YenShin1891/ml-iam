@@ -78,7 +78,7 @@ def parse_arguments():
 
 
 def main():
-    full_pipeline = False
+    full_pipeline = True
 
     if full_pipeline:
         run_id = get_next_run_id()
@@ -90,7 +90,7 @@ def main():
         save_session_state(session_state, run_id)
         plot_xgb(session_state, run_id)
     else:
-        run_id = parse_arguments()
+        run_id = 'run_28'
         setup_logging(run_id)
         session_state = load_session_state(run_id)
         ### implement ###

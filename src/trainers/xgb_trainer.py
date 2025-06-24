@@ -89,8 +89,8 @@ def hyperparameter_search(X_train, y_train):
         objective='reg:squarederror',
         n_jobs=-1,
         random_state=0,
-        tree_method='gpu_hist',
-        gpu_id=0
+        tree_method='hist',
+        device='cuda',
     )
 
     # Set up RandomizedSearchCV
