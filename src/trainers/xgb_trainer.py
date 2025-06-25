@@ -117,93 +117,86 @@ def get_xgb_params(base_params: dict) -> dict:
     }
 
 
-def train_and_evaluate_single_config_cv(
-    X, y, X_with_index, train_groups, targets, params, gpu_id, client, n_folds=N_FOLDS
+def train_and_evaluate_single_config(
+    X, y, X_with_index, train_groups, targets, params, gpu_id, client, 
+    use_cv=True, X_val=None, y_val=None, X_val_with_index=None, n_folds=N_FOLDS,
+    use_dask=True
 ) -> Tuple[Dict, float]:
     """
-    Train and evaluate a single parameter configuration using k-fold cross-validation.
-    --------
+    Train and evaluate a single parameter configuration using either k-fold CV or single validation set.
+    
+    Parameters:
+    -----------
+    X : pd.DataFrame
+        Training features (or all features if use_cv=False)
+    y : np.array
+        Training targets (or all targets if use_cv=False)
+    X_with_index : pd.DataFrame
+        Features with index for autoregressive testing
+    train_groups : np.array
+        Group labels for k-fold splitting (ignored if use_cv=False)
+    targets : List[str]
+        Target column names
+    params : dict
+        XGBoost parameters
+    gpu_id : int
+        GPU device ID
+    client : dask.distributed.Client
+        Dask client for distributed computing (ignored if use_dask=False)
+    use_cv : bool, default=True
+        If True, use k-fold cross-validation. If False, use single validation set.
+    X_val : pd.DataFrame, optional
+        Validation features (required if use_cv=False)
+    y_val : np.array, optional
+        Validation targets (required if use_cv=False)
+    X_val_with_index : pd.DataFrame, optional
+        Validation features with index (required if use_cv=False)
+    n_folds : int, default=N_FOLDS
+        Number of folds for cross-validation (ignored if use_cv=False)
+    use_dask : bool, default=True
+        If True, use Dask for distributed training. If False, use regular XGBoost.
+        
     Returns:
-        Tuple[Dict, float]: A tuple containing the parameters and the average negative RMSE score across folds.
+    --------
+    Tuple[Dict, float]: A tuple containing the parameters and the negative RMSE score.
     """
     with cuda_device(str(gpu_id % 5)):
         try:
-            scores = []
-            fold_cache = {}
-            for fold, (train_idx, val_idx) in enumerate(group_k_fold_split(train_groups, n_splits=n_folds, shuffle=True, random_state=42)):
-                logging.info(f"Fold {fold+1}/{n_folds} for params: {params}")
-                
-                X_train = X.iloc[train_idx]
-                X_val_with_index = X_with_index.iloc[val_idx]
-                y_train, y_val = y[train_idx], y[val_idx]
-                
-                # Split training data further for evaluation monitoring
-                train_groups_fold = train_groups[train_idx]
-                train_train_idx, train_eval_idx = next(group_k_fold_split(train_groups_fold, n_splits=5, shuffle=True, random_state=42))
-                
-                X_train_train = X_train.iloc[train_train_idx]
-                X_train_eval = X_train.iloc[train_eval_idx]
-                y_train_train = y_train[train_train_idx]
-                y_train_eval = y_train[train_eval_idx]
-                
-                y_train_train_df = pd.DataFrame(y_train_train, columns=targets)
-                y_train_eval_df = pd.DataFrame(y_train_eval, columns=targets)
-                
-                cache_key = f"fold_{fold}"
-                if cache_key not in fold_cache:
-                    fold_cache[cache_key] = {}
-                
-                X_train_train_dask, y_train_train_dask = scatter_to_dask(client, X_train_train, y_train_train_df)
-                X_train_eval_dask, y_train_eval_dask = scatter_to_dask(client, X_train_eval, y_train_eval_df)
-                dtrain = DaskDMatrix(client, X_train_train_dask, y_train_train_dask)
-                deval = DaskDMatrix(client, X_train_eval_dask, y_train_eval_dask)
-                
-                xgb_params = get_xgb_params(params)
-                num_boost_round = xgb_params.pop('num_boost_round')
-                model = dask_train(
-                    client,
-                    xgb_params,
-                    dtrain,
-                    num_boost_round=num_boost_round,
-                    evals=[(deval, 'eval')],
-                    early_stopping_rounds=15,
-                    verbose_eval=25
-                )
-                with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as tmp_file:
-                    temp_model_path = tmp_file.name
-                try:
-                    model['booster'].save_model(temp_model_path)
-                    regular_model = XGBRegressor(**xgb_params)
-                    regular_model.load_model(temp_model_path)
+            if use_cv:
+                # Cross-validation mode
+                scores = []
+                fold_cache = {}
+                for fold, (train_idx, val_idx) in enumerate(group_k_fold_split(train_groups, n_splits=n_folds, shuffle=True, random_state=42)):
+                    logging.info(f"Fold {fold+1}/{n_folds} for params: {params}")
                     
-                    client.run(gc.collect)
+                    X_train, X_val_fold = X.iloc[train_idx], X.iloc[val_idx]
+                    X_val_with_index_fold = X_with_index.iloc[val_idx]
+                    y_train, y_val_fold = y[train_idx], y[val_idx]
                     
-                    predictions = test_xgb_autoregressively(
-                        X_val_with_index, 
-                        y_val, 
-                        model=regular_model, 
-                        disable_progress=True, 
-                        cache=fold_cache[cache_key]
+                    cache_key = f"fold_{fold}"
+                    if cache_key not in fold_cache:
+                        fold_cache[cache_key] = {}
+                    
+                    fold_score = _train_single_fold(
+                        X_train, y_train, X_val_fold, y_val_fold, X_val_with_index_fold,
+                        targets, params, client, fold_cache[cache_key], fold+1, use_dask
                     )
-                finally:
-                    try:
-                        os.unlink(temp_model_path)
-                    except:
-                        pass
-                
-                # Calculate negative RMSE (higher is better)
-                rmse = np.sqrt(mean_squared_error(y_val, predictions))
-                logging.info(f"Fold {fold+1} RMSE: {rmse:.4f}")
-                scores.append(rmse)
-                
-                try:
-                    del dtrain, deval, model, regular_model, predictions
-                    del X_train_train_dask, y_train_train_dask, X_train_eval_dask, y_train_eval_dask
-                except:
-                    logging.warning("Error cleaning up objects", exc_info=True)
+                    scores.append(fold_score)
                     
-            avg_rmse = np.mean(scores)
-            score = -avg_rmse
+                avg_rmse = np.mean(scores)
+                score = -avg_rmse
+                
+            else:
+                # Single validation set mode
+                if X_val is None or y_val is None or X_val_with_index is None:
+                    raise ValueError("X_val, y_val, and X_val_with_index must be provided when use_cv=False")
+                
+                logging.info(f"Training with params: {params}")
+                fold_score = _train_single_fold(
+                    X, y, X_val, y_val, X_val_with_index,
+                    targets, params, client, {}, 1, use_dask
+                )
+                score = -fold_score
 
             return params, score
             
@@ -212,18 +205,102 @@ def train_and_evaluate_single_config_cv(
             raise
         finally:
             try:
-                if 'dtrain' in locals():
-                    del dtrain
-                if 'deval' in locals():
-                    del deval
-                if 'model' in locals():
-                    del model
-                if 'regular_model' in locals():
-                    del regular_model
-                client.run(gc.collect)
+                if use_dask and client:
+                    client.run(gc.collect)
                 gc.collect()
             except:
                 pass
+
+
+def _train_single_fold(X_train, y_train, X_val, y_val, X_val_with_index, targets, params, client, cache, fold_num, use_dask=True):
+    """
+    Helper function to train and evaluate a single fold/validation set.
+    
+    Parameters:
+    -----------
+    use_dask : bool, default=True
+        If True, use Dask for distributed training. If False, use regular XGBoost.
+    
+    Returns:
+    --------
+    float: RMSE score for this fold
+    """
+    y_train_df = pd.DataFrame(y_train, columns=targets)
+    y_val_df = pd.DataFrame(y_val, columns=targets)
+    
+    xgb_params = get_xgb_params(params)
+    num_boost_round = xgb_params.pop('num_boost_round')
+    
+    if use_dask:
+        # Dask training
+        X_train_dask, y_train_dask = scatter_to_dask(client, X_train, y_train_df)
+        X_val_dask, y_val_dask = scatter_to_dask(client, X_val, y_val_df)
+        dtrain = DaskDMatrix(client, X_train_dask, y_train_dask)
+        dval = DaskDMatrix(client, X_val_dask, y_val_dask)
+        
+        model = dask_train(
+            client,
+            xgb_params,
+            dtrain,
+            num_boost_round=num_boost_round,
+            evals=[(dval, 'validation')],
+            early_stopping_rounds=15,
+            verbose_eval=25
+        )
+        
+        with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as tmp_file:
+            temp_model_path = tmp_file.name
+        try:
+            model['booster'].save_model(temp_model_path)
+            regular_model = XGBRegressor(**xgb_params)
+            regular_model.load_model(temp_model_path)
+            
+            if client:
+                client.run(gc.collect)
+        finally:
+            try:
+                os.unlink(temp_model_path)
+            except:
+                pass
+        
+        # Cleanup Dask objects
+        try:
+            del dtrain, dval, model
+            del X_train_dask, y_train_dask, X_val_dask, y_val_dask
+        except:
+            logging.warning("Error cleaning up Dask objects", exc_info=True)
+    else:
+        # Regular XGBoost training
+        regular_model = XGBRegressor(
+            n_estimators=num_boost_round,
+            early_stopping_rounds=15,
+            **xgb_params
+        )
+        
+        regular_model.fit(
+            X_train, y_train_df,
+            eval_set=[(X_val, y_val_df)],
+            verbose=25
+        )
+    
+    predictions = test_xgb_autoregressively(
+        X_val_with_index, 
+        y_val, 
+        model=regular_model, 
+        disable_progress=True, 
+        cache=cache
+    )
+    
+    # Calculate RMSE
+    rmse = np.sqrt(mean_squared_error(y_val, predictions))
+    logging.info(f"Fold {fold_num} RMSE: {rmse:.4f}")
+    
+    try:
+        del regular_model, predictions
+    except:
+        logging.warning("Error cleaning up objects", exc_info=True)
+    
+    return rmse
 
 
 def build_param_dist(stage_params: dict, best_params: dict) -> dict:
@@ -250,7 +327,13 @@ def hyperparameter_search(
     train_groups: np.array,
     targets: List[str], 
     run_id: str, 
-    start_stage: int = 1
+    start_stage: int = 1,
+    use_cv: bool = True,
+    X_val: pd.DataFrame = None,
+    y_val: np.array = None,
+    X_val_with_index: pd.DataFrame = None,
+    val_groups: np.array = None,
+    use_dask: bool = True
 ) -> Tuple[Dict, Dict]:
     """
     Perform staged hyperparameter search for XGBoost.
@@ -260,6 +343,36 @@ def hyperparameter_search(
     2. Learning rate and number of trees (eta, num_boost_round)
     3. Regularization (gamma, reg_alpha, reg_lambda)
     
+    Parameters:
+    -----------
+    X_train : pd.DataFrame
+        Training features
+    y_train : np.array
+        Training targets
+    X_train_with_index : pd.DataFrame
+        Training features with index for autoregressive testing
+    train_groups : np.array
+        Group labels for training set
+    targets : List[str]
+        Target column names
+    run_id : str
+        Unique identifier for this run
+    start_stage : int, default=1
+        Stage to start from (1, 2, or 3)
+    use_cv : bool, default=True
+        If True, use k-fold cross-validation on merged train+val data.
+        If False, use train for training and val for validation.
+    X_val : pd.DataFrame, optional
+        Validation features (required if use_cv=False)
+    y_val : np.array, optional
+        Validation targets (required if use_cv=False)
+    X_val_with_index : pd.DataFrame, optional
+        Validation features with index for autoregressive testing (required if use_cv=False)
+    val_groups : np.array, optional
+        Group labels for validation set (not used in current implementation)
+    use_dask : bool, default=True
+        If True, use Dask for distributed training. If False, use regular XGBoost.
+    
     Returns:
     --------
     Tuple[Dict, Dict]
@@ -267,8 +380,15 @@ def hyperparameter_search(
         - best_params (Dict): The final best hyperparameter combination
         - all_results (Dict): Results from all stages for visualization
     """
+    if not use_cv:
+        if X_val is None or y_val is None or X_val_with_index is None:
+            raise ValueError("X_val, y_val, and X_val_with_index must be provided when use_cv=False")
+    
     os.makedirs(os.path.join(RESULTS_PATH, run_id, "checkpoints"), exist_ok=True)
-    checkpoint_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints", "staged_search")
+    checkpoint_subdir = "staged_search" if use_cv else "staged_search_single_val"
+    if not use_dask:
+        checkpoint_subdir += "_no_dask"
+    checkpoint_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints", checkpoint_subdir)
     os.makedirs(checkpoint_dir, exist_ok=True)
     
     all_results = {
@@ -302,16 +422,25 @@ def hyperparameter_search(
             raise FileNotFoundError(f"Cannot start from stage {start_stage} without completing stage {stage_num}")
     
     try:
-        # Create one client per stage instead of per iteration
-        with dask_client_context(**CLIENT_CONFIGS) as client:
+        # Create client only if using Dask
+        if use_dask:
+            client_context = dask_client_context(**CLIENT_CONFIGS)
+        else:
+            # Create a dummy context manager for non-Dask mode
+            from contextlib import nullcontext
+            client_context = nullcontext()
+            
+        with client_context as client:
             for stage_idx, (stage_name, stage_params) in enumerate(stages):
                 stage_num = stage_idx + 1
                 
                 if stage_num < start_stage:
                     continue
                 
+                training_mode = "Dask" if use_dask else "Direct XGBoost"
+                cv_suffix = "" if use_cv else " (Single Validation Set)"
                 logging.info(f"{'='*50}")
-                logging.info(f"Starting {stage_name}")
+                logging.info(f"Starting {stage_name}{cv_suffix} - {training_mode}")
                 logging.info(f"{'='*50}")
                 
                 current_param_dist = build_param_dist(stage_params, best_params)
@@ -336,12 +465,21 @@ def hyperparameter_search(
                     gpu_id = i % 5
                     
                     try:
-                        params_copy, score = train_and_evaluate_single_config_cv(
-                            X_train, y_train, X_train_with_index, train_groups, targets, params, gpu_id, client
-                        )
-                        
+                        if use_cv:
+                            params_copy, score = train_and_evaluate_single_config(
+                                X_train, y_train, X_train_with_index, train_groups, targets, params, gpu_id, client,
+                                use_cv=use_cv, use_dask=use_dask
+                            )
+                        else:
+                            params_copy, score = train_and_evaluate_single_config(
+                                X_train, y_train, X_train_with_index, train_groups, targets, params, gpu_id, client,
+                                use_cv=use_cv,
+                                X_val=X_val, y_val=y_val, X_val_with_index=X_val_with_index,
+                                use_dask=use_dask
+                            )
                         result = params_copy.copy()
-                        result['mean_test_score'] = score
+                        score_key = 'mean_test_score' if use_cv else 'val_score'
+                        result[score_key] = score
                         result['stage'] = stage_num
                         stage_results.append(result)
                         
@@ -381,8 +519,10 @@ def hyperparameter_search(
                 logging.info(f"Stage Best RMSE: {-stage_best_score:.4f}")
                 logging.info(f"Stage Best Params: {stage_best_params}")
         
+        training_mode = "DASK" if use_dask else "DIRECT XGBOOST"
+        search_type = f"STAGED SEARCH COMPLETE ({training_mode})" if use_cv else f"STAGED SEARCH COMPLETE (Single Validation Set, {training_mode})"
         logging.info(f"{'='*50}")
-        logging.info("STAGED SEARCH COMPLETE")
+        logging.info(search_type)
         logging.info(f"{'='*50}")
         logging.info(f"Overall Best RMSE: {-overall_best_score:.4f}")
         logging.info(f"Final Best Parameters: {overall_best_params}")
@@ -400,45 +540,48 @@ def train_and_save_model(
     train_groups: np.array,
     targets: List[str],
     best_params: Dict,
-    run_id: str
+    run_id: str,
+    use_dask: bool = True
     ) -> None:
     logging.info("Training final model with best parameters...")
 
     with cuda_device("0"):  # Use GPU 0 for final training
-        with dask_client_context(**CLIENT_CONFIGS) as client:
-            try:
-                train_train_idx, train_eval_idx = next(group_k_fold_split(train_groups, n_splits=5, shuffle=True, random_state=42))
-                
-                X_train_train = X_train.iloc[train_train_idx]
-                X_train_eval = X_train.iloc[train_eval_idx]
-                y_train_train = y_train[train_train_idx]
-                y_train_eval = y_train[train_eval_idx]
-                
-                y_train_train_df = pd.DataFrame(y_train_train, columns=targets)
-                y_train_eval_df = pd.DataFrame(y_train_eval, columns=targets)
-                
-                X_train_train_dask, y_train_train_dask = scatter_to_dask(client, X_train_train, y_train_train_df)
-                X_train_eval_dask, y_train_eval_dask = scatter_to_dask(client, X_train_eval, y_train_eval_df)
-                dtrain = DaskDMatrix(client, X_train_train_dask, y_train_train_dask)
-                deval = DaskDMatrix(client, X_train_eval_dask, y_train_eval_dask)
+        try:
+            y_train_df = pd.DataFrame(y_train, columns=targets)
+            xgb_params = get_xgb_params(best_params)
+            num_boost_round = xgb_params.pop('num_boost_round')
+            
+            if use_dask:
+                # Dask training
+                with dask_client_context(**CLIENT_CONFIGS) as client:
+                    X_train_dask, y_train_dask = scatter_to_dask(client, X_train, y_train_df)
+                    dtrain = DaskDMatrix(client, X_train_dask, y_train_dask)
 
-                xgb_params = get_xgb_params(best_params)
-                num_boost_round = xgb_params.pop('num_boost_round')
-                model = dask_train(
-                    client,
-                    xgb_params,
-                    dtrain,
-                    num_boost_round=num_boost_round,
-                    evals=[(deval, 'eval')],
-                    early_stopping_rounds=15,
-                    verbose_eval=25
+                    model = dask_train(
+                        client,
+                        xgb_params,
+                        dtrain,
+                        num_boost_round=num_boost_round,
+                        verbose_eval=25
+                    )
+
+                    model_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", f"final_best.json")
+                    booster = model['booster']
+                    booster.save_model(model_path)
+                    logging.info(f"Model saved to {model_path}")
+            else:
+                # Regular XGBoost training
+                model = XGBRegressor(
+                    n_estimators=num_boost_round,
+                    **xgb_params
                 )
-
+                
+                model.fit(X_train, y_train_df, verbose=25)
+                
                 model_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", f"final_best.json")
-                booster = model['booster']
-                booster.save_model(model_path)
+                model.save_model(model_path)
                 logging.info(f"Model saved to {model_path}")
 
-            except Exception as e:
-                logging.error(f"Error during final model training: {str(e)}", exc_info=True)
-                raise
+        except Exception as e:
+            logging.error(f"Error during final model training: {str(e)}", exc_info=True)
+            raise

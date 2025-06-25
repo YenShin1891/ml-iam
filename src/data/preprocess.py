@@ -10,23 +10,25 @@ from configs.config import (
     OUTPUT_VARIABLES, INDEX_COLUMNS, NON_FEATURE_COLUMNS
 )
 
-def split_data(prepared, test_size=0.1):
+def split_data(prepared):
     groups = list(prepared.groupby(INDEX_COLUMNS))
     n_groups = len(groups)
-
-    n_train_groups = int(n_groups * (1 - test_size))
+    # split 8:1:1
+    n_train_groups = int(n_groups * 0.8)
+    n_val_groups = int(n_groups * 0.1)
     
     np.random.shuffle(groups)
 
     train_groups = groups[:n_train_groups]
-    test_groups = groups[n_train_groups:]
+    val_groups = groups[n_train_groups:n_train_groups + n_val_groups]
+    test_groups = groups[n_train_groups + n_val_groups:]
 
     train_data = pd.concat([group[1] for group in train_groups]).reset_index(drop=True)
+    val_data = pd.concat([group[1] for group in val_groups]).reset_index(drop=True)
     test_data = pd.concat([group[1] for group in test_groups]).reset_index(drop=True)
-    
-    logging.info(f"Train: {len(train_data)} rows, Test: {len(test_data)} rows")
 
-    return train_data, test_data
+    return train_data, val_data, test_data
+
 
 def encode_categorical_columns(data, columns):
     for col in columns:
@@ -35,28 +37,35 @@ def encode_categorical_columns(data, columns):
     return data
 
 def prepare_data(prepared, targets, features):
-    train_data, test_data = split_data(prepared)
+    train_data, val_data, test_data = split_data(prepared)
 
     X_train = train_data[features].copy()
-    y_train = train_data[targets].values.copy()
     X_train_index_columns = train_data[[col for col in INDEX_COLUMNS if col not in features]].copy()
+    y_train = train_data[targets].values.copy()
+    X_val = val_data[features].copy()
+    X_val_index_columns = val_data[[col for col in INDEX_COLUMNS if col not in features]].copy()
+    y_val = val_data[targets].values.copy()
     X_test = test_data[features].copy()
     X_test_index_columns = test_data[[col for col in INDEX_COLUMNS if col not in features]].copy()
     y_test = test_data[targets].values.copy()
 
     categorical_columns = ['Region', 'Model_Family']
     X_train = encode_categorical_columns(X_train, categorical_columns)
+    X_val = encode_categorical_columns(X_val, categorical_columns)
     X_test = encode_categorical_columns(X_test, categorical_columns)
     
     x_scaler = StandardScaler()
     X_train_scaled = x_scaler.fit_transform(X_train)
+    X_val_scaled = x_scaler.transform(X_val)
     X_test_scaled = x_scaler.transform(X_test)
 
     X_train_scaled = pd.DataFrame(X_train_scaled, columns=X_train.columns, index=X_train.index)
+    X_val_scaled = pd.DataFrame(X_val_scaled, columns=X_val.columns, index=X_val.index)
     X_test_scaled = pd.DataFrame(X_test_scaled, columns=X_test.columns, index=X_test.index)
     
     y_scaler = StandardScaler()
     y_train_scaled = y_scaler.fit_transform(y_train)
+    y_val_scaled = y_scaler.transform(y_val)
     y_test_scaled = y_scaler.transform(y_test)
     
     X_test_with_index_scaled = pd.concat(
@@ -65,14 +74,15 @@ def prepare_data(prepared, targets, features):
     )
     
     train_groups = train_data[INDEX_COLUMNS].astype(str).agg('_'.join, axis=1).values
+    val_groups = val_data[INDEX_COLUMNS].astype(str).agg('_'.join, axis=1).values
 
     return (
-        X_train_scaled, y_train_scaled,
-        X_train_index_columns,
+        X_train_scaled, y_train_scaled, X_train_index_columns, 
+        X_val_scaled, y_val_scaled, X_val_index_columns,
         X_test_with_index_scaled, y_test_scaled,
         test_data,
         x_scaler, y_scaler,
-        train_groups
+        train_groups, val_groups
     )
 
 def load_and_process_data() -> pd.DataFrame:
