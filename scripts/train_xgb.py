@@ -2,7 +2,7 @@ import logging
 import numpy as np
 
 from src.data.preprocess import prepare_data, load_and_process_data, prepare_features_and_targets, remove_rows_with_missing_outputs
-from src.trainers.xgb_trainer import hyperparameter_search, visualize_multiple_hyperparam_searches
+from src.trainers.xgb_trainer import hyperparameter_search
 from src.trainers.evaluation import test_xgb_autoregressively, save_metrics
 from src.utils.utils import setup_logging, save_session_state, load_session_state, get_next_run_id
 from src.utils.plotting import plot_scatter, plot_shap
@@ -27,7 +27,6 @@ def train_xgb(run_id):
     assert not np.any(np.isinf(y_train)), "y_train contains Inf values."
 
     best_model, cv_results = hyperparameter_search(X_train, y_train, X_val, y_val)
-    visualize_multiple_hyperparam_searches(cv_results, run_id)
 
     return {
         "features": features,
@@ -83,7 +82,7 @@ def main():
         save_session_state(session_state, run_id)
         plot_xgb(session_state, run_id)
     else:
-        run_id = "run_03"
+        run_id = "run_32"
         setup_logging(run_id)
         session_state = load_session_state(run_id)
         ### implement ###
