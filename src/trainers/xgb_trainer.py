@@ -11,27 +11,27 @@ import json
 from configs.config import RESULTS_PATH
 
 PARAM_DIST = {
-        'max_depth': [8, 10, 12],
-        'learning_rate': [0.01, 0.1, 0.2],
-        'n_estimators': [300, 500, 700],
-        'subsample': [0.7, 0.8, 0.9],
-        'colsample_bytree': [0.6, 0.8, 1.0],
-        'gamma': [0, 1, 5],
-        'reg_alpha': [0.1, 1, 10],
-        'reg_lambda': [1, 10, 100],
-    }
-
-# for debugging
-PARAM_DIST = {
-        'max_depth': [5],
-        'learning_rate': [0.4],
-        'n_estimators': [1000],
+        'max_depth': [5, 10, 12],
+        'learning_rate': [0.01, 0.1, 0.3, 0.4],
+        'n_estimators': [500, 700, 1000],
         'subsample': [1.0],
         'colsample_bytree': [1.0],
-        'gamma': [0],
-        'reg_alpha': [5],
-        'reg_lambda': [0.1],
+        'gamma': [0, 1],
+        'reg_alpha': [0.1, 1, 10],
+        'reg_lambda': [0.1, 1, 10],
     }
+
+# # for debugging
+# PARAM_DIST = {
+#         'max_depth': [5],
+#         'learning_rate': [0.4],
+#         'n_estimators': [1000],
+#         'subsample': [1.0],
+#         'colsample_bytree': [1.0],
+#         'gamma': [0],
+#         'reg_alpha': [5],
+#         'reg_lambda': [0.1],
+#     }
 
 PARAM_PAIRS = [
     ('max_depth', 'learning_rate'),
@@ -40,7 +40,7 @@ PARAM_PAIRS = [
     ('reg_alpha', 'reg_lambda')
 ]
 
-SEARCH_ITER_N = 30
+SEARCH_ITER_N = 648
 N_FOLDS = 3
 
 

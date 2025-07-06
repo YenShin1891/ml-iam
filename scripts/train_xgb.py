@@ -26,8 +26,8 @@ def train_xgb(run_id):
     assert not np.any(np.isinf(y_train)), "y_train contains Inf values."
 
     cv_results = hyperparameter_search(X_train, y_train, run_id)
-
-    return {
+    
+    session_state = {
         "features": features,
         "targets": targets,
         "X_train": X_train,
@@ -35,9 +35,14 @@ def train_xgb(run_id):
         "X_test_with_index": X_test_with_index,
         "y_test": y_test,
         "test_data": test_data,
-        # "preds": preds,
-        "trained": True
     }
+    
+    try:
+        visualize_multiple_hyperparam_searches(cv_results, run_id)
+    except Exception as e:
+        logging.error(e, exc_info=True)
+
+    return session_state
 
 def test_xgb(session_state, run_id):
     X_test_with_index = session_state["X_test_with_index"]
@@ -75,7 +80,7 @@ def parse_arguments():
 
 
 def main():
-    full_pipeline = True
+    full_pipeline = False
 
     if full_pipeline:
         run_id = get_next_run_id()
@@ -87,13 +92,17 @@ def main():
         save_session_state(session_state, run_id)
         plot_xgb(session_state, run_id)
     else:
-        run_id = 'run_36'
+        run_id = 'run_37'
         setup_logging(run_id)
         session_state = load_session_state(run_id)
         ### implement ###
         X_train = session_state["X_train"]
         y_train = session_state["y_train"]
         cv_results = hyperparameter_search(X_train, y_train, run_id)
+        try:
+            visualize_multiple_hyperparam_searches(cv_results, run_id)
+        except Exception as e:
+            logging.error(e, exc_info=True)
         save_session_state(session_state, run_id)
         preds = test_xgb(session_state, run_id)
         session_state["preds"] = preds
