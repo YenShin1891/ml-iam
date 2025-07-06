@@ -5,7 +5,7 @@ import numpy as np
 from src.data.preprocess import prepare_data, load_and_process_data, prepare_features_and_targets, remove_rows_with_missing_outputs
 from src.trainers.xgb_trainer import hyperparameter_search, visualize_multiple_hyperparam_searches
 from src.trainers.evaluation import test_xgb_autoregressively, save_metrics
-from src.utils.utils import setup_logging, save_session_state, load_session_state, get_next_run_id
+from src.utils.utils import setup_logging, save_session_state, load_session_state, load_model, get_next_run_id
 from src.utils.plotting import plot_scatter, plot_shap
 
 np.random.seed(0)
@@ -25,8 +25,7 @@ def train_xgb(run_id):
     assert not np.any(np.isnan(y_train)), "y_train contains NaN values."
     assert not np.any(np.isinf(y_train)), "y_train contains Inf values."
 
-    best_model, cv_results = hyperparameter_search(X_train, y_train)
-    visualize_multiple_hyperparam_searches(cv_results, run_id)
+    cv_results = hyperparameter_search(X_train, y_train, run_id)
 
     return {
         "features": features,
@@ -36,7 +35,6 @@ def train_xgb(run_id):
         "X_test_with_index": X_test_with_index,
         "y_test": y_test,
         "test_data": test_data,
-        "model": best_model,
         # "preds": preds,
         "trained": True
     }
@@ -44,11 +42,10 @@ def train_xgb(run_id):
 def test_xgb(session_state, run_id):
     X_test_with_index = session_state["X_test_with_index"]
     y_test = session_state["y_test"]
-    model = session_state["model"]
 
     logging.info("Testing the model...")
     preds = test_xgb_autoregressively(
-        model, X_test_with_index, y_test
+        X_test_with_index, y_test, run_id
     )
     session_state["preds"] = preds
     save_metrics(run_id, y_test, preds)
@@ -57,13 +54,13 @@ def test_xgb(session_state, run_id):
 
 
 def plot_xgb(session_state, run_id):
-    model = session_state["model"]
     features = session_state["features"]
     targets = session_state["targets"]
     X_test_with_index = session_state["X_test_with_index"]
     y_test = session_state["y_test"]
     preds = session_state["preds"]
     test_data = session_state["test_data"]
+    model = load_model(run_id)
 
     plot_scatter(run_id, test_data, y_test, preds, targets)
     plot_scatter(run_id, test_data, y_test, preds, targets, use_log=True)
@@ -90,21 +87,14 @@ def main():
         save_session_state(session_state, run_id)
         plot_xgb(session_state, run_id)
     else:
-        run_id = 'run_28'
+        run_id = 'run_36'
         setup_logging(run_id)
         session_state = load_session_state(run_id)
         ### implement ###
-        data = load_and_process_data()
-        prepared, features, targets = prepare_features_and_targets(data)
-        (
-            _, _, 
-            X_test_with_index, y_test, 
-            test_data
-        ) = prepare_data(prepared, targets, features)
-        X_test_with_index, y_test, test_data = remove_rows_with_missing_outputs(X_test_with_index, y_test, test_data)
-        session_state["X_test_with_index"] = X_test_with_index
+        X_train = session_state["X_train"]
+        y_train = session_state["y_train"]
+        cv_results = hyperparameter_search(X_train, y_train, run_id)
         save_session_state(session_state, run_id)
-
         preds = test_xgb(session_state, run_id)
         session_state["preds"] = preds
         save_session_state(session_state, run_id)

@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
+import json
 
 from configs.config import RESULTS_PATH
 
@@ -20,18 +21,17 @@ PARAM_DIST = {
         'reg_lambda': [1, 10, 100],
     }
 
-# # for debugging
-# PARAM_DIST = {
-#         'max_depth': [10],
-#         'learning_rate': [0.2],
-#         'n_estimators': [500],
-#         'subsample': [0.8],
-#         'colsample_bytree': [0.8],
-#         'gamma': [1],
-#         'reg_alpha': [1],
-#         'reg_lambda': [100],
-#         'scale_pos_weight': [100],
-#     }
+# for debugging
+PARAM_DIST = {
+        'max_depth': [5],
+        'learning_rate': [0.4],
+        'n_estimators': [1000],
+        'subsample': [1.0],
+        'colsample_bytree': [1.0],
+        'gamma': [0],
+        'reg_alpha': [5],
+        'reg_lambda': [0.1],
+    }
 
 PARAM_PAIRS = [
     ('max_depth', 'learning_rate'),
@@ -83,14 +83,14 @@ def visualize_multiple_hyperparam_searches(random_search_results, run_id):
         plt.savefig(os.path.join(param_search_dir, filename))
         plt.close()
 
-def hyperparameter_search(X_train, y_train):
+def hyperparameter_search(X_train, y_train, run_id):
     # Create the XGBRegressor instance
     xgb = XGBRegressor(
         objective='reg:squarederror',
         n_jobs=-1,
         random_state=0,
         tree_method='hist',
-        device='cuda',
+        device='cpu',
     )
 
     # Set up RandomizedSearchCV
@@ -113,8 +113,16 @@ def hyperparameter_search(X_train, y_train):
     logging.info(f"Best parameters: {random_search.best_params_}")
     logging.info(f"Best score: {random_search.best_score_}")
     logging.info(random_search.cv_results_)
+    
+    # Save the best model in JSON format
+    model_dir = os.path.join(RESULTS_PATH, run_id, "models")
+    os.makedirs(model_dir, exist_ok=True)
+    
+    model_path = os.path.join(model_dir, "xgb_model.json")
+    random_search.best_estimator_.save_model(model_path)
+    logging.info(f"Model saved to: {model_path}")
 
-    return random_search.best_estimator_, random_search.cv_results_
+    return random_search.cv_results_
 
 # # for debugging
 # def hyperparameter_search(X_train, y_train):

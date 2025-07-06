@@ -7,6 +7,7 @@ import concurrent.futures
 from tqdm import tqdm
 
 from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
+from src.utils.utils import load_model
 
 def group_test_data(X_test_with_index):
     """
@@ -62,7 +63,9 @@ def autoregressive_predictions(model, group_indices, group_matrix, prev_indices,
 
 #     return preds_target
 
-def test_xgb_autoregressively(model, X_test_with_index, y_test):
+def test_xgb_autoregressively(X_test_with_index, y_test, run_id):
+    model = load_model(run_id, model_name="xgb_model.json")
+    
     group_indices_list, group_matrices, prev_indices_list, prev2_indices_list = group_test_data(X_test_with_index)
     full_preds = np.full(y_test.shape, np.nan, dtype=float)
 

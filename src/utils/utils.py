@@ -3,6 +3,7 @@ import logging
 import os
 import pickle
 from datetime import datetime, timezone, timedelta
+from xgboost import XGBRegressor
 
 from configs.config import RESULTS_PATH
 
@@ -63,6 +64,21 @@ def load_session_state(run_id):
     except FileNotFoundError:
         logging.error("No saved session state found at %s.", file_path)
         return {}
+    
+
+def load_model(run_id, model_name="xgb_model.json"):
+    """
+    Load a model from the specified run directory.
+    """
+    model_path = os.path.join(RESULTS_PATH, run_id, "models", model_name)
+    if not os.path.exists(model_path):
+        logging.error("Model file %s does not exist in run %s.", model_name, run_id)
+        return None
+    model = XGBRegressor()
+    model.load_model(model_path)
+    logging.info("Model loaded from %s.", model_path)
+    
+    return model
 
 
 def get_next_run_id():
