@@ -80,7 +80,7 @@ def parse_arguments():
 
 
 def main():
-    full_pipeline = False
+    full_pipeline = True
 
     if full_pipeline:
         run_id = get_next_run_id()
