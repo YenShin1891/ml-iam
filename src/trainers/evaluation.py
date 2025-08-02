@@ -5,8 +5,9 @@ import numpy as np
 import pandas as pd
 import concurrent.futures
 from tqdm import tqdm
+from typing import List
 from src.utils.utils import masked_mse
-from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
+from configs.config import SPLIT_POINT, LAGGING, INDEX_COLUMNS, NON_FEATURE_COLUMNS, STATIC_FEATURE_COLUMNS, RESULTS_PATH
 
 def group_test_data(X_test_with_index):
     """
@@ -124,6 +125,11 @@ def test_rnn(model, X_test, y_test):
 def save_metrics(run_id, y_true, y_pred):
     """
     Save performance metrics to a CSV file under the specified run directory.
+    
+    Args:
+        run_id (str): Unique identifier for the run.
+        y_true (np.ndarray): True target values.
+        y_pred (np.ndarray): Predicted values from the model.
     """
     mse = mean_squared_error(y_true, y_pred)
     mae = np.mean(np.abs(y_true - y_pred))
@@ -186,3 +192,130 @@ def test_tft_autoregressively(model, X_test_with_index, y_test):
     logging.info(f"TFT Mean Squared Error: {mse:.4f}")
 
     return full_preds
+
+def _predict_series_fragment(trained_model, series_data, split_point=SPLIT_POINT):
+    """
+    Args:
+        trained_model: Already trained MLForecast model
+        series_data: Single time series data sorted by time
+        split_point: Point to split the series into context and target
+    
+    Returns:
+        predictions: DataFrame with predictions and actual values
+    """
+    if split_point < LAGGING or len(series_data) <= split_point:
+        return None
+        
+    context_data = series_data.iloc[:split_point].copy()
+    target_data = series_data.iloc[split_point:].copy()
+
+    # MLForecast will use context to create lag features automatically
+    h = len(target_data)
+    predictions = trained_model.predict(h=h, df=context_data)
+    
+    # Merge predictions with actual values
+    if len(predictions) > 0:
+        series_predictions = predictions.merge(
+            target_data[['unique_id', 'ds', 'y', 'target']], 
+            on=['unique_id'], 
+            how='left'
+        )
+        return series_predictions
+    
+    return None
+
+def evaluate_mlforecast_fragment_based(trained_model, eval_data, targets, mode="test", model_type='xgb'):
+    """
+    Fragment-based evaluation using pre-trained model.
+    
+    Args:
+        trained_model: Pre-trained MLForecast model
+        eval_data: Data to evaluate (validation or test)
+        targets: List of target variables
+        mode: "validation" or "test" for logging purposes
+    
+    Returns:
+        predictions: DataFrame with all predictions
+        avg_mse: Average MSE across all series
+    """
+    logging.info(f"Running MLForecast {mode} with fragment-based forecasting...")
+    
+    all_predictions = []
+    
+    # Group data by unique_id to handle each series separately
+    for unique_id, series_data in eval_data.groupby('unique_id'):
+        series_data = series_data.sort_values('ds').reset_index(drop=True)
+        
+        try:
+            predictions = _predict_series_fragment(trained_model, series_data)
+            
+            if predictions is not None:
+                all_predictions.append(predictions)
+                
+                # Calculate series-level MSE
+                valid_preds = predictions.dropna(subset=['y', model_type])
+                    
+        except Exception as e:
+            logging.warning(f"Failed to predict series {unique_id}: {str(e)}", exc_info=True)
+            continue
+    
+    if all_predictions:
+        overall_predictions = pd.concat(all_predictions, ignore_index=True)
+        
+        # calculate average MSE across all series
+        valid_preds = overall_predictions.dropna(subset=['y', model_type])
+        if len(valid_preds) > 0:
+            avg_mse = mean_squared_error(valid_preds['y'], valid_preds[model_type])
+            logging.info(f"Average MSE: {avg_mse:.4f}")
+        else:
+            logging.warning("No valid predictions found for MSE calculation.")
+        
+        return overall_predictions, avg_mse
+    else:
+        logging.warning(f"No predictions generated for {mode}")
+        return pd.DataFrame(), float('inf')
+    
+
+def test_mlforecast_recursive(model, test_data: pd.DataFrame, targets: List[str]):
+    """
+    Test MLForecast model with recursive forecasting.
+    """
+    logging.info("Testing MLForecast model recursively...")
+    
+    # Get unique series
+    unique_series = test_data['unique_id'].unique()
+    
+    all_predictions = []
+    
+    for series_id in unique_series:
+        series_data = test_data[test_data['unique_id'] == series_id].sort_values('ds')
+        
+        if len(series_data) == 0:
+            continue
+            
+        # Predict for this series
+        h = len(series_data)
+        series_preds = model.predict(h=h, X_df=series_data[['unique_id', 'ds']])
+        
+        # Add actual values for comparison
+        series_preds = series_preds.merge(
+            series_data[['unique_id', 'ds', 'y', 'target']], 
+            on=['unique_id', 'ds'], 
+            how='left'
+        )
+        
+        all_predictions.append(series_preds)
+    
+    if all_predictions:
+        full_predictions = pd.concat(all_predictions, ignore_index=True)
+        
+        # Calculate overall MSE
+        valid_preds = full_predictions.dropna(subset=['y', 'xgb'])
+        if len(valid_preds) > 0:
+            mse = mean_squared_error(valid_preds['y'], valid_preds['xgb'])
+            logging.info(f"MLForecast Mean Squared Error: {mse:.4f}")
+        
+        return full_predictions
+    else:
+        logging.warning("No predictions generated")
+        return pd.DataFrame()

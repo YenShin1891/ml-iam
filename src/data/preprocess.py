@@ -4,8 +4,8 @@ import numpy as np
 import logging
 
 from configs.config import (
-    DATA_PATH,
-    YEAR_STARTS_AT, DATASET_NAME,
+    DATA_PATH, DATASET_NAME,
+    YEAR_RANGE,
     OUTPUT_VARIABLES, INDEX_COLUMNS, NON_FEATURE_COLUMNS
 )
 
@@ -54,9 +54,8 @@ def prepare_data(prepared, targets, features):
 def load_and_process_data() -> pd.DataFrame:
     logging.info("Loading and processing data...")
     processed_series = pd.read_csv(os.path.join(DATA_PATH, DATASET_NAME))
-    processed_series = processed_series.loc[:, :'2100']
-    year_columns = processed_series.columns[YEAR_STARTS_AT:]
-    non_year_columns = processed_series.columns[:YEAR_STARTS_AT]
+    non_year_columns = processed_series.loc[:, :'1990']  # First year column is '1990'
+    year_columns = processed_series.loc[:, str(YEAR_RANGE[0]):str(YEAR_RANGE[1])]
     year_melted = processed_series.melt(
         id_vars=non_year_columns, value_vars=year_columns,
         var_name='Year', value_name='value'
@@ -131,3 +130,55 @@ def remove_rows_with_missing_outputs(X, y, X2=None):
         return X, y, X2
     else:
         return X, y
+    
+
+def prepare_features_and_targets_mlforecast(data: pd.DataFrame) -> tuple:
+    """
+    Prepare features and targets for MLForecast (without manual lagging).
+    """
+    logging.info("Preparing features and targets for MLForecast...")
+    
+    # Don't add previous outputs - MLForecast will handle this
+    prepared = data.copy()
+    prepared['Year'] = prepared['Year'].astype(int)
+    
+    targets = OUTPUT_VARIABLES
+    
+    # Features exclude targets and non-feature columns, but keep static features
+    features = [col for col in prepared.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
+    
+    return prepared, features, targets
+
+
+def split_data_mlforecast(prepared, features, targets, index_columns):
+    """
+    Split data for MLForecast training by groups, keeping time series intact.
+    """
+    from src.trainers.mlf_trainer import prepare_mlforecast_data
+    
+    # Prepare data in MLForecast format
+    mlf_data = prepare_mlforecast_data(prepared, features, targets, index_columns)
+    
+    # Get unique groups (series) instead of splitting by time
+    unique_series = mlf_data['unique_id'].unique()
+    n_series = len(unique_series)
+    
+    # Shuffle groups for random split
+    np.random.shuffle(unique_series)
+    
+    # Split groups: 70% train, 20% validation, 10% test
+    n_train_series = int(n_series * 0.7)
+    n_val_series = int(n_series * 0.2)
+    
+    train_series = unique_series[:n_train_series]
+    val_series = unique_series[n_train_series:n_train_series + n_val_series]
+    test_series = unique_series[n_train_series + n_val_series:]
+    
+    # Filter data by series groups
+    train_data = mlf_data[mlf_data['unique_id'].isin(train_series)].reset_index(drop=True)
+    val_data = mlf_data[mlf_data['unique_id'].isin(val_series)].reset_index(drop=True)
+    test_data = mlf_data[mlf_data['unique_id'].isin(test_series)].reset_index(drop=True)
+    
+    logging.info(f"MLForecast split - Train series: {len(train_series)}, Val series: {len(val_series)}, Test series: {len(test_series)}")
+    
+    return train_data, val_data, test_data

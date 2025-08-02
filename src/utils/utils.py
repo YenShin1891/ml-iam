@@ -115,6 +115,23 @@ def load_model(run_id):
     except Exception as e:
         logging.error("Error loading model: %s", str(e))
         return None
+    
+def load_mlforecast_model(run_id: str):
+    """
+    Load a saved MLForecast model from checkpoints.
+    """
+    from mlforecast import MLForecast
+    
+    model_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", "best_model.pkl")
+    
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file not found at {model_path}")
+    
+    # Load the model
+    loaded_model = MLForecast.load(model_path)
+    logging.info(f"Model loaded from {model_path}")
+    
+    return loaded_model
 
 # dask
 def create_dask_client():

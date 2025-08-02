@@ -5,6 +5,9 @@ pandas==2.2.2
 numpy==1.24.4
 scikit-learn==1.6.1
 
+# For recursive forcasting
+mlforecast
+
 # XGBoost with GPU support
 xgboost[gpu]==2.1.4
 
