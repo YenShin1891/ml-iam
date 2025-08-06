@@ -159,26 +159,35 @@ def split_data_mlforecast(prepared, features, targets, index_columns):
     # Prepare data in MLForecast format
     mlf_data = prepare_mlforecast_data(prepared, features, targets, index_columns)
     
+    # Extract group_id from unique_id by removing target suffix
+    # unique_id format: "index_columns_target", so we remove "_target" part
+    mlf_data['group_id'] = mlf_data['unique_id'].str.rsplit('_', n=1).str[0]
+    
     # Get unique groups (series) instead of splitting by time
-    unique_series = mlf_data['unique_id'].unique()
-    n_series = len(unique_series)
+    unique_groups = mlf_data['group_id'].unique()
+    n_groups = len(unique_groups)
     
     # Shuffle groups for random split
-    np.random.shuffle(unique_series)
+    np.random.shuffle(unique_groups)
     
     # Split groups: 70% train, 20% validation, 10% test
-    n_train_series = int(n_series * 0.7)
-    n_val_series = int(n_series * 0.2)
+    n_train_groups = int(n_groups * 0.7)
+    n_val_groups = int(n_groups * 0.2)
     
-    train_series = unique_series[:n_train_series]
-    val_series = unique_series[n_train_series:n_train_series + n_val_series]
-    test_series = unique_series[n_train_series + n_val_series:]
+    train_groups = unique_groups[:n_train_groups]
+    val_groups = unique_groups[n_train_groups:n_train_groups + n_val_groups]
+    test_groups = unique_groups[n_train_groups + n_val_groups:]
     
-    # Filter data by series groups
-    train_data = mlf_data[mlf_data['unique_id'].isin(train_series)].reset_index(drop=True)
-    val_data = mlf_data[mlf_data['unique_id'].isin(val_series)].reset_index(drop=True)
-    test_data = mlf_data[mlf_data['unique_id'].isin(test_series)].reset_index(drop=True)
+    # Filter data by group assignments
+    train_data = mlf_data[mlf_data['group_id'].isin(train_groups)].reset_index(drop=True)
+    val_data = mlf_data[mlf_data['group_id'].isin(val_groups)].reset_index(drop=True)
+    test_data = mlf_data[mlf_data['group_id'].isin(test_groups)].reset_index(drop=True)
     
-    logging.info(f"MLForecast split - Train series: {len(train_series)}, Val series: {len(val_series)}, Test series: {len(test_series)}")
+    # Drop the temporary group_id column
+    train_data = train_data.drop('group_id', axis=1)
+    val_data = val_data.drop('group_id', axis=1)
+    test_data = test_data.drop('group_id', axis=1)
+    
+    logging.info(f"MLForecast split - Train groups: {len(train_groups)}, Val groups: {len(val_groups)}, Test groups: {len(test_groups)}")
     
     return train_data, val_data, test_data

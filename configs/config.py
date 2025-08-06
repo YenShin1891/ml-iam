@@ -15,4 +15,4 @@ OUTPUT_VARIABLES = [
 ]
 INDEX_COLUMNS = ['Model', 'Scenario', 'Region']
 NON_FEATURE_COLUMNS = ['Model', 'Scenario', 'Scenario_Category']
-STATIC_FEATURE_COLUMNS = ['Model_Family', 'Region']
+STATIC_FEATURE_COLUMNS = ['Model_Family', 'Region', 'target']

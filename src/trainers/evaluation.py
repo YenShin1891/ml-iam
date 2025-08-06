@@ -7,7 +7,7 @@ import concurrent.futures
 from tqdm import tqdm
 from typing import List
 from src.utils.utils import masked_mse
-from configs.config import SPLIT_POINT, LAGGING, INDEX_COLUMNS, NON_FEATURE_COLUMNS, STATIC_FEATURE_COLUMNS, RESULTS_PATH
+from configs.config import LAGGING, INDEX_COLUMNS, NON_FEATURE_COLUMNS, STATIC_FEATURE_COLUMNS, RESULTS_PATH
 
 def group_test_data(X_test_with_index):
     """
@@ -117,7 +117,7 @@ def test_rnn(model, X_test, y_test):
 
 #         mask = ~np.isnan(y_test[:, i])
 #         test_auc = mean_squared_error(y_pred=full_preds[mask, i], y_true=y_test[mask, i])
-#         logging.info(f"Mean Square Error for {target}: {test_auc:.2f}")
+#         logging.info(f"Mean Squared Error for {target}: {test_auc:.2f}")
 
 #     return full_preds
 
@@ -193,129 +193,109 @@ def test_tft_autoregressively(model, X_test_with_index, y_test):
 
     return full_preds
 
-def _predict_series_fragment(trained_model, series_data, split_point=SPLIT_POINT):
-    """
-    Args:
-        trained_model: Already trained MLForecast model
-        series_data: Single time series data sorted by time
-        split_point: Point to split the series into context and target
-    
-    Returns:
-        predictions: DataFrame with predictions and actual values
-    """
-    if split_point < LAGGING or len(series_data) <= split_point:
-        return None
-        
-    context_data = series_data.iloc[:split_point].copy()
-    target_data = series_data.iloc[split_point:].copy()
 
-    # MLForecast will use context to create lag features automatically
-    h = len(target_data)
-    predictions = trained_model.predict(h=h, df=context_data)
-    
-    # Merge predictions with actual values
-    if len(predictions) > 0:
-        series_predictions = predictions.merge(
-            target_data[['unique_id', 'ds', 'y', 'target']], 
-            on=['unique_id'], 
-            how='left'
-        )
-        return series_predictions
-    
-    return None
-
-def evaluate_mlforecast_fragment_based(trained_model, eval_data, targets, mode="test", model_type='xgb'):
+def evaluate_mlforecast_with_context(trained_model, eval_data, targets, mode="test", model_type='xgb'):
     """
-    Fragment-based evaluation using pre-trained model.
+    Evaluate MLForecast using cross_validation for evaluation series prediction.
     
     Args:
         trained_model: Pre-trained MLForecast model
         eval_data: Data to evaluate (validation or test)
         targets: List of target variables
         mode: "validation" or "test" for logging purposes
+        model_type: Type of model used (e.g., 'xgb')
     
     Returns:
         predictions: DataFrame with all predictions
         avg_mse: Average MSE across all series
     """
-    logging.info(f"Running MLForecast {mode} with fragment-based forecasting...")
+    logging.info(f"Running MLForecast {mode} with cross-validation approach...")
     
     all_predictions = []
+    failed_series = []
     
-    # Group data by unique_id to handle each series separately
-    for unique_id, series_data in eval_data.groupby('unique_id'):
-        series_data = series_data.sort_values('ds').reset_index(drop=True)
-        
+    # Process each series separately
+    for unique_id in eval_data['unique_id'].unique():
         try:
-            predictions = _predict_series_fragment(trained_model, series_data)
+            series_data = eval_data[eval_data['unique_id'] == unique_id].sort_values('ds').reset_index(drop=True)
             
-            if predictions is not None:
-                all_predictions.append(predictions)
+            # Check if we have enough data to make ANY predictions
+            if len(series_data) <= LAGGING:
+                logging.warning(f"Series {unique_id} has insufficient data ({len(series_data)} <= {LAGGING})")
+                failed_series.append(unique_id)
+                continue
+            
+            # Calculate prediction horizon: predict everything after LAGGING point
+            prediction_horizon = len(series_data) - LAGGING
+            
+            if prediction_horizon <= 0:
+                logging.warning(f"Series {unique_id} has no predictable points")
+                failed_series.append(unique_id)
+                continue
+            
+            # Use cross_validation to predict from point (LAGGING + 1) onwards
+            cv_results = trained_model.cross_validation(
+                df=series_data,
+                h=prediction_horizon,
+                n_windows=1,  # Single validation window
+                step_size=prediction_horizon,  # Start prediction from the earliest possible point
+                static_features=STATIC_FEATURE_COLUMNS,
+                fitted=True  # Use pre-fitted model
+            )
+            
+            if cv_results is not None and len(cv_results) > 0:
+                # Add actual y values for evaluation
+                cv_results = cv_results.merge(
+                    series_data[['unique_id', 'ds', 'y'] + 
+                               [col for col in series_data.columns if col in STATIC_FEATURE_COLUMNS]],
+                    on=['unique_id', 'ds'],
+                    how='left'
+                )
+                all_predictions.append(cv_results)
                 
-                # Calculate series-level MSE
-                valid_preds = predictions.dropna(subset=['y', model_type])
-                    
+                # Log what we predicted
+                predicted_points = len(cv_results)
+                total_points = len(series_data)
+                logging.debug(f"Series {unique_id}: predicted {predicted_points}/{total_points} points "
+                            f"(skipped first {LAGGING} for lag context)")
+            else:
+                logging.warning(f"No predictions generated for series {unique_id}")
+                failed_series.append(unique_id)
+                
         except Exception as e:
-            logging.warning(f"Failed to predict series {unique_id}: {str(e)}", exc_info=True)
-            continue
+            logging.warning(f"Failed to predict series {unique_id}: {str(e)}")
+            failed_series.append(unique_id)
+            raise e
+    
+    # Report results
+    total_series = len(eval_data['unique_id'].unique())
+    successful_series = total_series - len(failed_series)
+    logging.info(f"Successfully processed {successful_series}/{total_series} series")
     
     if all_predictions:
         overall_predictions = pd.concat(all_predictions, ignore_index=True)
         
-        # calculate average MSE across all series
+        # Log prediction efficiency
+        total_possible_points = len(eval_data)
+        actual_predictions = len(overall_predictions)
+        skipped_points = total_possible_points - actual_predictions
+        logging.info(f"Generated {actual_predictions} predictions from {total_possible_points} total points "
+                    f"({skipped_points} skipped for lag context)")
+        
+        # Calculate average MSE across all series
         valid_preds = overall_predictions.dropna(subset=['y', model_type])
         if len(valid_preds) > 0:
             avg_mse = mean_squared_error(valid_preds['y'], valid_preds[model_type])
-            logging.info(f"Average MSE: {avg_mse:.4f}")
+            logging.info(f"Average MSE: {avg_mse:.4f} ({len(valid_preds)} valid predictions)")
+            
+            # Additional logging for debugging
+            logging.info(f"Prediction range: [{valid_preds[model_type].min():.4f}, {valid_preds[model_type].max():.4f}]")
+            logging.info(f"Actual range: [{valid_preds['y'].min():.4f}, {valid_preds['y'].max():.4f}]")
         else:
             logging.warning("No valid predictions found for MSE calculation.")
+            avg_mse = float('inf')
         
         return overall_predictions, avg_mse
     else:
         logging.warning(f"No predictions generated for {mode}")
         return pd.DataFrame(), float('inf')
-    
-
-def test_mlforecast_recursive(model, test_data: pd.DataFrame, targets: List[str]):
-    """
-    Test MLForecast model with recursive forecasting.
-    """
-    logging.info("Testing MLForecast model recursively...")
-    
-    # Get unique series
-    unique_series = test_data['unique_id'].unique()
-    
-    all_predictions = []
-    
-    for series_id in unique_series:
-        series_data = test_data[test_data['unique_id'] == series_id].sort_values('ds')
-        
-        if len(series_data) == 0:
-            continue
-            
-        # Predict for this series
-        h = len(series_data)
-        series_preds = model.predict(h=h, X_df=series_data[['unique_id', 'ds']])
-        
-        # Add actual values for comparison
-        series_preds = series_preds.merge(
-            series_data[['unique_id', 'ds', 'y', 'target']], 
-            on=['unique_id', 'ds'], 
-            how='left'
-        )
-        
-        all_predictions.append(series_preds)
-    
-    if all_predictions:
-        full_predictions = pd.concat(all_predictions, ignore_index=True)
-        
-        # Calculate overall MSE
-        valid_preds = full_predictions.dropna(subset=['y', 'xgb'])
-        if len(valid_preds) > 0:
-            mse = mean_squared_error(valid_preds['y'], valid_preds['xgb'])
-            logging.info(f"MLForecast Mean Squared Error: {mse:.4f}")
-        
-        return full_predictions
-    else:
-        logging.warning("No predictions generated")
-        return pd.DataFrame()

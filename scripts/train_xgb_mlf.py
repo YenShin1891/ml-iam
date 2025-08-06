@@ -10,7 +10,7 @@ from src.data.preprocess import (
     split_data_mlforecast
 )
 from src.trainers.mlf_trainer import hyperparameter_search_mlforecast
-from src.trainers.evaluation import evaluate_mlforecast_fragment_based, save_metrics
+from src.trainers.evaluation import evaluate_mlforecast_with_context, save_metrics
 from src.utils.utils import setup_logging, save_session_state, load_session_state, get_next_run_id, load_mlforecast_model
 from src.utils.plotting import plot_scatter
 from configs.config import INDEX_COLUMNS
@@ -35,9 +35,10 @@ def train_mlforecast(session_state, run_id):
     train_data = session_state["train_data"]
     val_data = session_state["val_data"]
     targets = session_state["targets"]
+    features = session_state["features"]
     
     best_model, best_params = hyperparameter_search_mlforecast(
-        train_data, val_data, targets, run_id
+        train_data, val_data, targets, features, run_id
     )
     return best_params
 
@@ -48,7 +49,7 @@ def test_mlforecast(session_state, run_id):
     mlf = load_mlforecast_model(run_id)
     
     model_type = 'xgb'  # Assuming XGBoost model type
-    predictions, avg_mse = evaluate_mlforecast_fragment_based(
+    predictions, avg_mse = evaluate_mlforecast_with_context(
         mlf, test_data, targets, mode="test", model_type=model_type
     )
     
