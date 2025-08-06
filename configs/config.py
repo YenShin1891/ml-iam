@@ -1,10 +1,10 @@
 # Directories
-# DATA_PATH = "/mnt/nas2/kcp-yeeun/data/processed"
-# RESULTS_PATH = "/mnt/nas3/kcp-yeeun/results"
+DATA_PATH = "/mnt/nas2/kcp-yeeun/data/processed"
+RESULTS_PATH = "/mnt/nas3/kcp-yeeun/results"
 
 # for local testing
-DATA_PATH = "./sample_data"
-RESULTS_PATH = "./sample_results"
+# DATA_PATH = "./sample_data"
+# RESULTS_PATH = "./sample_results"
 
 # Constants
 YEAR_RANGE = ('2005', '2100')

@@ -194,107 +194,307 @@ def test_tft_autoregressively(model, X_test_with_index, y_test):
     return full_preds
 
 
+class MLForecastContextPredictor:
+    """
+    Wrapper class to handle lag feature computation for MLForecast predictions
+    without retraining the underlying model.
+    """
+
+    def __init__(self, trained_model):
+        self.trained_model = trained_model
+        self.static_features = STATIC_FEATURE_COLUMNS
+        
+        # Extract lags configuration from trained model
+        self.lags = self._extract_lags_config(trained_model)
+        self.lag_features = self._extract_lag_features_config(trained_model)
+        
+        logging.info(f"Extracted lags: {self.lags}")
+        if isinstance(self.lag_features, list):
+            logging.info(f"Extracted transform features: {self.lag_features}")
+        else:
+            logging.info(f"Extracted lag_features: {self.lag_features}")
+        
+    def _extract_lags_config(self, model):
+        """Extract lags configuration from trained MLForecast model."""
+        # Try different ways to get lags
+        lags = getattr(model, 'lags', [])
+        if lags:
+            return lags
+            
+        # Check if lags are in lag_transforms keys
+        lag_transforms = getattr(model, 'lag_transforms', {})
+        if lag_transforms:
+            return list(lag_transforms.keys())
+            
+        # Check ts (time series) object 
+        ts = getattr(model, 'ts', None)
+        if ts and hasattr(ts, 'lags'):
+            return getattr(ts, 'lags', [])
+            
+        return []
+    
+    def _extract_lag_features_config(self, model):
+        """Extract lag features from trained model."""
+        # Get the actual transform names from the trained model
+        ts = getattr(model, 'ts', None)
+        if ts and hasattr(ts, 'transforms'):
+            transforms = getattr(ts, 'transforms', {})
+            # Extract transform names that aren't simple target lags
+            transform_names = [name for name in transforms.keys() if not name.startswith('lag') or '_' in name]
+            if transform_names:
+                return transform_names
+                        
+        # If model uses lag_transforms, get all input features
+        lag_transforms = getattr(model, 'lag_transforms', {})
+        if lag_transforms:
+            return "ALL_INPUT_FEATURES"  # Special marker
+                
+        # Try traditional lag_features approach
+        lag_features = getattr(model, 'lag_features', [])
+        if lag_features:
+            return lag_features
+            
+        return []
+    
+    def _create_future_dataframe_for_new_series(self, unique_id, target_data):
+        """
+        Create a future dataframe structure for a new series not seen during training.
+        """
+        h = len(target_data)
+        
+        # Create the basic structure that MLForecast expects
+        future_df = pd.DataFrame({
+            'unique_id': [unique_id] * h,
+            'ds': target_data['ds'].values
+        })
+        
+        return future_df
+
+    def _compute_lag_features(self, series_data):
+        """
+        Manually compute lag features for new series, replicating MLForecast's logic.
+        This handles both target and feature lags.
+        """
+        data_with_lags = series_data.copy()
+
+        # Add target lags (MLForecast uses 'lag{i}' format)
+        for lag in self.lags:
+            lag_col = f'lag{lag}'
+            data_with_lags[lag_col] = data_with_lags['y'].shift(lag)
+
+        # Handle feature transforms
+        if isinstance(self.lag_features, list) and len(self.lag_features) > 0:
+            # Extract input features for transformation
+            exclude_cols = ['unique_id', 'ds', 'y', 'target'] + [col for col in self.static_features if col in data_with_lags.columns]
+            input_features = [col for col in data_with_lags.columns if col not in exclude_cols]
+            
+            # Apply transforms to each input feature
+            feature_transforms_count = 0
+            for transform_name in self.lag_features:
+                if transform_name.startswith('lag'):
+                    continue  # Skip simple target lags, already handled above
+                    
+                # Create transform for each input feature
+                for feature in input_features:
+                    if feature in data_with_lags.columns:
+                        transform_col = f'{transform_name}_{feature}'
+                        
+                        # Extract lag number from transform name (e.g., "rolling_mean_lag1_window_size1" -> 1)
+                        if 'lag1' in transform_name:
+                            data_with_lags[transform_col] = data_with_lags[feature].shift(1)
+                        elif 'lag2' in transform_name:
+                            data_with_lags[transform_col] = data_with_lags[feature].shift(2)
+                        # Add more lag numbers as needed
+                        
+                        feature_transforms_count += 1
+            
+            logging.info(f"Created {len(self.lags)} target lags and {feature_transforms_count} feature transforms")
+            
+        elif self.lag_features == "ALL_INPUT_FEATURES":
+            # Legacy approach for simple lag features
+            exclude_cols = ['unique_id', 'ds', 'y', 'target'] + [col for col in self.static_features if col in data_with_lags.columns]
+            feature_candidates = [col for col in data_with_lags.columns if col not in exclude_cols]
+            
+            # Add simple feature lags
+            for feature in feature_candidates:
+                if feature in data_with_lags.columns:
+                    for lag_value in self.lags:
+                        lag_col = f'lag{lag_value}_{feature}'
+                        data_with_lags[lag_col] = data_with_lags[feature].shift(lag_value)
+            
+            logging.info(f"Created {len(self.lags)} target lags and {len(feature_candidates) * len(self.lags)} simple feature lags")
+
+        lag_columns = [col for col in data_with_lags.columns if col.startswith('lag') or 'rolling_mean_lag' in col]
+        target_lags = [col for col in lag_columns if not '_' in col or col.startswith('lag') and col.count('_') == 0]
+        feature_lags = [col for col in lag_columns if col not in target_lags]
+        
+        logging.info(f"Total: {len(target_lags)} target lags, {len(feature_lags)} feature lags")
+
+        return data_with_lags
+
+
+    def predict_series(self, series_data):
+        """
+        Predict for a completely new series using manual lag computation.
+        Works for series not seen during training.
+        """
+        series_data = series_data.sort_values('ds').reset_index(drop=True)
+        unique_id = series_data['unique_id'].iloc[0]
+
+        if len(series_data) <= LAGGING:
+            return None
+
+        # Manually compute lag features on the full series
+        data_with_lags = self._compute_lag_features(series_data)
+        
+        # Split into context and target periods
+        target_data = data_with_lags.iloc[LAGGING:].copy()
+        h = len(target_data)
+        
+        # Create future dataframe for this new series
+        future_df = self._create_future_dataframe_for_new_series(unique_id, target_data)
+        
+        # Collect all columns to add at once to avoid fragmentation
+        columns_to_add = {}
+        
+        # Add all the computed lag features to future_df
+        lag_columns = [col for col in target_data.columns if col.startswith('lag') or 'rolling_mean_lag' in col]
+        for col in lag_columns:
+            columns_to_add[col] = target_data[col].values
+            
+        # Add non-lag features (but exclude target 'y' and unique_id, ds)
+        exclude_cols = ['unique_id', 'ds', 'y', 'target'] + [col for col in self.static_features if col in target_data.columns]
+        feature_cols = [col for col in target_data.columns 
+                       if col not in exclude_cols and not col.startswith('lag') and 'rolling_mean_lag' not in col]
+        
+        for col in feature_cols:
+            columns_to_add[col] = target_data[col].values
+        
+        # Add all columns at once to avoid fragmentation
+        for col, values in columns_to_add.items():
+            future_df[col] = values
+            
+        logging.info(f"Future_df for new series {unique_id}: shape={future_df.shape}, columns={future_df.columns.tolist()}")
+        
+
+        # Check static features specifically
+        expected_static = getattr(self.trained_model.ts, 'static_features', [])
+        logging.info(f"Model expects static features: {expected_static}")
+        for static_feat in expected_static:
+            if static_feat in future_df.columns:
+                logging.info(f"Static feature '{static_feat}' values: {future_df[static_feat].unique()}")
+            else:
+                logging.warning(f"Missing static feature: {static_feat}")
+        
+        # Check time structure
+        logging.info(f"Time range in future_df: {future_df['ds'].min()} to {future_df['ds'].max()}")
+        logging.info(f"Frequency: {future_df['ds'].diff().iloc[1:]}")
+        
+        # Detailed debugging - compare with expected structure
+        try:
+            expected_future = self.trained_model.make_future_dataframe(h)
+            expected_cols = set(expected_future.columns)
+            actual_cols = set(future_df.columns)
+            
+            missing_cols = expected_cols - actual_cols
+            extra_cols = actual_cols - expected_cols
+            
+            logging.info(f"Expected future_df has {len(expected_cols)} columns")
+            logging.info(f"Our future_df has {len(actual_cols)} columns") 
+            
+            if missing_cols:
+                logging.error(f"Missing {len(missing_cols)} columns: {list(missing_cols)}")
+            if extra_cols:
+                logging.info(f"Extra {len(extra_cols)} columns (expected for new series): {list(extra_cols)[:3]}...")
+                
+        except Exception as e:
+            logging.warning(f"Could not get expected future structure (expected for new series): {e}")
+            
+        # Try prediction with more detailed error handling
+        try:
+            # Try to get the missing combinations specifically  
+            missing = self.trained_model.get_missing_future(h, future_df)
+            if not missing.empty:
+                logging.error(f"Missing combinations shape: {missing.shape}")
+                logging.error(f"Missing combinations columns: {missing.columns.tolist()}")
+                logging.error(f"Missing combinations sample: {missing.head()}")
+            else:
+                logging.info("No missing combinations detected by get_missing_future")
+        except Exception as debug_e:
+            logging.error(f"Could not get missing future info: {debug_e}")
+        
+        try:
+            predictions = self.trained_model.predict(h=h, X_df=future_df)
+            
+            # Merge with actual values
+            target_predictions = predictions.merge(
+                target_data[['unique_id', 'ds', 'y'] + 
+                           [col for col in self.static_features if col in target_data.columns]], 
+                on=['unique_id', 'ds'], 
+                how='inner'
+            )
+            
+            return target_predictions
+            
+        except Exception as e:
+            # Try to get missing combinations info
+            try:
+                missing = self.trained_model.get_missing_future(h, future_df)
+                logging.error(f"Missing future combinations: {missing}")
+            except Exception as debug_e:
+                logging.debug(f"Could not get missing future info: {debug_e}")
+            
+            logging.error(f"Prediction failed for {unique_id}: {str(e)}")
+            raise
+
+
 def evaluate_mlforecast_with_context(trained_model, eval_data, targets, mode="test", model_type='xgb'):
     """
-    Evaluate MLForecast using cross_validation for evaluation series prediction.
-    
+    Evaluate MLForecast using pre-trained model with context data for lag features.
+
     Args:
         trained_model: Pre-trained MLForecast model
         eval_data: Data to evaluate (validation or test)
         targets: List of target variables
         mode: "validation" or "test" for logging purposes
         model_type: Type of model used (e.g., 'xgb')
-    
+
     Returns:
         predictions: DataFrame with all predictions
         avg_mse: Average MSE across all series
     """
-    logging.info(f"Running MLForecast {mode} with cross-validation approach...")
-    
+    logging.info(f"Running MLForecast {mode} with context-based forecasting...")
+
+    # Create context predictor wrapper
+    context_predictor = MLForecastContextPredictor(trained_model)
+
     all_predictions = []
-    failed_series = []
-    
-    # Process each series separately
-    for unique_id in eval_data['unique_id'].unique():
+
+    # Group data by unique_id to handle each series separately
+    for unique_id, series_data in eval_data.groupby('unique_id'):
         try:
-            series_data = eval_data[eval_data['unique_id'] == unique_id].sort_values('ds').reset_index(drop=True)
-            
-            # Check if we have enough data to make ANY predictions
-            if len(series_data) <= LAGGING:
-                logging.warning(f"Series {unique_id} has insufficient data ({len(series_data)} <= {LAGGING})")
-                failed_series.append(unique_id)
-                continue
-            
-            # Calculate prediction horizon: predict everything after LAGGING point
-            prediction_horizon = len(series_data) - LAGGING
-            
-            if prediction_horizon <= 0:
-                logging.warning(f"Series {unique_id} has no predictable points")
-                failed_series.append(unique_id)
-                continue
-            
-            # Use cross_validation to predict from point (LAGGING + 1) onwards
-            cv_results = trained_model.cross_validation(
-                df=series_data,
-                h=prediction_horizon,
-                n_windows=1,  # Single validation window
-                step_size=prediction_horizon,  # Start prediction from the earliest possible point
-                static_features=STATIC_FEATURE_COLUMNS,
-                fitted=True  # Use pre-fitted model
-            )
-            
-            if cv_results is not None and len(cv_results) > 0:
-                # Add actual y values for evaluation
-                cv_results = cv_results.merge(
-                    series_data[['unique_id', 'ds', 'y'] + 
-                               [col for col in series_data.columns if col in STATIC_FEATURE_COLUMNS]],
-                    on=['unique_id', 'ds'],
-                    how='left'
-                )
-                all_predictions.append(cv_results)
-                
-                # Log what we predicted
-                predicted_points = len(cv_results)
-                total_points = len(series_data)
-                logging.debug(f"Series {unique_id}: predicted {predicted_points}/{total_points} points "
-                            f"(skipped first {LAGGING} for lag context)")
-            else:
-                logging.warning(f"No predictions generated for series {unique_id}")
-                failed_series.append(unique_id)
-                
+            # Let the context predictor handle splitting and prediction
+            predictions = context_predictor.predict_series(series_data)
+
+            if predictions is not None and len(predictions) > 0:
+                all_predictions.append(predictions)
+
         except Exception as e:
-            logging.warning(f"Failed to predict series {unique_id}: {str(e)}")
-            failed_series.append(unique_id)
-            raise e
-    
-    # Report results
-    total_series = len(eval_data['unique_id'].unique())
-    successful_series = total_series - len(failed_series)
-    logging.info(f"Successfully processed {successful_series}/{total_series} series")
-    
+            logging.warning(f"Failed to predict series {unique_id}: {str(e)}", exc_info=True)
+            raise
+
     if all_predictions:
         overall_predictions = pd.concat(all_predictions, ignore_index=True)
-        
-        # Log prediction efficiency
-        total_possible_points = len(eval_data)
-        actual_predictions = len(overall_predictions)
-        skipped_points = total_possible_points - actual_predictions
-        logging.info(f"Generated {actual_predictions} predictions from {total_possible_points} total points "
-                    f"({skipped_points} skipped for lag context)")
-        
+
         # Calculate average MSE across all series
         valid_preds = overall_predictions.dropna(subset=['y', model_type])
         if len(valid_preds) > 0:
             avg_mse = mean_squared_error(valid_preds['y'], valid_preds[model_type])
-            logging.info(f"Average MSE: {avg_mse:.4f} ({len(valid_preds)} valid predictions)")
-            
-            # Additional logging for debugging
-            logging.info(f"Prediction range: [{valid_preds[model_type].min():.4f}, {valid_preds[model_type].max():.4f}]")
-            logging.info(f"Actual range: [{valid_preds['y'].min():.4f}, {valid_preds['y'].max():.4f}]")
+            logging.info(f"Average MSE: {avg_mse:.4f}")
         else:
             logging.warning("No valid predictions found for MSE calculation.")
             avg_mse = float('inf')
-        
+
         return overall_predictions, avg_mse
     else:
         logging.warning(f"No predictions generated for {mode}")

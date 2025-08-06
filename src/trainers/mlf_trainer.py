@@ -54,7 +54,7 @@ def create_mlforecast_model(features: List[str], **xgb_params):
     All features will be treated as lag features.
     """
     xgb_params['tree_method'] = 'hist'
-    xgb_params['device'] = 'gpu'
+    xgb_params['device'] = 'cpu'
     xgb_params['enable_categorical'] = True
     xgb_model = xgb.XGBRegressor(**xgb_params)
     
@@ -154,7 +154,11 @@ def hyperparameter_search_mlforecast(
             logging.info(f"Does Year vary in first series? {first_series_data['Year'].nunique() > 1}")
             
             
-            mlf.fit(train_data, static_features=STATIC_FEATURE_COLUMNS)
+            mlf.fit(
+                train_data, 
+                static_features=STATIC_FEATURE_COLUMNS,
+                dropna=False
+                )
             
             # Validate using fragment-based evaluation
             _, val_score = evaluate_mlforecast_with_context(

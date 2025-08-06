@@ -26,9 +26,9 @@ shap==0.47.2
 streamlit==1.45.0
 
 # GPU Support - Fixed package name for Python 3.9
---extra-index-url https://pypi.nvidia.com
-cudf-cu11>=24.8.0
-cupy-cuda116  # For CUDA 11.6
+# --extra-index-url https://pypi.nvidia.com
+# cudf-cu11>=24.8.0
+# cupy-cuda116  # For CUDA 11.6
 
 # RNN
 tensorflow
