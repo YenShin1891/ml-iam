@@ -175,3 +175,4 @@ cython_debug/
 
 # nohup
 nohup.out
+sample_results/
