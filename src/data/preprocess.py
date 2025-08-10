@@ -114,6 +114,12 @@ def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
     # Do not need lagging for TFT as it uses autoregressive prediction
     prepared['Year'] = prepared['Year'].astype(int)
 
+    targets = OUTPUT_VARIABLES
+    features = [col for col in prepared.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
+    
+    prepared.dropna(subset=targets, inplace=True)
+
+    # Make 'Step' and 'DeltaYears' after dropping NaNs
     # Step must align with group_ids used by TimeSeriesDataSet
     group_cols = INDEX_COLUMNS
     prepared.sort_values(group_cols + ['Year'], inplace=True)
@@ -123,11 +129,6 @@ def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
     prepared['DeltaYears'] = (
         prepared.groupby(group_cols)['Year'].diff().fillna(0).astype(int)
     )
-    
-    targets = OUTPUT_VARIABLES
-    features = [col for col in prepared.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
-    
-    prepared.dropna(subset=targets, inplace=True)
     
     return prepared, features, targets
 
