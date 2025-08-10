@@ -23,8 +23,13 @@ shap==0.47.2
 streamlit==1.45.0
 
 # GPU Support - Fixed package name for Python 3.9
-cupy-cuda116  # For CUDA 11.6
+# cupy-cuda116  # For CUDA 11.6
 # OR use: cupy-cuda102  # For CUDA 10.2
 
 # RNN
 tensorflow
+
+# TFT
+torch
+lightning
+pytorch_forecasting
