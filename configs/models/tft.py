@@ -23,15 +23,21 @@ class TFTDatasetConfig:
     add_target_scales: bool = True
     allow_missing_timesteps: bool = False
 
-    def build(self, features: List[str], targets: List[str], mode: str = "train") -> Dict[str, Any]:
+    def build(self, features: List[str], targets: List[str], mode: str) -> Dict[str, Any]:
         # Lazy import to avoid heavy deps at module import time
         from pytorch_forecasting.data import GroupNormalizer, MultiNormalizer
+        from pytorch_forecasting.data.encoders import NaNLabelEncoder
 
         if isinstance(targets, str):
             targets = [targets]
-        # unknown real-valued features exclude categoricals and known time columns
         time_known = ["Year", "DeltaYears"]
-        unknown_reals = [f for f in features if f not in (CATEGORICAL_COLUMNS + time_known)]
+        indicator_cols = [f for f in features if f.endswith("_is_missing")]
+
+        # unknown real-valued features exclude categoricals, known time columns, and indicator categoricals
+        unknown_reals = [
+            f for f in features
+            if f not in (CATEGORICAL_COLUMNS + time_known + indicator_cols)
+        ]
 
         # shared normalizer across targets, grouped by group_ids
         target_normalizer = MultiNormalizer([
@@ -52,6 +58,8 @@ class TFTDatasetConfig:
             "time_varying_known_reals": time_known,
             "time_varying_unknown_reals": unknown_reals,
             "static_categoricals": CATEGORICAL_COLUMNS,
+            "time_varying_known_categoricals": indicator_cols,
+            "categorical_encoders": {c: NaNLabelEncoder(add_nan=False) for c in indicator_cols},
             "add_relative_time_idx": self.add_relative_time_idx,
             "add_target_scales": self.add_target_scales,
             "allow_missing_timesteps": self.allow_missing_timesteps,

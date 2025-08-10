@@ -4,7 +4,7 @@ import numpy as np
 import logging
 
 from configs.config import (
-    DATA_PATH,DATASET_NAME,
+    DATA_PATH, DATASET_NAME, RESULTS_PATH,
     YEAR_RANGE,
     OUTPUT_VARIABLES, INDEX_COLUMNS, NON_FEATURE_COLUMNS
 )
@@ -59,6 +59,20 @@ def load_and_process_data() -> pd.DataFrame:
     processed_series = processed_series.loc[:, :'2100']
     non_year_columns = processed_series.loc[:, :'1990']  # First year column is '1990'
     year_columns = processed_series.loc[:, str(YEAR_RANGE[0]):str(YEAR_RANGE[1])]
+    
+    # create a heatmap to visualize missing values
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    # index is the variable names
+    year_columns.index = processed_series['Variable']
+    plt.figure(figsize=(20, 80))
+    sns.heatmap(year_columns.isnull(), cbar=False, cmap='viridis')
+    plt.title('Missing Values Heatmap')
+    plt.xlabel('Year')
+    plt.ylabel('Variable')
+    plt.show()
+    plt.savefig(os.path.join(RESULTS_PATH, 'missing_values_heatmap.png'))
+
     year_melted = processed_series.melt(
         id_vars=non_year_columns, value_vars=year_columns,
         var_name='Year', value_name='value'
@@ -89,6 +103,8 @@ def prepare_features_and_targets(data: pd.DataFrame) -> tuple:
     targets = OUTPUT_VARIABLES
     features = [col for col in prepared.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
     
+    prepared.dropna(subset=targets, inplace=True)
+    
     return prepared, features, targets
 
 
@@ -110,6 +126,8 @@ def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
     
     targets = OUTPUT_VARIABLES
     features = [col for col in prepared.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
+    
+    prepared.dropna(subset=targets, inplace=True)
     
     return prepared, features, targets
 
@@ -143,3 +161,76 @@ def remove_rows_with_missing_outputs(X, y, X2=None):
         return X, y, X2
     else:
         return X, y
+
+
+def add_missingness_indicators(
+    prepared: pd.DataFrame,
+    features: list,
+    time_known: list = ["Year", "DeltaYears"],
+    categorical_columns: list = None,
+):
+    """
+    Add <col>_is_missing indicators to the full prepared dataframe BEFORE splitting.
+    Indicators are stored as string categoricals ("0"/"1") for categorical encoding.
+    Returns (prepared_with_indicators, updated_features).
+    """
+    if categorical_columns is None:
+        from configs.config import CATEGORICAL_COLUMNS as CFG_CATS
+        categorical_columns = CFG_CATS
+
+    updated_features = list(features)
+
+    cont_cols = [
+        c for c in features
+        if c not in set((categorical_columns or []) + list(time_known))
+        and not c.endswith("_is_missing")
+    ]
+
+    for col in cont_cols:
+        miss_col = f"{col}_is_missing"
+        # create as string categoricals ("0"/"1")
+        if miss_col not in prepared.columns:
+            prepared[miss_col] = (
+                prepared[col].isna().map({True: "1", False: "0"}).astype("category")
+            )
+        if miss_col not in updated_features:
+            updated_features.append(miss_col)
+
+    return prepared, updated_features
+
+
+def impute_with_train_medians(
+    train_data: pd.DataFrame,
+    val_data: pd.DataFrame,
+    test_data: pd.DataFrame,
+    features: list,
+    time_known: list = ["Year", "DeltaYears"],
+    categorical_columns: list = None,
+):
+    """
+    Impute continuous feature NaNs in train/val/test with the train median of each column.
+    Does NOT add indicators (use add_missingness_indicators before splitting).
+    Returns (train_data, val_data, test_data).
+    """
+    if categorical_columns is None:
+        from configs.config import CATEGORICAL_COLUMNS as CFG_CATS
+        categorical_columns = CFG_CATS
+
+    cont_cols = [
+        c for c in features
+        if c not in set((categorical_columns or []) + list(time_known))
+        and not c.endswith("_is_missing")
+    ]
+
+    for col in cont_cols:
+        if col not in train_data.columns:
+            continue
+        fill_value = pd.to_numeric(train_data[col], errors="coerce").median()
+        if pd.isna(fill_value):
+            logging.warning(f"Column '{col}' has all-NaN in train; filling with 0.0")
+            fill_value = 0.0
+        for df in (train_data, val_data, test_data):
+            if col in df.columns:
+                df[col] = df[col].fillna(fill_value)
+
+    return train_data, val_data, test_data

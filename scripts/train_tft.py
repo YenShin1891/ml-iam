@@ -1,31 +1,41 @@
 import argparse
 import logging
+import os
 import numpy as np
 import pandas as pd
 import torch
-from pytorch_forecasting import TimeSeriesDataSet
 
-from src.data.preprocess import load_and_process_data, split_data, prepare_features_and_targets_tft, encode_categorical_columns
-from src.trainers.tft_trainer import hyperparameter_search_tft, visualize_multiple_hyperparam_searches_tft
-from src.trainers.evaluation import test_tft_autoregressively, save_metrics
-from src.utils.utils import setup_logging, save_session_state, load_session_state, get_next_run_id
-from src.utils.plotting import plot_scatter
-from configs.models import TFTDatasetConfig
+from src.data.preprocess import (
+    add_missingness_indicators,
+    impute_with_train_medians,
+    load_and_process_data,
+    prepare_features_and_targets_tft,
+    split_data,
+)
+from src.trainers.tft_trainer import (
+    build_datasets,
+    hyperparameter_search_tft,
+    predict_tft,
+    train_final_tft,
+)
+from src.utils.utils import (
+    get_next_run_id,
+    load_session_state,
+    save_session_state,
+    setup_logging,
+)
 
 np.random.seed(0)
+
 
 def process_data():
     data = load_and_process_data()
     prepared, features, targets = prepare_features_and_targets_tft(data)
+    prepared, features = add_missingness_indicators(prepared, features)
     train_data, val_data, test_data = split_data(prepared)
-    
-    encode_categorical_columns(train_data)
-    encode_categorical_columns(val_data)
-    encode_categorical_columns(test_data)
-    
-    train_data.dropna(subset=targets, inplace=True)
-    val_data.dropna(subset=targets, inplace=True)
-    test_data.dropna(subset=targets, inplace=True)
+    train_data, val_data, test_data = impute_with_train_medians(
+        train_data, val_data, test_data, features
+    )
     
     return {
         "features": features,
@@ -35,62 +45,39 @@ def process_data():
         "test_data": test_data
     }
 
-def build_datasets(session_state):
-    train_data = session_state["train_data"]
-    val_data = session_state["val_data"]
-    features = session_state["features"]
-    targets = session_state["targets"]
-
-    dataset_config = TFTDatasetConfig()
-
-    train_params = dataset_config.build(features, targets, mode="train")
-    val_params = dataset_config.build(features, targets, mode="train")
-
-    train_dataset = TimeSeriesDataSet(train_data, **train_params)
-    val_dataset = TimeSeriesDataSet(val_data, **val_params)
-
-    session_state["train_dataset"] = train_dataset
-    session_state["val_dataset"] = val_dataset
-
 
 def train_tft(session_state, run_id):
-    build_datasets(session_state)
-
-    train_dataset = session_state["train_dataset"]
-    val_dataset = session_state["val_dataset"]
+    train_dataset, val_dataset = build_datasets(session_state)
+    
     targets = session_state["targets"]
 
-    best_model, best_params, cv_results_dict = hyperparameter_search_tft(
+    best_params = hyperparameter_search_tft(
         train_dataset, val_dataset, targets, run_id
     )
-    visualize_multiple_hyperparam_searches_tft(cv_results_dict, run_id)
-    
-    session_state["model"] = best_model
+    train_final_tft(
+        train_dataset, val_dataset, targets, run_id, best_params
+    )
+    session_state["best_params"] = best_params
 
     return best_params
 
+
 def test_tft(session_state, run_id):
-    X_test_with_index = session_state["X_test_with_index"]
-    y_test = session_state["y_test"]
-    model = session_state["model"]
-
-    logging.info("Testing TFT model...")
-    # TODO: Add test result for when encoder decoder length is given so that the series is split at 2015 (only one possible encoder/decoder length)
-    preds = test_tft_autoregressively(model, X_test_with_index, y_test)
-    session_state["preds"] = preds
-    save_metrics(run_id, y_test, preds)
-
+    preds = predict_tft(session_state, run_id)
     return preds
 
+
 def plot_tft(session_state, run_id):
-    X_test_with_index = session_state["X_test_with_index"]
-    y_test = session_state["y_test"]
     preds = session_state["preds"]
     test_data = session_state["test_data"]
     targets = session_state["targets"]
 
-    plot_scatter(run_id, test_data, y_test, preds, targets)
-    plot_scatter(run_id, test_data, y_test, preds, targets, use_log=True)
+    ## Derive ground truth for plotting
+    # y_test = test_data[targets].values
+
+    # plot_scatter(run_id, test_data, y_test, preds, targets)
+    # plot_scatter(run_id, test_data, y_test, preds, targets, use_log=True)
+
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Train and test TFT model.")
@@ -108,6 +95,7 @@ def parse_arguments():
         parser.error("--run_id should only be specified when using --resume")
     
     return args.run_id, args.resume
+
 
 def main():
     run_id, resume = parse_arguments()
@@ -134,6 +122,7 @@ def main():
     
     if resume is None or resume in ["train", "test", "plot"]:
         plot_tft(session_state, run_id)
+
 
 if __name__ == "__main__":
     main()
