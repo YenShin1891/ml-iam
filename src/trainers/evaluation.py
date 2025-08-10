@@ -7,6 +7,9 @@ import concurrent.futures
 from tqdm import tqdm
 from src.utils.utils import masked_mse
 from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
+from pytorch_forecasting import TimeSeriesDataSet
+from configs.models import TFTDatasetConfig
+
 
 def group_test_data(X_test_with_index):
     """
@@ -30,6 +33,7 @@ def group_test_data(X_test_with_index):
         prev2_indices_list.append(reduced_columns.str.startswith('prev2_'))
 
     return group_indices_list, group_matrices, prev_indices_list, prev2_indices_list
+
 
 def autoregressive_predictions(model, group_indices, group_matrix, prev_indices, prev2_indices, start_pos):
     num_targets = model.predict(group_matrix[start_pos:start_pos + 1]).shape[1]
@@ -62,6 +66,7 @@ def autoregressive_predictions(model, group_indices, group_matrix, prev_indices,
 
 #     return preds_target
 
+
 def test_xgb_autoregressively(model, X_test_with_index, y_test):
     group_indices_list, group_matrices, prev_indices_list, prev2_indices_list = group_test_data(X_test_with_index)
     full_preds = np.full(y_test.shape, np.nan, dtype=float)
@@ -87,6 +92,7 @@ def test_xgb_autoregressively(model, X_test_with_index, y_test):
     logging.info(f"Mean Squared Error: {mse:.2f}")
 
     return full_preds
+
 
 def test_rnn(model, X_test, y_test):
     # Reshape data into 3D array for RNN
@@ -121,6 +127,7 @@ def test_rnn(model, X_test, y_test):
 #     return full_preds
 
 
+
 def save_metrics(run_id, y_true, y_pred):
     """
     Save performance metrics to a CSV file under the specified run directory.
@@ -147,42 +154,44 @@ def save_metrics(run_id, y_true, y_pred):
     metrics.to_csv(metrics_file, index=False)
     logging.info("Metrics saved to %s.", metrics_file)
 
+
 def test_tft_autoregressively(model, X_test_with_index, y_test):
     """
     TFT 모델을 그룹별로 순차 예측 후 전체 결과 반환
     """
     full_preds = np.full(y_test.shape, np.nan, dtype=float)
 
-    grouped = X_test_with_index.groupby(["Region", "Scenario"])
-    
-    for (region, scenario), group_df in tqdm(grouped, desc="TFT Group Inference"):
-        
-        group_df_sorted = group_df.sort_values("Year")
-        
+    grouped = X_test_with_index.groupby(INDEX_COLUMNS)
+
+    dataset_config = TFTDatasetConfig()  # Check if mode has to be 'eval'
+
+    for group_key, group_df in tqdm(grouped, desc="TFT Group Inference"):
+        group_df_sorted = group_df.sort_values(["Step"]).copy()
+
+        # Determine targets from model and features from data
+        targets = model.hparams.target
+        if isinstance(targets, str):
+            targets = [targets]
+        features = [c for c in group_df_sorted.columns if c not in (NON_FEATURE_COLUMNS + targets)]
+
+        params = dataset_config.build(features, targets, mode="eval")
+
         dataset = TimeSeriesDataSet(
             group_df_sorted,
-            time_idx="Year",
-            target=model.hparams.target,  # 학습 당시 설정과 동일
-            group_ids=["Region", "Scenario"],
-            max_encoder_length=30,
-            max_prediction_length=10,
-            time_varying_known_reals=["Year"],
-            time_varying_unknown_reals=[model.hparams.target],
-            static_categoricals=["Region", "Model_Family"],
-            add_relative_time_idx=True,
-            add_target_scales=True,
+            **params,
         )
 
         dataloader = dataset.to_dataloader(train=False, batch_size=64)
-        
         predictions = model.predict(dataloader, mode="prediction")
 
-        # 결과 매핑
+        preds_arr = predictions.reshape(-1, model.hparams.output_size)
+
+        # map back to rows for all targets
         group_indices = group_df_sorted.index.tolist()
         pos = X_test_with_index.index.get_indexer(group_indices)
-        full_preds[pos, 0] = predictions.flatten()
+        full_preds[pos, :preds_arr.shape[1]] = preds_arr
 
-    mse = mean_squared_error(y_test[:, 0], full_preds[:, 0])
+    mse = mean_squared_error(y_test, full_preds)
     logging.info(f"TFT Mean Squared Error: {mse:.4f}")
 
     return full_preds
