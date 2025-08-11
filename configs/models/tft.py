@@ -22,11 +22,16 @@ class TFTDatasetConfig:
     add_relative_time_idx: bool = True
     add_target_scales: bool = True
     allow_missing_timesteps: bool = False
+    pretrained_categorical_encoders: Dict[str, Any] = field(default_factory=dict)
 
-    def build(self, features: List[str], targets: List[str], mode: str) -> Dict[str, Any]:
+    def build(
+        self,
+        features: List[str],
+        targets: List[str],
+        mode: str,
+    ) -> Dict[str, Any]:
         # Lazy import to avoid heavy deps at module import time
         from pytorch_forecasting.data import GroupNormalizer, MultiNormalizer
-        from pytorch_forecasting.data.encoders import NaNLabelEncoder
 
         if isinstance(targets, str):
             targets = [targets]
@@ -46,7 +51,7 @@ class TFTDatasetConfig:
 
         max_pred_len = self.max_prediction_length_eval if mode == "eval" else self.max_prediction_length
 
-        return {
+        params: Dict[str, Any] = {
             "time_idx": self.time_idx,
             "target": targets,
             "group_ids": self.group_ids,
@@ -59,11 +64,13 @@ class TFTDatasetConfig:
             "time_varying_unknown_reals": unknown_reals,
             "static_categoricals": CATEGORICAL_COLUMNS,
             "time_varying_known_categoricals": indicator_cols,
-            "categorical_encoders": {c: NaNLabelEncoder(add_nan=False) for c in indicator_cols},
+            "categorical_encoders": self.pretrained_categorical_encoders,
             "add_relative_time_idx": self.add_relative_time_idx,
             "add_target_scales": self.add_target_scales,
             "allow_missing_timesteps": self.allow_missing_timesteps,
         }
+
+        return params
 
 
 @dataclass
