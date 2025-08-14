@@ -50,26 +50,37 @@ def process_data():
     }
 
 
-def train_tft(session_state, run_id):
+def search_tft(session_state, run_id):
+    """Run hyperparameter search and store best_params in session_state."""
+    logging.info("Starting hyperparameter search for TFT...")
     train_dataset, val_dataset = build_datasets(session_state)
-    
     targets = session_state["targets"]
+    best_params = hyperparameter_search_tft(
+        train_dataset, val_dataset, targets, run_id
+    )
+    session_state["best_params"] = best_params
+    logging.info("Hyperparameter search complete. Best params: %s", best_params)
+    return best_params
 
-    # best_params = hyperparameter_search_tft(
-    #     train_dataset, val_dataset, targets, run_id
-    # )
-    # session_state["best_params"] = best_params
-    session_state["best_params"] = {'lstm_layers': 2, 'learning_rate': 0.01, 'hidden_size': 32, 'dropout': 0.1}
+
+def train_tft(session_state, run_id):
+    """Final training using best_params already present in session_state."""
+    if "best_params" not in session_state:
+        raise ValueError("best_params not found in session state. Run the 'search' step first or inject best_params manually.")
     best_params = session_state["best_params"]
+    logging.info("Starting final TFT training with best params: %s", best_params)
+    train_dataset, val_dataset = build_datasets(session_state)
+    targets = session_state["targets"]
     train_final_tft(
         train_dataset, val_dataset, targets, run_id, best_params, session_state=session_state
     )
-
+    logging.info("Final TFT training complete.")
     return best_params
 
 
 def test_tft(session_state, run_id):
     preds = predict_tft(session_state, run_id)
+    session_state["preds"] = preds
     return preds
 
 
@@ -94,8 +105,13 @@ def plot_tft(session_state, run_id):
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Train and test TFT model.")
     parser.add_argument("--run_id", type=str, help="Run ID for logging.", required=False)
-    parser.add_argument("--resume", type=str, choices=["train", "test", "plot"], 
-                      help="Resume from a specific step. Requires --run_id to be specified.", required=False)
+    parser.add_argument(
+        "--resume",
+        type=str,
+        choices=["search", "train", "test", "plot"],
+        help="Resume from a specific step. Requires --run_id to be specified.",
+        required=False,
+    )
     args = parser.parse_args()
     
     # Validation: if resume is specified, run_id must be provided
@@ -113,26 +129,34 @@ def main():
     run_id, resume = parse_arguments()
 
     if resume is None:
+        # Full pipeline: process -> search -> train -> test -> plot
         run_id = get_next_run_id()
         setup_logging(run_id)
         session_state = process_data()
         save_session_state(session_state, run_id)
+        search_tft(session_state, run_id)
+        save_session_state(session_state, run_id)
+        train_tft(session_state, run_id)
+        save_session_state(session_state, run_id)
+        test_tft(session_state, run_id)
+        save_session_state(session_state, run_id)
+        plot_tft(session_state, run_id)
+        return
     else:
         setup_logging(run_id)
         session_state = load_session_state(run_id)
-    
-    # Execute steps based on resume point
-    if resume is None or resume == "train":
-        best_params = train_tft(session_state, run_id)
-        session_state["best_params"] = best_params
+
+    # Step-wise execution when resuming
+    if resume == "search":
+        search_tft(session_state, run_id)
         save_session_state(session_state, run_id)
-    
-    if resume is None or resume in ["train", "test"]:
-        preds = test_tft(session_state, run_id)
-        session_state["preds"] = preds
+    elif resume == "train":
+        train_tft(session_state, run_id)
         save_session_state(session_state, run_id)
-    
-    if resume is None or resume in ["train", "test", "plot"]:
+    elif resume == "test":
+        test_tft(session_state, run_id)
+        save_session_state(session_state, run_id)
+    elif resume == "plot":
         plot_tft(session_state, run_id)
 
 

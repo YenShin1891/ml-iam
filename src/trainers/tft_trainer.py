@@ -44,6 +44,41 @@ def _default_num_workers() -> int:
     return _def_num_workers
 
 
+def _teardown_dist():
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        try:
+            world_size = torch.distributed.get_world_size()
+        except Exception:
+            world_size = "unknown"
+        logging.info(
+            f"Destroying existing torch.distributed process group (world_size={world_size}) for single-process TFT prediction."
+        )
+        try:
+            torch.distributed.destroy_process_group()
+        except Exception as e:
+            logging.warning(f"Failed to destroy process group cleanly: {e}")
+
+_DIST_ENV_VARS = [
+    "WORLD_SIZE",
+    "RANK",
+    "LOCAL_RANK",
+    "GLOBAL_RANK",
+    "GROUP_RANK",
+    "NODE_RANK",
+    "MASTER_ADDR",
+    "MASTER_PORT",
+]
+
+def _clear_dist_env():
+    cleared = []
+    for k in _DIST_ENV_VARS:
+        if k in os.environ:
+            os.environ.pop(k, None)
+            cleared.append(k)
+    if cleared:
+        logging.info("Cleared distributed environment variables for inference: %s", ", ".join(cleared))
+
+
 def build_datasets(session_state):
     """Build train/val TimeSeriesDataSet objects using shared template logic."""
     val_data = session_state["val_data"]
@@ -183,12 +218,14 @@ def predict_tft(session_state: dict, run_id: str) -> np.ndarray:
     test_data = session_state["test_data"]
     targets = session_state["targets"]
 
-    # Enforce truly single-process usage: if a distributed process group exists, abort.
-    if torch.distributed.is_initialized():
-        raise RuntimeError(
-            "predict_tft must be run in a fresh single-process invocation (no initialized distributed group). "
-            "Run training first, then call: python scripts/train_tft.py --run_id <id> --resume test"
-        )
+    # Force single-process inference: clear env markers if coming from a previous multi-GPU context
+    if os.environ.get("WORLD_SIZE", "1") != "1":
+        _clear_dist_env()
+    # If launched under torchrun accidentally, still teardown initialized group
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        _teardown_dist()
+        if torch.distributed.is_initialized():  # pragma: no cover
+            raise RuntimeError("Failed to teardown existing distributed process group before prediction.")
 
     model = _load_tft_checkpoint(run_id)
 
