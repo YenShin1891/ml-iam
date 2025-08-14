@@ -33,7 +33,7 @@ def configure_axes(ax, use_log, min_val, max_val, xlabel, ylabel):
     ax.set_ylabel(ylabel)
 
 
-def plot_scatter(run_id, test_data, y_test, preds, targets, use_log=False):
+def plot_scatter(run_id, test_data, y_test, preds, targets, use_log=False, model_label: str = "XGBoost"):
     logging.info("Creating scatter plot...")
     rows, cols = 3, 3
     fig, axes = plt.subplots(rows, cols, figsize=(20, 20))
@@ -60,13 +60,22 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, use_log=False):
             min_val = min(y_test_valid.min(), preds_valid.min())
             max_val = max(y_test_valid.max(), preds_valid.max())
 
-        configure_axes(ax, use_log, min_val, max_val,
-                       "IAM (log scale)" if use_log else "IAM",
-                       "XGBoost (log scale)" if use_log else "XGBoost")
+        configure_axes(
+            ax,
+            use_log,
+            min_val,
+            max_val,
+            "IAM (log scale)" if use_log else "IAM",
+            f"{model_label} (log scale)" if use_log else model_label,
+        )
         ax.legend(title='Year', loc='upper left', bbox_to_anchor=(1, 1), fontsize='small')
 
     plt.tight_layout()
-    filename = "scatter_plot_log.png" if use_log else "scatter_plot.png"
+    # Preserve legacy filenames for XGBoost
+    if model_label == "XGBoost":
+        filename = "scatter_plot_log.png" if use_log else "scatter_plot.png"
+    else:
+        filename = f"scatter_plot_{model_label.lower()}_log.png" if use_log else f"scatter_plot_{model_label.lower()}.png"
     os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots"), exist_ok=True)
     plt.savefig(os.path.join(RESULTS_PATH, run_id, "plots", filename), bbox_inches='tight')
     plt.close()

@@ -5,6 +5,8 @@ import numpy as np
 import pandas as pd
 import torch
 
+from lightning.pytorch import seed_everything
+
 from src.data.preprocess import (
     add_missingness_indicators,
     impute_with_train_medians,
@@ -24,8 +26,10 @@ from src.utils.utils import (
     save_session_state,
     setup_logging,
 )
+from src.utils.plotting import plot_scatter
 
 np.random.seed(0)
+seed_everything(42, workers=True)
 
 
 def process_data():
@@ -51,13 +55,15 @@ def train_tft(session_state, run_id):
     
     targets = session_state["targets"]
 
-    best_params = hyperparameter_search_tft(
-        train_dataset, val_dataset, targets, run_id
-    )
+    # best_params = hyperparameter_search_tft(
+    #     train_dataset, val_dataset, targets, run_id
+    # )
+    # session_state["best_params"] = best_params
+    session_state["best_params"] = {'lstm_layers': 2, 'learning_rate': 0.01, 'hidden_size': 32, 'dropout': 0.1}
+    best_params = session_state["best_params"]
     train_final_tft(
-        train_dataset, val_dataset, targets, run_id, best_params
+        train_dataset, val_dataset, targets, run_id, best_params, session_state=session_state
     )
-    session_state["best_params"] = best_params
 
     return best_params
 
@@ -68,15 +74,21 @@ def test_tft(session_state, run_id):
 
 
 def plot_tft(session_state, run_id):
-    preds = session_state["preds"]
-    test_data = session_state["test_data"]
+    logging.info("Plotting TFT predictions...")
+    preds = session_state.get("preds")
     targets = session_state["targets"]
+    if preds is None:
+        raise ValueError("No predictions found in session state. Please run the test step first.")
 
-    ## Derive ground truth for plotting
-    # y_test = test_data[targets].values
-
-    # plot_scatter(run_id, test_data, y_test, preds, targets)
-    # plot_scatter(run_id, test_data, y_test, preds, targets, use_log=True)
+    horizon_df = session_state.get('horizon_df')
+    horizon_y_true = session_state.get('horizon_y_true')
+    
+    if horizon_df is not None and horizon_y_true is not None:
+        logging.info("Using forecast horizon subset (%d rows) for plotting.", len(horizon_df))
+        plot_scatter(run_id, horizon_df, horizon_y_true, preds, targets, use_log=False, model_label="TFT")
+        plot_scatter(run_id, horizon_df, horizon_y_true, preds, targets, use_log=True, model_label="TFT")
+    else:
+        raise ValueError("No forecast horizon data found in session state. Please run the test step with predict=True.")
 
 
 def parse_arguments():

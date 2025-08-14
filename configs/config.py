@@ -4,7 +4,7 @@ RESULTS_PATH = "/mnt/nas2/kcp-yeeun/results"
 
 # Constants
 YEAR_RANGE = ('2005', '2100')
-MAX_SERIES_LENGTH = 20 
+MAX_SERIES_LENGTH = 15
 
 DATASET_NAME = 'processed_series_0401.csv'
 OUTPUT_VARIABLES = [

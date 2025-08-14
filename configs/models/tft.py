@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 
 from configs.config import INDEX_COLUMNS, MAX_SERIES_LENGTH, CATEGORICAL_COLUMNS
 
@@ -14,10 +14,9 @@ class TFTDatasetConfig:
 
     time_idx: str = "Step"
     group_ids: List[str] = field(default_factory=lambda: INDEX_COLUMNS)
-    max_encoder_length: int = 5
+    max_encoder_length: int = 2
     min_encoder_length: int = 2
-    max_prediction_length: int = MAX_SERIES_LENGTH
-    max_prediction_length_eval: int = MAX_SERIES_LENGTH
+    max_prediction_length: int = MAX_SERIES_LENGTH - 2
     min_prediction_length: int = 1
     add_relative_time_idx: bool = True
     add_target_scales: bool = True
@@ -45,11 +44,10 @@ class TFTDatasetConfig:
         ]
 
         # shared normalizer across targets, grouped by group_ids
+        # IMPORTANT: create a distinct GroupNormalizer per target.
         target_normalizer = MultiNormalizer([
-            GroupNormalizer(groups=self.group_ids)
-        ] * len(targets))
-
-        max_pred_len = self.max_prediction_length_eval if mode == "eval" else self.max_prediction_length
+            GroupNormalizer(groups=self.group_ids) for _ in targets
+        ])
 
         params: Dict[str, Any] = {
             "time_idx": self.time_idx,
@@ -57,7 +55,7 @@ class TFTDatasetConfig:
             "group_ids": self.group_ids,
             "max_encoder_length": self.max_encoder_length,
             "min_encoder_length": self.min_encoder_length,
-            "max_prediction_length": max_pred_len,
+            "max_prediction_length": self.max_prediction_length,
             "min_prediction_length": self.min_prediction_length,
             "target_normalizer": target_normalizer,
             "time_varying_known_reals": time_known,
@@ -79,4 +77,5 @@ class TFTTrainerConfig:
     batch_size: int = 64
     gradient_clip_val: float = 0.1
     patience: int = 3
-    devices: int = 1
+    # Use Union for flexibility: -1 for all, int count, list of device indices, or "auto"
+    devices: Union[int, List[int], str] = "auto"
