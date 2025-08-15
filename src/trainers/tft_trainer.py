@@ -69,14 +69,37 @@ _DIST_ENV_VARS = [
     "MASTER_PORT",
 ]
 
-def _clear_dist_env():
-    cleared = []
-    for k in _DIST_ENV_VARS:
-        if k in os.environ:
+# New context manager to force single GPU / single process inference safely
+from contextlib import contextmanager
+
+@contextmanager
+def _single_gpu_env():
+    """Temporarily force single-GPU (device 0) inference.
+
+    Stores and restores CUDA_VISIBLE_DEVICES and distributed env vars. This avoids
+    potential DataLoader hangs or repeated loops caused by stale multi-process
+    environment when calling predict on a single-process Trainer.
+    """
+    orig_cuda = os.environ.get("CUDA_VISIBLE_DEVICES")
+    orig_dist = {k: os.environ.get(k) for k in _DIST_ENV_VARS}
+    try:
+        os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+        for k in _DIST_ENV_VARS:
             os.environ.pop(k, None)
-            cleared.append(k)
-    if cleared:
-        logging.info("Cleared distributed environment variables for inference: %s", ", ".join(cleared))
+        logging.info("Forced single GPU inference with CUDA_VISIBLE_DEVICES=0")
+        yield
+    finally:
+        if orig_cuda is None:
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+        else:
+            os.environ["CUDA_VISIBLE_DEVICES"] = orig_cuda
+        # restore dist vars
+        for k, v in orig_dist.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        logging.info("Restored CUDA_VISIBLE_DEVICES and distributed environment variables after inference")
 
 
 def build_datasets(session_state):
@@ -218,173 +241,172 @@ def predict_tft(session_state: dict, run_id: str) -> np.ndarray:
     test_data = session_state["test_data"]
     targets = session_state["targets"]
 
-    # Force single-process inference: clear env markers if coming from a previous multi-GPU context
-    if os.environ.get("WORLD_SIZE", "1") != "1":
-        _clear_dist_env()
-    # If launched under torchrun accidentally, still teardown initialized group
-    if torch.distributed.is_available() and torch.distributed.is_initialized():
-        _teardown_dist()
-        if torch.distributed.is_initialized():  # pragma: no cover
-            raise RuntimeError("Failed to teardown existing distributed process group before prediction.")
+    # Wrap entire prediction path in single GPU context to avoid infinite loop / DDP leftovers
+    with _single_gpu_env():
+        # Best effort teardown if a process group is somehow still alive
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            _teardown_dist()
+            if torch.distributed.is_initialized():  # pragma: no cover
+                raise RuntimeError("Failed to teardown existing distributed process group before prediction.")
 
-    model = _load_tft_checkpoint(run_id)
+        model = _load_tft_checkpoint(run_id)
 
-    logging.info("Building test dataset for TFT prediction using saved template...")
-    final_dir = os.path.join(RESULTS_PATH, run_id, "final")
-    dataset_tpl_path = os.path.join(final_dir, "dataset_template.pt")
-    if not os.path.exists(dataset_tpl_path):
-        raise FileNotFoundError(
-            f"Dataset template not found at {dataset_tpl_path}. Run train_final_tft to generate it."
-        )
-    try:
-        from pytorch_forecasting.data.timeseries._timeseries import TimeSeriesDataSet as _PFTimeSeriesDataSet  # type: ignore
-    except Exception:  # pragma: no cover
-        from pytorch_forecasting.data.timeseries import TimeSeriesDataSet as _PFTimeSeriesDataSet  # fallback
-    try:
-        import torch.serialization as _ts
-        if hasattr(_ts, "add_safe_globals"):
-            _ts.add_safe_globals([_PFTimeSeriesDataSet])
-        try:
-            train_template = torch.load(dataset_tpl_path, map_location="cpu")
-        except Exception as inner_e:
-            try:
-                train_template = torch.load(dataset_tpl_path, map_location="cpu", weights_only=False)
-                logging.info("Loaded dataset template with weights_only=False due to prior failure: %s", inner_e)
-            except Exception as retry_e:
-                raise RuntimeError(
-                    "Failed to load dataset template even after retry with weights_only=False. "
-                    f"Original error: {inner_e}; Retry error: {retry_e}"
-                ) from retry_e
-    except Exception as e:
-        raise RuntimeError(f"Failed to load dataset template from {dataset_tpl_path}: {e}")
-    try:
-        test_dataset = TimeSeriesDataSet.from_dataset(
-            train_template,
-            test_data,
-            stop_randomization=True,
-            predict=True,  # only decoder (forecast horizon) timesteps retained
-        )
-    except Exception as e:
-        raise RuntimeError(
-            "Failed to build test dataset from saved template. Ensure test_data columns and dtypes match the training schema: "
-            f"{e}"
-        )
-    template_time_idx = getattr(train_template, "time_idx", None)
-    template_group_ids = getattr(train_template, "group_ids", None)
-    if not template_time_idx or not template_group_ids:
-        raise ValueError("Saved dataset template is missing time_idx or group_ids; cannot align predictions.")
-    logging.info("Loaded dataset template from %s for prediction.", dataset_tpl_path)
-
-    trainer_cfg = TFTTrainerConfig()
-    test_loader = test_dataset.to_dataloader(
-        train=False,
-        batch_size=trainer_cfg.batch_size,
-        num_workers=_default_num_workers(),
-        persistent_workers=True,
-    )
-    trainer = _create_infer_trainer()
-
-    logging.info("Predicting with TFT model (forecast horizon only)...")
-    returns = model.predict(test_loader, return_index=True)
-
-    from pytorch_forecasting.models.base._base_model import Prediction as _PFPrediction  # type: ignore
-    if not isinstance(returns, _PFPrediction):
-        raise RuntimeError(f"Unexpected predict() return type: {type(returns)}; expected pytorch_forecasting Prediction.")
-
-    outputs = returns.output
-    if isinstance(outputs, list):
-        if len(outputs) == 0:
-            raise RuntimeError("Prediction.output list is empty.")
-        if not all(torch.is_tensor(o) for o in outputs):
-            raise RuntimeError("All elements in Prediction.output list must be tensors.")
-        preds_tensor = outputs[0] if len(outputs) == 1 else torch.stack(outputs, dim=-1)
-    elif torch.is_tensor(outputs):
-        preds_tensor = outputs
-    else:
-        raise RuntimeError(f"Unsupported Prediction.output type: {type(outputs)}")
-
-    index_attr = getattr(returns, 'index', None)
-    if isinstance(index_attr, list):
-        dfs = [d for d in index_attr if isinstance(d, pd.DataFrame) and not d.empty]
-        if not dfs:
-            raise RuntimeError("Prediction.index list is empty or has no valid DataFrames.")
-        index_df = pd.concat(dfs, ignore_index=True)
-    elif isinstance(index_attr, pd.DataFrame):
-        if index_attr.empty:
-            raise RuntimeError("Prediction.index DataFrame is empty.")
-        index_df = index_attr.copy()
-    else:
-        raise RuntimeError(f"Unsupported Prediction.index type: {type(index_attr)}")
-
-    preds_flat = None  # will set below after optional expansion
-    time_idx_name = template_time_idx
-    group_ids = list(template_group_ids)
-
-    idx_df = _normalize_index_df(index_df, time_idx_name)
-
-    # If predictions are 3D (n_samples, pred_len, out_size) but index_df only has n_samples rows,
-    # expand the index so each horizon step has its own row with incremented time index.
-    if torch.is_tensor(preds_tensor) and preds_tensor.ndim == 3:
-        n_samples, pred_len, out_size = preds_tensor.shape
-        if len(idx_df) == n_samples and pred_len > 1:
-            logging.info(
-                "Expanding index_df for multi-step horizon: samples=%d, pred_len=%d", n_samples, pred_len
+        logging.info("Building test dataset for TFT prediction using saved template...")
+        final_dir = os.path.join(RESULTS_PATH, run_id, "final")
+        dataset_tpl_path = os.path.join(final_dir, "dataset_template.pt")
+        if not os.path.exists(dataset_tpl_path):
+            raise FileNotFoundError(
+                f"Dataset template not found at {dataset_tpl_path}. Run train_final_tft to generate it."
             )
-            # Build expanded index
-            expanded_rows = []
-            base_cols = idx_df.columns.tolist()
-            if time_idx_name not in base_cols:
-                raise KeyError(
-                    f"Time index column '{time_idx_name}' not found in prediction index DataFrame columns: {base_cols}"
+        try:
+            from pytorch_forecasting.data.timeseries._timeseries import TimeSeriesDataSet as _PFTimeSeriesDataSet  # type: ignore
+        except Exception:  # pragma: no cover
+            from pytorch_forecasting.data.timeseries import TimeSeriesDataSet as _PFTimeSeriesDataSet  # fallback
+        try:
+            import torch.serialization as _ts
+            if hasattr(_ts, "add_safe_globals"):
+                _ts.add_safe_globals([_PFTimeSeriesDataSet])
+            try:
+                train_template = torch.load(dataset_tpl_path, map_location="cpu")
+            except Exception as inner_e:
+                try:
+                    train_template = torch.load(dataset_tpl_path, map_location="cpu", weights_only=False)
+                    logging.info("Loaded dataset template with weights_only=False due to prior failure: %s", inner_e)
+                except Exception as retry_e:
+                    raise RuntimeError(
+                        "Failed to load dataset template even after retry with weights_only=False. "
+                        f"Original error: {inner_e}; Retry error: {retry_e}"
+                    ) from retry_e
+        except Exception as e:
+            raise RuntimeError(f"Failed to load dataset template from {dataset_tpl_path}: {e}")
+        try:
+            test_dataset = TimeSeriesDataSet.from_dataset(
+                train_template,
+                test_data,
+                stop_randomization=True,
+                predict=True,  # only decoder (forecast horizon) timesteps retained
+            )
+        except Exception as e:
+            raise RuntimeError(
+                "Failed to build test dataset from saved template. Ensure test_data columns and dtypes match the training schema: "
+                f"{e}"
+            )
+        template_time_idx = getattr(train_template, "time_idx", None)
+        template_group_ids = getattr(train_template, "group_ids", None)
+        if not template_time_idx or not template_group_ids:
+            raise ValueError("Saved dataset template is missing time_idx or group_ids; cannot align predictions.")
+        logging.info("Loaded dataset template from %s for prediction.", dataset_tpl_path)
+
+        trainer_cfg = TFTTrainerConfig()
+        test_loader = test_dataset.to_dataloader(
+            train=False,
+            batch_size=trainer_cfg.batch_size,
+            num_workers=_default_num_workers(),
+            persistent_workers=True,
+        )
+        trainer = _create_infer_trainer()
+
+        logging.info("Predicting with TFT model (forecast horizon only)...")
+        returns = model.predict(test_loader, return_index=True)
+
+        from pytorch_forecasting.models.base._base_model import Prediction as _PFPrediction  # type: ignore
+        if not isinstance(returns, _PFPrediction):
+            raise RuntimeError(f"Unexpected predict() return type: {type(returns)}; expected pytorch_forecasting Prediction.")
+
+        outputs = returns.output
+        if isinstance(outputs, list):
+            if len(outputs) == 0:
+                raise RuntimeError("Prediction.output list is empty.")
+            if not all(torch.is_tensor(o) for o in outputs):
+                raise RuntimeError("All elements in Prediction.output list must be tensors.")
+            preds_tensor = outputs[0] if len(outputs) == 1 else torch.stack(outputs, dim=-1)
+        elif torch.is_tensor(outputs):
+            preds_tensor = outputs
+        else:
+            raise RuntimeError(f"Unsupported Prediction.output type: {type(outputs)}")
+
+        index_attr = getattr(returns, 'index', None)
+        if isinstance(index_attr, list):
+            dfs = [d for d in index_attr if isinstance(d, pd.DataFrame) and not d.empty]
+            if not dfs:
+                raise RuntimeError("Prediction.index list is empty or has no valid DataFrames.")
+            index_df = pd.concat(dfs, ignore_index=True)
+        elif isinstance(index_attr, pd.DataFrame):
+            if index_attr.empty:
+                raise RuntimeError("Prediction.index DataFrame is empty.")
+            index_df = index_attr.copy()
+        else:
+            raise RuntimeError(f"Unsupported Prediction.index type: {type(index_attr)}")
+
+        preds_flat = None  # will set below after optional expansion
+        time_idx_name = template_time_idx
+        group_ids = list(template_group_ids)
+
+        idx_df = _normalize_index_df(index_df, time_idx_name)
+
+        # If predictions are 3D (n_samples, pred_len, out_size) but index_df only has n_samples rows,
+        # expand the index so each horizon step has its own row with incremented time index.
+        if torch.is_tensor(preds_tensor) and preds_tensor.ndim == 3:
+            n_samples, pred_len, out_size = preds_tensor.shape
+            if len(idx_df) == n_samples and pred_len > 1:
+                logging.info(
+                    "Expanding index_df for multi-step horizon: samples=%d, pred_len=%d", n_samples, pred_len
                 )
-            for i in range(n_samples):
-                base_row = idx_df.iloc[i]
-                base_time = base_row[time_idx_name]
-                for h in range(pred_len):
-                    new_row = base_row.copy()
-                    # Assumption: decoder steps are consecutive increments
-                    new_row[time_idx_name] = base_time + h
-                    expanded_rows.append(new_row)
-            idx_df = pd.DataFrame(expanded_rows).reset_index(drop=True)
-            # Flatten predictions accordingly
-            preds_flat = preds_tensor.detach().cpu().numpy().reshape(n_samples * pred_len, out_size)
+                # Build expanded index
+                expanded_rows = []
+                base_cols = idx_df.columns.tolist()
+                if time_idx_name not in base_cols:
+                    raise KeyError(
+                        f"Time index column '{time_idx_name}' not found in prediction index DataFrame columns: {base_cols}"
+                    )
+                for i in range(n_samples):
+                    base_row = idx_df.iloc[i]
+                    base_time = base_row[time_idx_name]
+                    for h in range(pred_len):
+                        new_row = base_row.copy()
+                        # Assumption: decoder steps are consecutive increments
+                        new_row[time_idx_name] = base_time + h
+                        expanded_rows.append(new_row)
+                idx_df = pd.DataFrame(expanded_rows).reset_index(drop=True)
+                # Flatten predictions accordingly
+                preds_flat = preds_tensor.detach().cpu().numpy().reshape(n_samples * pred_len, out_size)
+            else:
+                preds_flat = _flatten_predictions(preds_tensor)
         else:
             preds_flat = _flatten_predictions(preds_tensor)
-    else:
-        preds_flat = _flatten_predictions(preds_tensor)
 
-    # Evaluate only the forecast horizon rows returned by predict=True.
-    key_cols = group_ids + [time_idx_name]
-    # Collect reference columns (ensure presence in test_data)
-    ref_cols = [c for c in key_cols + ['Year'] + targets if c in test_data.columns]
-    horizon_df = idx_df[key_cols].merge(
-        test_data[ref_cols].drop_duplicates(key_cols),
-        on=key_cols,
-        how='left'
-    )
-    if preds_flat.shape[0] != len(horizon_df):
-        logging.error(
-            "After expansion attempt: preds_flat rows=%d, horizon_df rows=%d. First few time_idx in idx_df: %s", 
-            preds_flat.shape[0], len(horizon_df), idx_df[time_idx_name].head().tolist()
+        # Evaluate only the forecast horizon rows returned by predict=True.
+        key_cols = group_ids + [time_idx_name]
+        # Collect reference columns (ensure presence in test_data)
+        ref_cols = [c for c in key_cols + ['Year'] + targets if c in test_data.columns]
+        horizon_df = idx_df[key_cols].merge(
+            test_data[ref_cols].drop_duplicates(key_cols),
+            on=key_cols,
+            how='left'
         )
-        raise RuntimeError(
-            f"Prediction rows ({preds_flat.shape[0]}) != horizon_df rows ({len(horizon_df)})."
-        )
+        if preds_flat.shape[0] != len(horizon_df):
+            logging.error(
+                "After expansion attempt: preds_flat rows=%d, horizon_df rows=%d. First few time_idx in idx_df: %s",
+                preds_flat.shape[0], len(horizon_df), idx_df[time_idx_name].head().tolist()
+            )
+            raise RuntimeError(
+                f"Prediction rows ({preds_flat.shape[0]}) != horizon_df rows ({len(horizon_df)})."
+            )
 
-    y_true = horizon_df[targets].values
-    y_pred = preds_flat
-    valid_mask = (~np.isnan(y_true).any(axis=1)) & (~np.isnan(y_pred).any(axis=1))
-    if valid_mask.any():
-        save_metrics(run_id, y_true[valid_mask], y_pred[valid_mask])
-    else:
-        logging.warning("No valid rows to compute metrics (all horizon targets or predictions contain NaNs).")
+        y_true = horizon_df[targets].values
+        y_pred = preds_flat
+        valid_mask = (~np.isnan(y_true).any(axis=1)) & (~np.isnan(y_pred).any(axis=1))
+        if valid_mask.any():
+            save_metrics(run_id, y_true[valid_mask], y_pred[valid_mask])
+        else:
+            logging.warning("No valid rows to compute metrics (all horizon targets or predictions contain NaNs).")
 
-    # Expose horizon dataframe and y_true for downstream plotting
-    session_state['horizon_df'] = horizon_df
-    session_state['horizon_y_true'] = y_true
+        # Expose horizon dataframe and y_true for downstream plotting
+        session_state['horizon_df'] = horizon_df
+        session_state['horizon_y_true'] = y_true
 
-    # Return only the horizon predictions matrix
-    return y_pred
+        # Return only the horizon predictions matrix
+        return y_pred
 
 
 # ---------- Shared dataset builders ----------

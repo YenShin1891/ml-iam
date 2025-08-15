@@ -150,13 +150,13 @@ def main():
     if resume == "search":
         search_tft(session_state, run_id)
         save_session_state(session_state, run_id)
-    elif resume == "train":
+    if resume in ["search", "train"]:
         train_tft(session_state, run_id)
         save_session_state(session_state, run_id)
-    elif resume == "test":
+    if resume in ["search", "train", "test"]:
         test_tft(session_state, run_id)
         save_session_state(session_state, run_id)
-    elif resume == "plot":
+    if resume in ["search", "train", "test", "plot"]:
         plot_tft(session_state, run_id)
 
 
