@@ -1,20 +1,26 @@
+import json
+import logging
+import os
+import tempfile
+from typing import List, Optional
+
 import matplotlib.pyplot as plt
 from matplotlib import cm
-import streamlit as st
-import shap
-import tempfile
-import logging
-from tqdm import tqdm
-from PIL import Image
-
 import numpy as np
 import pandas as pd
-import os
-import json
+from PIL import Image
+import shap
+import streamlit as st
+from tqdm import tqdm
 
 from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
 
-def preprocess_data(test_data, y_test, preds, target_index):
+def preprocess_data(
+    test_data: pd.DataFrame, 
+    y_test: np.ndarray, 
+    preds: np.ndarray, 
+    target_index: int
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
     mask = ~np.isnan(y_test[:, target_index]) & ~np.isnan(preds[:, target_index])
     test_data_valid = test_data[mask].reset_index(drop=True)
     y_test_valid = y_test[mask, target_index]
@@ -22,7 +28,14 @@ def preprocess_data(test_data, y_test, preds, target_index):
     return test_data_valid, y_test_valid, preds_valid
 
 
-def configure_axes(ax, use_log, min_val, max_val, xlabel, ylabel):
+def configure_axes(
+    ax, 
+    use_log: bool, 
+    min_val: float, 
+    max_val: float, 
+    xlabel: str, 
+    ylabel: str
+) -> None:
     if use_log:
         ax.set_xscale('log')
         ax.set_yscale('log')
@@ -33,7 +46,15 @@ def configure_axes(ax, use_log, min_val, max_val, xlabel, ylabel):
     ax.set_ylabel(ylabel)
 
 
-def plot_scatter(run_id, test_data, y_test, preds, targets, use_log=False, model_label: str = "XGBoost"):
+def plot_scatter(
+    run_id: str,
+    test_data: pd.DataFrame,
+    y_test: np.ndarray,
+    preds: np.ndarray,
+    targets: List[str],
+    use_log: bool = False,
+    model_label: str = "XGBoost"
+) -> None:
     logging.info("Creating scatter plot...")
     rows, cols = 3, 3
     fig, axes = plt.subplots(rows, cols, figsize=(20, 20))
@@ -81,7 +102,14 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, use_log=False, model
     plt.close()
 
 
-def plot_time_series(test_data, y_test, preds, targets, alpha=0.5, linewidth=0.5):
+def plot_time_series(
+    test_data: pd.DataFrame,
+    y_test: Optional[np.ndarray],
+    preds: np.ndarray,
+    targets: List[str],
+    alpha: float = 0.5,
+    linewidth: float = 0.5
+) -> None:
     rows, cols = 3, 3
     fig, axes = plt.subplots(rows, cols, figsize=(15, 15))
 
@@ -114,15 +142,7 @@ def plot_time_series(test_data, y_test, preds, targets, alpha=0.5, linewidth=0.5
     st.pyplot(plt)
 
 
-def get_shap_values(run_id, xgb, X_test):
-    """
-    Create SHAP plots for the XGBoost model.
-    Args:
-        xgb: Trained XGBoost model.
-        X_test: Dataframe of data feature columns
-        features: List of feature names.
-        targets: List of target names.
-    """
+def get_shap_values(run_id: str, xgb, X_test: pd.DataFrame) -> None:
     logging.info("Creating SHAP explainer...")
     explainer = shap.TreeExplainer(xgb, approximate=True)
     logging.info("Calculating SHAP values...")
@@ -131,13 +151,12 @@ def get_shap_values(run_id, xgb, X_test):
     logging.info("SHAP values saved to shap_values.npy")
 
 
-def transform_outputs_to_former_inputs(run_id, shap_values, targets, features):
-    """
-    Convert the output SHAP values to input SHAP values. For output variables in the 
-    TOP 10 SHAP values, switch them to the inputs that influenced them, multiplying 
-    the importance to its original value. Repeat until there are no more output 
-    variables in the TOP 7 SHAP values.
-    """
+def transform_outputs_to_former_inputs(
+    run_id: str, 
+    shap_values: np.ndarray, 
+    targets: List[str], 
+    features: List[str]
+) -> None:
     sorted_df_list = []
     for i, target in enumerate(targets):
         target_shap_values = np.abs(shap_values[:, :, i])  # Absolute SHAP values for the target

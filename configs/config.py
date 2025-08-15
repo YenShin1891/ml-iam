@@ -1,17 +1,28 @@
-# Directories
+"""Configuration constants for ML-IAM project."""
+
+# Data paths
 DATA_PATH = "/mnt/nas2/kcp-yeeun/data/processed"
 RESULTS_PATH = "/mnt/nas2/kcp-yeeun/results"
-
-# Constants
-YEAR_RANGE = ('2005', '2100')
-MAX_SERIES_LENGTH = 15
-
 DATASET_NAME = 'processed_series_0401.csv'
+
+# Model configuration
+YEAR_RANGE = ('2020', '2100')
+MAX_SERIES_LENGTH = 10
+
+# Target variables
 OUTPUT_VARIABLES = [
-    "Emissions|CO2", "Emissions|CH4", "Emissions|N2O",
-    "Primary Energy|Coal", "Primary Energy|Gas", "Primary Energy|Oil",
-    "Primary Energy|Solar", "Primary Energy|Wind", "Primary Energy|Nuclear"
+    "Emissions|CO2", 
+    "Emissions|CH4", 
+    "Emissions|N2O",
+    "Primary Energy|Coal", 
+    "Primary Energy|Gas", 
+    "Primary Energy|Oil",
+    "Primary Energy|Solar", 
+    "Primary Energy|Wind", 
+    "Primary Energy|Nuclear"
 ]
+
+# Data structure
 INDEX_COLUMNS = ['Model', 'Scenario', 'Region']
 NON_FEATURE_COLUMNS = ['Model', 'Scenario', 'Scenario_Category']
 CATEGORICAL_COLUMNS = ['Region', 'Model_Family']
