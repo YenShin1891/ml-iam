@@ -48,41 +48,63 @@ def make_filters(test_data):
 
 def apply_filters():
     logging.info("Applying filters to test data...")
+    # XGBoost case: has y_test directly
+    if hasattr(st.session_state, 'y_test') and st.session_state.y_test is not None:
+        y_test = st.session_state.y_test
+        preds = st.session_state.preds
+        test_data = st.session_state.test_data
+    # TFT case: extract y_test from test_data using targets, handle horizon subset
+    elif hasattr(st.session_state, 'test_data') and hasattr(st.session_state, 'targets'):
+        preds = st.session_state.preds
+        targets = st.session_state.targets
+        
+        # Use horizon subset if available (TFT predictions are on forecast horizon)
+        horizon_df = st.session_state.get('horizon_df')
+        horizon_y_true = st.session_state.get('horizon_y_true')
+        
+        if horizon_df is not None and horizon_y_true is not None:
+            test_data = horizon_df
+            y_test = horizon_y_true
+        else:
+            st.error("TFT horizon data not found in session state.")
+            return
+    else:
+        st.error("Required data not found in session state. Please ensure the model has been trained.")
+        return
+
+    # Build filter mask
+    mask_conditions = []
+    if 'Scenario_Category' in test_data.columns:
+        mask_conditions.append(test_data['Scenario_Category'].isin(st.session_state.selected_scenario_categories))
+    if 'Region' in test_data.columns:
+        mask_conditions.append(test_data['Region'].isin(st.session_state.selected_regions))
+    if 'Model_Family' in test_data.columns:
+        mask_conditions.append(test_data['Model_Family'].isin(st.session_state.selected_model_families))
     
-    # assume y_test and preds are aligned
-    assert len(st.session_state.y_test) == len(st.session_state.preds)
-    assert len(st.session_state.test_data) == len(st.session_state.y_test)
-
-    test_data = st.session_state.test_data
-    selected_categories = st.session_state.selected_scenario_categories
-    selected_regions = st.session_state.selected_regions
-    selected_families = st.session_state.selected_model_families
-
-    mask_td = (
-        (test_data['Scenario_Category'].isin(selected_categories) if selected_categories else True) &
-        (test_data['Region'].isin(selected_regions) if selected_regions else True) &
-        (test_data['Model_Family'].isin(selected_families) if selected_families else True)
-    )
+    # Combine conditions
+    mask_td = mask_conditions[0] if mask_conditions else pd.Series([True] * len(test_data))
+    for condition in mask_conditions[1:]:
+        mask_td = mask_td & condition
+    
+    # Create target mask and store data
+    selected_positions = np.where(mask_td)[0]
+    mask_targets = np.zeros(len(y_test), dtype=bool)
+    mask_targets[selected_positions] = True
     
     st.session_state.test_mask = mask_td
-    logging.info(f"Test data filter applied: {mask_td.sum()} rows selected.")
-    logging.info(f"Selected Categories: {selected_categories}")
-    logging.info(f"Selected Regions: {selected_regions}")
-    logging.info(f"Selected Model Families: {selected_families}")
-
-    selected_positions = np.where(mask_td)[0]
-
-    assert len(st.session_state.y_test) == len(st.session_state.preds)
-    mask_targets = np.zeros(len(st.session_state.y_test), dtype=bool)
-    mask_targets[selected_positions] = True
     st.session_state.target_mask = mask_targets
+    st.session_state.current_y_test = y_test
+    st.session_state.current_preds = preds
+    st.session_state.current_test_data = test_data
 
 def filter_and_plot():
-    logging.info("Filtering test data and plotting results...")
 
-    filtered_y_test = st.session_state.y_test[st.session_state.target_mask]
-    filtered_preds = st.session_state.preds[st.session_state.target_mask]
-    filtered_test_data = st.session_state.test_data[st.session_state.test_mask].reset_index(drop=True)
+    filtered_y_test = st.session_state.current_y_test[st.session_state.target_mask]
+    filtered_preds = st.session_state.current_preds[st.session_state.target_mask]
+    
+    # Use the same test_data that was used to create the mask
+    current_test_data = st.session_state.get('current_test_data', st.session_state.test_data)
+    filtered_test_data = current_test_data[st.session_state.test_mask].reset_index(drop=True)
 
     plot_time_series(
         filtered_test_data,
@@ -94,7 +116,7 @@ def filter_and_plot():
     )
 
 def main():
-    run_id = "run_02"
+    run_id = "run_28"
     
     if st.session_state.get("logging_initialized", False) is False:
         setup_logging(run_id)
