@@ -95,10 +95,9 @@ def create_single_timeseries_plot(ax, test_data, y_test, preds, target_index, ta
         ax.plot(group_years, group_preds, label='XGBoost', alpha=alpha, linewidth=linewidth)
         ax.fill_between(group_years, group_y_test, group_preds, alpha=0.1)
 
-    ax.set_title(targets[target_index], fontsize=17)
+    title_with_unit = f"{targets[target_index]} ({OUTPUT_UNITS[target_index]})"
+    ax.set_title(title_with_unit, fontsize=17)
     ax.set_xlabel("Year", fontsize=16)
-    ylabel_with_unit = f"{targets[target_index]} ({OUTPUT_UNITS[target_index]})"
-    ax.set_ylabel(ylabel_with_unit, fontsize=16)
     ax.tick_params(axis='both', which='major', labelsize=14)
     
     # Format y-axis for large numbers and reduce tick crowding
