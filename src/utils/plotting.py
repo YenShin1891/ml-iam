@@ -14,6 +14,7 @@ import json
 
 from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH, OUTPUT_UNITS
 from matplotlib.ticker import FuncFormatter, MaxNLocator
+import glob
 
 
 def format_large_numbers(x, pos):
@@ -59,6 +60,11 @@ def create_single_scatter_plot(ax, test_data, y_test, preds, target_index, targe
         
     ax.set_title(targets[target_index], fontsize=17)
     
+    # Calculate and display R² value for this target
+    r2 = 1 - (np.sum((y_test_valid - preds_valid) ** 2) / np.sum((y_test_valid - np.mean(y_test_valid)) ** 2))
+    ax.text(0.05, 0.95, f'R² = {r2:.3f}', transform=ax.transAxes, fontsize=14, 
+            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
     if use_log:
         abs_y_test = np.abs(y_test_valid)
         abs_preds = np.abs(preds_valid)
@@ -95,9 +101,9 @@ def create_single_timeseries_plot(ax, test_data, y_test, preds, target_index, ta
         ax.plot(group_years, group_preds, label='XGBoost', alpha=alpha, linewidth=linewidth)
         ax.fill_between(group_years, group_y_test, group_preds, alpha=0.1)
 
-    title_with_unit = f"{targets[target_index]} ({OUTPUT_UNITS[target_index]})"
-    ax.set_title(title_with_unit, fontsize=17)
+    ylabel_with_unit = f"{targets[target_index]} ({OUTPUT_UNITS[target_index]})"
     ax.set_xlabel("Year", fontsize=16)
+    ax.set_ylabel(ylabel_with_unit, fontsize=16)
     ax.tick_params(axis='both', which='major', labelsize=14)
     
     # Format y-axis for large numbers and reduce tick crowding
@@ -172,7 +178,7 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, use_log=False, model
     plt.close(first_fig)
 
 
-def plot_time_series(test_data, y_test, preds, targets, alpha=0.5, linewidth=0.5):
+def plot_time_series(test_data, y_test, preds, targets, alpha=0.5, linewidth=0.5, run_id=None, filter_metadata=None, save_individual=False, individual_indices=[]):
     rows, cols = 3, 3
     fig, axes = plt.subplots(rows, cols, figsize=(15, 15))
     plt.rcParams.update({'font.size': 14})
@@ -201,14 +207,74 @@ def plot_time_series(test_data, y_test, preds, targets, alpha=0.5, linewidth=0.5
     plt.tight_layout()
     st.pyplot(plt)
     
-    # Save separate PNG for first graph only
-    first_fig = plt.figure(figsize=(6, 6))
-    first_ax = first_fig.add_subplot(111)
-    create_single_timeseries_plot(first_ax, test_data, y_test, preds, 0, targets, alpha, linewidth)
+    # Save the full plot with filter metadata if run_id is provided
+    if run_id and filter_metadata:
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        plot_filename = f"timeseries_{timestamp}.png"
+        metadata_filename = f"timeseries_{timestamp}_metadata.json"
+        
+        plots_dir = os.path.join(RESULTS_PATH, run_id, "saved_dashboard_plots")
+        os.makedirs(plots_dir, exist_ok=True)
+        
+        # Save the full plot
+        plt.savefig(os.path.join(plots_dir, plot_filename), bbox_inches='tight')
+        
+        # Save metadata
+        import json
+        with open(os.path.join(plots_dir, metadata_filename), 'w') as f:
+            json.dump(filter_metadata, f, indent=2)
     
-    os.makedirs(os.path.join(RESULTS_PATH, "plots"), exist_ok=True)
-    plt.savefig(os.path.join(RESULTS_PATH, "plots", "timeseries_first.png"), bbox_inches='tight')
-    plt.close(first_fig)
+    # Save individual plots if requested
+    if save_individual and run_id and filter_metadata:
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        plots_dir = os.path.join(RESULTS_PATH, run_id, "saved_dashboard_plots")
+        
+        for i in individual_indices:
+            if 0 <= i < len(targets):
+                individual_fig = plt.figure(figsize=(6, 6))
+                individual_ax = individual_fig.add_subplot(111)
+                create_single_timeseries_plot(individual_ax, test_data, y_test, preds, i, targets, alpha, linewidth)
+                
+                individual_filename = f"timeseries_{timestamp}_individual_{i}.png"
+                plt.savefig(os.path.join(plots_dir, individual_filename), bbox_inches='tight')
+                plt.close(individual_fig)
+
+
+def get_saved_plots_metadata(run_id):
+    """Get metadata for all saved time series plots."""
+    plots_dir = os.path.join(RESULTS_PATH, run_id, "saved_dashboard_plots")
+    if not os.path.exists(plots_dir):
+        return []
+    
+    metadata_files = glob.glob(os.path.join(plots_dir, "*_metadata.json"))
+    saved_plots = []
+    
+    for metadata_file in metadata_files:
+        try:
+            with open(metadata_file, 'r') as f:
+                metadata = json.load(f)
+            
+            # Extract timestamp from filename
+            filename = os.path.basename(metadata_file)
+            timestamp_str = filename.replace('timeseries_', '').replace('_metadata.json', '')
+            
+            # Get corresponding plot file
+            plot_file = metadata_file.replace('_metadata.json', '.png')
+            if os.path.exists(plot_file):
+                saved_plots.append({
+                    'timestamp': timestamp_str,
+                    'metadata': metadata,
+                    'plot_path': plot_file,
+                    'filename': os.path.basename(plot_file)
+                })
+        except (json.JSONDecodeError, FileNotFoundError):
+            continue
+    
+    # Sort by timestamp (newest first)
+    saved_plots.sort(key=lambda x: x['timestamp'], reverse=True)
+    return saved_plots
 
 
 def get_shap_values(run_id, xgb, X_test):
