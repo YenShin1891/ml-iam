@@ -12,63 +12,143 @@ import pandas as pd
 import os
 import json
 
-from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
+from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH, OUTPUT_UNITS
+from matplotlib.ticker import FuncFormatter, MaxNLocator
+
+
+def format_large_numbers(x, pos):
+    """Format large numbers for better readability on axes"""
+    if abs(x) >= 1e6:
+        val = x/1e6
+        return f'{val:.0f}M' if val == int(val) else f'{val:.1f}M'
+    elif abs(x) >= 1e3:
+        val = x/1e3
+        return f'{val:.0f}k' if val == int(val) else f'{val:.1f}k'
+    elif x == 0:
+        return '0'
+    else:
+        return f'{x:.0f}' if x == int(x) else f'{x:.1f}'
 
 def preprocess_data(test_data, y_test, preds, target_index):
     mask = ~np.isnan(y_test[:, target_index]) & ~np.isnan(preds[:, target_index])
     test_data_valid = test_data[mask].reset_index(drop=True)
     y_test_valid = y_test[mask, target_index]
     preds_valid = preds[mask, target_index]
+    
+    # Filter years to 2015-2100 (made for legacy xgboost code, remove later)
+    year_mask = (test_data_valid['Year'] >= 2015) & (test_data_valid['Year'] <= 2100)
+    test_data_valid = test_data_valid[year_mask].reset_index(drop=True)
+    y_test_valid = y_test_valid[year_mask.values]
+    preds_valid = preds_valid[year_mask.values]
+    
     return test_data_valid, y_test_valid, preds_valid
 
 
-def configure_axes(ax, use_log, min_val, max_val, xlabel, ylabel):
+def create_single_scatter_plot(ax, test_data, y_test, preds, target_index, targets, use_log, model_label):
+    """Create a single scatter plot for the specified target on the given axes"""
+    test_data_valid, y_test_valid, preds_valid = preprocess_data(test_data, y_test, preds, target_index)
+    unique_years = sorted(test_data_valid['Year'].unique())
+    colors = cm.viridis(np.linspace(0, 1, len(unique_years)))
+    
+    for year, color in zip(unique_years, colors):
+        group_df = test_data_valid[test_data_valid['Year'] == year]
+        group_indices = group_df.index
+        group_y_test = y_test_valid[group_indices]
+        group_preds = preds_valid[group_indices]
+        ax.scatter(group_y_test, group_preds, alpha=0.5, color=color, label=year)
+        
+    ax.set_title(targets[target_index], fontsize=17)
+    
+    if use_log:
+        abs_y_test = np.abs(y_test_valid)
+        abs_preds = np.abs(preds_valid)
+        min_val = max(min(abs_y_test.min(), abs_preds.min()), 1e-10)
+        max_val = max(abs_y_test.max(), abs_preds.max())
+    else:
+        min_val = min(y_test_valid.min(), preds_valid.min())
+        max_val = max(y_test_valid.max(), preds_valid.max())
+        
+    configure_axes(
+        ax,
+        use_log,
+        min_val,
+        max_val,
+        "IAM" + (" (log scale)" if use_log else ""),
+        f"{model_label}" + (" (log scale)" if use_log else ""),
+        x_unit=OUTPUT_UNITS[target_index],
+        y_unit=OUTPUT_UNITS[target_index]
+    )
+    ax.legend(title='Year', loc='upper left', bbox_to_anchor=(1, 1), fontsize=11, title_fontsize=14)
+
+
+def create_single_timeseries_plot(ax, test_data, y_test, preds, target_index, targets, alpha=0.5, linewidth=0.5):
+    """Create a single time series plot for the specified target on the given axes"""
+    test_data_valid, y_test_valid, preds_valid = preprocess_data(test_data, y_test, preds, target_index)
+    
+    for group_key, group_df in test_data_valid.groupby(INDEX_COLUMNS):
+        group_years = group_df['Year']
+        group_indices = group_df.index
+        group_y_test = y_test_valid[group_indices]
+        group_preds = preds_valid[group_indices]
+
+        ax.plot(group_years, group_y_test, label='IAM', alpha=alpha, linewidth=linewidth)
+        ax.plot(group_years, group_preds, label='XGBoost', alpha=alpha, linewidth=linewidth)
+        ax.fill_between(group_years, group_y_test, group_preds, alpha=0.1)
+
+    ax.set_title(targets[target_index], fontsize=17)
+    ax.set_xlabel("Year", fontsize=16)
+    ylabel_with_unit = f"{targets[target_index]} ({OUTPUT_UNITS[target_index]})"
+    ax.set_ylabel(ylabel_with_unit, fontsize=16)
+    ax.tick_params(axis='both', which='major', labelsize=14)
+    
+    # Format y-axis for large numbers and reduce tick crowding
+    formatter = FuncFormatter(format_large_numbers)
+    ax.yaxis.set_major_formatter(formatter)
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+
+
+def configure_axes(ax, use_log, min_val, max_val, xlabel, ylabel, x_unit=None, y_unit=None):
     if use_log:
         ax.set_xscale('log')
         ax.set_yscale('log')
     ax.set_xlim(min_val, max_val)
     ax.set_ylim(min_val, max_val)
     ax.set_aspect('equal', adjustable='box')
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
+    
+    # Create labels with smaller font units
+    if x_unit:
+        xlabel_with_unit = f"{xlabel} ({x_unit})"
+    else:
+        xlabel_with_unit = xlabel
+    
+    if y_unit:
+        ylabel_with_unit = f"{ylabel} ({y_unit})"
+    else:
+        ylabel_with_unit = ylabel
+    
+    ax.set_xlabel(xlabel_with_unit, fontsize=16)
+    ax.set_ylabel(ylabel_with_unit, fontsize=16)
+    ax.tick_params(axis='both', which='major', labelsize=14)
+    ax.tick_params(axis='both', which='minor', labelsize=12)
+    
+    # Format large numbers and prevent overlap
+    formatter = FuncFormatter(format_large_numbers)
+    ax.xaxis.set_major_formatter(formatter)
+    ax.yaxis.set_major_formatter(formatter)
+    
+    # Reduce number of ticks to prevent crowding
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=5))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
 
 
 def plot_scatter(run_id, test_data, y_test, preds, targets, use_log=False, model_label: str = "XGBoost"):
     logging.info("Creating scatter plot...")
     rows, cols = 3, 3
     fig, axes = plt.subplots(rows, cols, figsize=(20, 20))
+    plt.rcParams.update({'font.size': 14})
 
     for i, ax in enumerate(axes.flatten()):
-        test_data_valid, y_test_valid, preds_valid = preprocess_data(test_data, y_test, preds, i)
-        unique_years = sorted(test_data_valid['Year'].unique())
-        colors = cm.viridis(np.linspace(0, 1, len(unique_years)))
-
-        for year, color in zip(unique_years, colors):
-            group_df = test_data_valid[test_data_valid['Year'] == year]
-            group_indices = group_df.index
-            group_y_test = y_test_valid[group_indices]
-            group_preds = preds_valid[group_indices]
-            ax.scatter(group_y_test, group_preds, alpha=0.5, color=color, label=year)
-
-        ax.set_title(targets[i])
-        if use_log:
-            abs_y_test = np.abs(y_test_valid)
-            abs_preds = np.abs(preds_valid)
-            min_val = max(min(abs_y_test.min(), abs_preds.min()), 1e-10)
-            max_val = max(abs_y_test.max(), abs_preds.max())
-        else:
-            min_val = min(y_test_valid.min(), preds_valid.min())
-            max_val = max(y_test_valid.max(), preds_valid.max())
-
-        configure_axes(
-            ax,
-            use_log,
-            min_val,
-            max_val,
-            "IAM (log scale)" if use_log else "IAM",
-            f"{model_label} (log scale)" if use_log else model_label,
-        )
-        ax.legend(title='Year', loc='upper left', bbox_to_anchor=(1, 1), fontsize='small')
+        create_single_scatter_plot(ax, test_data, y_test, preds, i, targets, use_log, model_label)
 
     plt.tight_layout()
     # Preserve legacy filenames for XGBoost
@@ -79,11 +159,33 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, use_log=False, model
     os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots"), exist_ok=True)
     plt.savefig(os.path.join(RESULTS_PATH, run_id, "plots", filename), bbox_inches='tight')
     plt.close()
+    
+    # Save separate PNG for first graph only
+    first_fig = plt.figure(figsize=(6, 6))
+    first_ax = first_fig.add_subplot(111)
+    create_single_scatter_plot(first_ax, test_data, y_test, preds, 0, targets, use_log, model_label)
+    
+    if model_label == "XGBoost":
+        first_filename = "scatter_plot_first_log.png" if use_log else "scatter_plot_first.png"
+    else:
+        first_filename = f"scatter_plot_{model_label.lower()}_first_log.png" if use_log else f"scatter_plot_{model_label.lower()}_first.png"
+    plt.savefig(os.path.join(RESULTS_PATH, run_id, "plots", first_filename), bbox_inches='tight')
+    plt.close(first_fig)
 
 
 def plot_time_series(test_data, y_test, preds, targets, alpha=0.5, linewidth=0.5):
     rows, cols = 3, 3
     fig, axes = plt.subplots(rows, cols, figsize=(15, 15))
+    plt.rcParams.update({'font.size': 14})
+
+    # Filter years to 2015-2100 before checking if data is empty
+    if test_data is not None and 'Year' in test_data.columns:
+        year_mask = (test_data['Year'] >= 2015) & (test_data['Year'] <= 2100)
+        test_data = test_data[year_mask].reset_index(drop=True)
+        if y_test is not None:
+            y_test = y_test[year_mask.values]
+        if preds is not None:
+            preds = preds[year_mask.values]
 
     if y_test is None or y_test.size == 0:
         st.warning("y_test is empty. Displaying blank plots.")
@@ -95,23 +197,19 @@ def plot_time_series(test_data, y_test, preds, targets, alpha=0.5, linewidth=0.5
         return
 
     for i, ax in enumerate(axes.flatten()):
-        test_data_valid, y_test_valid, preds_valid = preprocess_data(test_data, y_test, preds, i)
-
-        for group_key, group_df in test_data_valid.groupby(INDEX_COLUMNS):
-            group_years = group_df['Year']
-            group_indices = group_df.index
-            group_y_test = y_test_valid[group_indices]
-            group_preds = preds_valid[group_indices]
-
-            ax.plot(group_years, group_y_test, label='IAM', alpha=alpha, linewidth=linewidth)
-            ax.plot(group_years, group_preds, label='XGBoost', alpha=alpha, linewidth=linewidth)
-            ax.fill_between(group_years, group_y_test, group_preds, alpha=0.1)
-
-        ax.set_title(targets[i])
-        ax.set_xlabel("Year")
+        create_single_timeseries_plot(ax, test_data, y_test, preds, i, targets, alpha, linewidth)
 
     plt.tight_layout()
     st.pyplot(plt)
+    
+    # Save separate PNG for first graph only
+    first_fig = plt.figure(figsize=(6, 6))
+    first_ax = first_fig.add_subplot(111)
+    create_single_timeseries_plot(first_ax, test_data, y_test, preds, 0, targets, alpha, linewidth)
+    
+    os.makedirs(os.path.join(RESULTS_PATH, "plots"), exist_ok=True)
+    plt.savefig(os.path.join(RESULTS_PATH, "plots", "timeseries_first.png"), bbox_inches='tight')
+    plt.close(first_fig)
 
 
 def get_shap_values(run_id, xgb, X_test):
@@ -204,7 +302,6 @@ def transform_outputs_to_former_inputs(run_id, shap_values, targets, features):
 
 
 def draw_shap_plot(run_id, shap_values, X_test, features, targets):
-    units = ["Mt CO2/yr", "Mt CH4/yr", "Mt N2O/yr", "PJ/yr", "PJ/yr", "PJ/yr", "PJ/yr", "PJ/yr", "PJ/yr"]
     n = 8
 
     # Create a 3*3 grid of subplots
@@ -226,7 +323,7 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets):
             img = Image.open(temp_filename)
             ax.imshow(img)
             ax.axis('off')
-            ax.set_title("Impact on " + targets[i] + " (" + units[i] + ")")
+            ax.set_title("Impact on " + targets[i] + " (" + OUTPUT_UNITS[i] + ")")
             os.remove(temp_filename)
         else:
             ax.axis('off')
