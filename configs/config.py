@@ -1,6 +1,7 @@
 # Directories
-DATA_PATH = "/mnt/nas2/kcp-yeeun/data/processed"
-RESULTS_PATH = "/mnt/nas2/kcp-yeeun/results"
+DATA_PATH = "/mnt/nas3/kcp-yeeun/data/processed"
+DATA_PATH_RAW = "/root/ssd/kcp-yeeun/data/raw"
+RESULTS_PATH = "/mnt/nas3/kcp-yeeun/results"
 
 # Constants
 YEAR_RANGE = ('2005', '2100')

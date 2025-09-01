@@ -176,3 +176,6 @@ cython_debug/
 # nohup
 nohup.out
 lightning_logs/
+metadata/
+heatmap_analysis.ipynb
+process_data.ipynb
