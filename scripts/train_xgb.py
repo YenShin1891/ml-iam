@@ -1,3 +1,4 @@
+import argparse
 import logging
 import numpy as np
 import pandas as pd
@@ -42,7 +43,39 @@ def preprocessing(run_id):
     }
 
 
-def train_xgb(session_state, run_id, start_stage=1):
+def search_xgb(session_state, run_id):
+    """Run hyperparameter search and store best_params in session_state."""
+    logging.info("Starting hyperparameter search for XGBoost...")
+    targets = session_state["targets"]
+    X_train = session_state["X_train"]
+    y_train = session_state["y_train"]
+    X_train_index_columns = session_state["X_train_index_columns"]
+    train_groups = session_state["train_groups"]
+    X_val = session_state["X_val"]
+    y_val = session_state["y_val"]
+    X_val_index_columns = session_state["X_val_index_columns"]
+    val_groups = session_state["val_groups"]
+    
+    X_train_with_index = pd.concat([X_train, X_train_index_columns], axis=1)
+    X_val_with_index = pd.concat([X_val, X_val_index_columns], axis=1)
+    
+    best_params, all_results = hyperparameter_search(
+        X_train, y_train, X_train_with_index, train_groups,
+        targets, run_id, start_stage=1, use_cv=False,
+        X_val=X_val, y_val=y_val, X_val_with_index=X_val_with_index, val_groups=val_groups,
+        use_dask=False
+    )
+    session_state["best_params"] = best_params
+    logging.info("Hyperparameter search complete. Best params: %s", best_params)
+    return best_params
+
+
+def train_xgb(session_state, run_id):
+    """Final training using best_params already present in session_state."""
+    if "best_params" not in session_state:
+        raise ValueError("best_params not found in session state. Run the 'search' step first or inject best_params manually.")
+    best_params = session_state["best_params"]
+    logging.info("Starting final XGBoost training with best params: %s", best_params)
     targets = session_state["targets"]
     X_train = session_state["X_train"]
     y_train = session_state["y_train"]
@@ -61,14 +94,8 @@ def train_xgb(session_state, run_id, start_stage=1):
     X_combined_with_index = pd.concat([X_train_with_index, X_val_with_index], axis=0, ignore_index=True)
     combined_groups = np.concatenate([train_groups, val_groups], axis=0)
     
-    best_params, all_results = hyperparameter_search(
-        X_train, y_train, X_train_with_index, train_groups,
-        targets, run_id, start_stage=start_stage, use_cv=False,
-        X_val=X_val, y_val=y_val, X_val_with_index=X_val_with_index, val_groups=val_groups,
-        use_dask=False
-    )
     train_and_save_model(X_combined, y_combined, combined_groups, targets, best_params, run_id, use_dask=False)
-
+    logging.info("Final XGBoost training complete.")
     return best_params
 
 def test_xgb(session_state, run_id):
@@ -103,46 +130,59 @@ def plot_xgb(session_state, run_id):
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Train and test XGBoost model.")
     parser.add_argument("--run_id", type=str, help="Run ID for logging.", required=False)
+    parser.add_argument(
+        "--resume",
+        type=str,
+        choices=["search", "train", "test", "plot"],
+        help="Resume from a specific step. Requires --run_id to be specified.",
+        required=False,
+    )
     args = parser.parse_args()
-    return args.run_id
+    
+    # Validation: if resume is specified, run_id must be provided
+    if args.resume and not args.run_id:
+        parser.error("--run_id is required when --resume is specified")
+    
+    # Validation: if resume is not specified, run_id should not be provided
+    if not args.resume and args.run_id:
+        parser.error("--run_id should only be specified when using --resume")
+    
+    return args.run_id, args.resume
 
 
 def main():
-    full_pipeline = False
+    run_id, resume = parse_arguments()
 
-    if full_pipeline:
+    if resume is None:
+        # Full pipeline: process -> search -> train -> test -> plot
         run_id = get_next_run_id()
         setup_logging(run_id)
         session_state = preprocessing(run_id)
         save_session_state(session_state, run_id)
-        best_params = train_xgb(session_state, run_id)
-        session_state["best_params"] = best_params
+        search_xgb(session_state, run_id)
         save_session_state(session_state, run_id)
-        preds = test_xgb(session_state, run_id)
-        session_state["preds"] = preds
+        train_xgb(session_state, run_id)
+        save_session_state(session_state, run_id)
+        test_xgb(session_state, run_id)
         save_session_state(session_state, run_id)
         plot_xgb(session_state, run_id)
+        return
     else:
-    run_id = "run_05"
         setup_logging(run_id)
         session_state = load_session_state(run_id)
-        ### implement ###
-        # X_train = session_state["X_train"]
-        # y_train = session_state["y_train"]
-        # train_groups = session_state["train_groups"]
-        # targets = session_state["targets"]
-        
-        # best_params = {'subsample': 0.9, 'scale_pos_weight': 100, 'reg_lambda': 10, 'reg_alpha': 10, 'num_boost_round': 300, 'max_depth': 12, 'eta': 0.01, 'gamma': 1, 'colsample_bytree': 0.6}
-        # train_and_save_model(X_train, y_train, train_groups, targets, best_params, run_id)
-        best_params = train_xgb(session_state, run_id)
-        session_state["best_params"] = best_params
+
+    # Step-wise execution when resuming
+    if resume == "search":
+        search_xgb(session_state, run_id)
         save_session_state(session_state, run_id)
-        preds = test_xgb(session_state, run_id)
-        session_state["preds"] = preds
+    if resume in ["search", "train"]:
+        train_xgb(session_state, run_id)
         save_session_state(session_state, run_id)
+    if resume in ["search", "train", "test"]:
+        test_xgb(session_state, run_id)
+        save_session_state(session_state, run_id)
+    if resume in ["search", "train", "test", "plot"]:
         plot_xgb(session_state, run_id)
-        #################
-        save_session_state(session_state, run_id)
 
 
 if __name__ == "__main__":
