@@ -10,22 +10,26 @@ from configs.config import (
     OUTPUT_VARIABLES, INDEX_COLUMNS, NON_FEATURE_COLUMNS
 )
 
-def split_data(prepared, test_size=0.1):
+def split_data(prepared, test_size=0.1, val_size=0.1):
     groups = list(prepared.groupby(INDEX_COLUMNS))
     n_groups = len(groups)
-    n_train_groups = int(n_groups * (1 - test_size))
+    n_test_groups = int(n_groups * test_size)
+    n_val_groups = int(n_groups * val_size)
+    n_train_groups = n_groups - n_test_groups - n_val_groups
     
     np.random.shuffle(groups)
 
     train_groups = groups[:n_train_groups]
-    test_groups = groups[n_train_groups:]
+    val_groups = groups[n_train_groups:n_train_groups + n_val_groups]
+    test_groups = groups[n_train_groups + n_val_groups:]
 
     train_data = pd.concat([group[1] for group in train_groups]).reset_index(drop=True)
+    val_data = pd.concat([group[1] for group in val_groups]).reset_index(drop=True)
     test_data = pd.concat([group[1] for group in test_groups]).reset_index(drop=True)
     
-    logging.info(f"Train: {len(train_data)} rows, Test: {len(test_data)} rows")
+    logging.info(f"Train: {len(train_data)} rows, Val: {len(val_data)} rows, Test: {len(test_data)} rows")
 
-    return train_data, test_data
+    return train_data, val_data, test_data
 
 
 
@@ -37,7 +41,7 @@ def encode_categorical_columns(data, columns):
 
 
 def prepare_data(prepared, targets, features):
-    train_data, test_data = split_data(prepared)
+    train_data, val_data, test_data = split_data(prepared)
 
     X_train = train_data[features].copy()
     X_train_index_columns = train_data[[col for col in INDEX_COLUMNS if col not in features]].copy()

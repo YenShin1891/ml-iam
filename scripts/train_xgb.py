@@ -6,7 +6,7 @@ import pandas as pd
 from src.data.preprocess import prepare_data, load_and_process_data, prepare_features_and_targets
 from src.trainers.xgb_trainer import hyperparameter_search, train_and_save_model
 from src.trainers.evaluation import test_xgb_autoregressively, save_metrics
-from src.utils.utils import setup_logging, save_session_state, load_session_state, load_model, get_next_run_id
+from src.utils.utils import setup_logging, save_session_state, load_session_state, load_model, get_next_run_id, load_best_params
 from src.utils.plotting import plot_scatter, plot_shap
 
 np.random.seed(0)
@@ -73,7 +73,8 @@ def search_xgb(session_state, run_id):
 def train_xgb(session_state, run_id):
     """Final training using best_params already present in session_state."""
     if "best_params" not in session_state:
-        raise ValueError("best_params not found in session state. Run the 'search' step first or inject best_params manually.")
+        logging.info("best_params not searched from search step. Loading from external best_params.json.")
+        session_state = load_best_params(session_state)
     best_params = session_state["best_params"]
     logging.info("Starting final XGBoost training with best params: %s", best_params)
     targets = session_state["targets"]
@@ -101,9 +102,6 @@ def train_xgb(session_state, run_id):
 def test_xgb(session_state, run_id):
     X_test_with_index = session_state["X_test_with_index"]
     y_test = session_state["y_test"]
-
-    model = load_model(run_id)
-            
     logging.info("Testing the model...")
     preds = test_xgb_autoregressively(X_test_with_index, y_test, run_id)
     session_state["preds"] = preds
@@ -120,10 +118,10 @@ def plot_xgb(session_state, run_id):
     preds = session_state["preds"]
     test_data = session_state["test_data"]
 
-    plot_scatter(run_id, test_data, y_test, preds, targets)
+    plot_scatter(run_id, test_data, y_test, preds, targets, model_name="XGBoost")
     x_scaler = load_session_state(run_id, "x_scaler.pkl")
     y_scaler = load_session_state(run_id, "y_scaler.pkl")
-    plot_scatter(run_id, test_data, y_scaler.inverse_transform(y_test), y_scaler.inverse_transform(preds), targets, filename="scatter_plot_inversed.png")
+    plot_scatter(run_id, test_data, y_scaler.inverse_transform(y_test), y_scaler.inverse_transform(preds), targets, filename="scatter_plot_inversed.png", model_name="XGBoost")
     plot_shap(run_id, X_test_with_index, features, targets)
 
 
@@ -143,6 +141,12 @@ def parse_arguments():
         help="Note describing the run condition/type for later reference.",
         required=False,
     )
+    parser.add_argument(
+        "--skip_search",
+        action="store_true",
+        help="Skip hyperparameter search step when running full pipeline.",
+        required=False,
+    )
     args = parser.parse_args()
     
     # Validation: if resume is specified, run_id must be provided
@@ -153,45 +157,38 @@ def parse_arguments():
     if not args.resume and args.run_id:
         parser.error("--run_id should only be specified when using --resume")
     
-    return args.run_id, args.resume, args.note
+    return args.run_id, args.resume, args.note, args.skip_search
 
 
 def main():
-    run_id, resume, note = parse_arguments()
+    run_id, resume, note, skip_search = parse_arguments()
 
     if resume is None:
         # Full pipeline: process -> search -> train -> test -> plot
         run_id = get_next_run_id()
         setup_logging(run_id)
         session_state = preprocessing(run_id)
-        if note:
-            session_state["note"] = note
-            logging.info("Run note: %s", note)
         save_session_state(session_state, run_id)
-        search_xgb(session_state, run_id)
-        save_session_state(session_state, run_id)
-        train_xgb(session_state, run_id)
-        save_session_state(session_state, run_id)
-        test_xgb(session_state, run_id)
-        save_session_state(session_state, run_id)
-        plot_xgb(session_state, run_id)
-        return
+        resume = "train" if skip_search else "search"  # Start from train step if skipping search
     else:
         setup_logging(run_id)
         session_state = load_session_state(run_id)
 
-    # Step-wise execution when resuming
-    if resume == "search":
-        search_xgb(session_state, run_id)
+    if note:
+        session_state["note"] = note
+        logging.info("Run note: %s", note)
+
+    pipeline_steps = ["search", "train", "test", "plot"]
+    step_functions = {
+        "search": search_xgb,
+        "train": train_xgb,
+        "test": test_xgb,
+        "plot": plot_xgb
+    }
+    start_index = pipeline_steps.index(resume)
+    for step in pipeline_steps[start_index:]:
+        step_functions[step](session_state, run_id)
         save_session_state(session_state, run_id)
-    if resume in ["search", "train"]:
-        train_xgb(session_state, run_id)
-        save_session_state(session_state, run_id)
-    if resume in ["search", "train", "test"]:
-        test_xgb(session_state, run_id)
-        save_session_state(session_state, run_id)
-    if resume in ["search", "train", "test", "plot"]:
-        plot_xgb(session_state, run_id)
 
 
 if __name__ == "__main__":

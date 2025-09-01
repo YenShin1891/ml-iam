@@ -1,4 +1,5 @@
 import inspect
+import json
 import logging
 import os
 import pickle
@@ -135,6 +136,25 @@ def load_model(run_id):
     except Exception as e:
         logging.error("Error loading model: %s", str(e))
         return None
+
+def load_best_params(session_state):
+    """
+    Load best_params from best_params.json file in current directory.
+    """
+    param_path = os.path.join(RESULTS_PATH, "best_params.json")
+    with open(param_path, "r") as f:
+        best_params = json.load(f)
+    
+    # Convert parameter names to match XGBoost training expectations
+    if 'n_estimators' in best_params:
+        best_params['num_boost_round'] = best_params.pop('n_estimators')
+    if 'learning_rate' in best_params:
+        best_params['eta'] = best_params.pop('learning_rate')
+    
+    session_state["best_params"] = best_params
+    logging.info("Loaded best_params from best_params.json: %s", best_params)
+    
+    return session_state
 
 # dask
 def create_dask_client():

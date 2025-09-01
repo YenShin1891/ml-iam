@@ -45,7 +45,7 @@ def configure_axes(
     ax.set_ylabel(ylabel)
 
 
-def plot_scatter(run_id, test_data, y_test, preds, targets, use_log=False, filename=None):
+def plot_scatter(run_id, test_data, y_test, preds, targets, use_log=False, filename=None, model_name="Model"):
     logging.info("Creating scatter plot...")
     rows, cols = 3, 3
     fig, axes = plt.subplots(rows, cols, figsize=(20, 20))
@@ -78,7 +78,7 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, use_log=False, filen
             min_val,
             max_val,
             "IAM (log scale)" if use_log else "IAM",
-            f"{model_label} (log scale)" if use_log else model_label,
+            f"{model_name} (log scale)" if use_log else model_name,
         )
         ax.legend(title='Year', loc='upper left', bbox_to_anchor=(1, 1), fontsize='small')
 
