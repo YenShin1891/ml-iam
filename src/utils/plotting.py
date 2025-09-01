@@ -8,10 +8,8 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 import numpy as np
 import pandas as pd
-from PIL import Image
-import shap
-import streamlit as st
-from tqdm import tqdm
+import os
+import json
 import xgboost as xgb
 
 from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
@@ -47,7 +45,7 @@ def configure_axes(
     ax.set_ylabel(ylabel)
 
 
-def plot_scatter(run_id: str, test_data: pd.DataFrame, y_test: np.ndarray, preds: np.ndarray, targets: List[str], use_log: bool = False, model_label: str = "XGBoost", filename: Optional[str] = None) -> None:
+def plot_scatter(run_id, test_data, y_test, preds, targets, use_log=False, filename=None):
     logging.info("Creating scatter plot...")
     rows, cols = 3, 3
     fig, axes = plt.subplots(rows, cols, figsize=(20, 20))
@@ -85,12 +83,8 @@ def plot_scatter(run_id: str, test_data: pd.DataFrame, y_test: np.ndarray, preds
         ax.legend(title='Year', loc='upper left', bbox_to_anchor=(1, 1), fontsize='small')
 
     plt.tight_layout()
-    # Determine filename
     if filename is None:
-        if model_label == "XGBoost":
-            filename = "scatter_plot_log.png" if use_log else "scatter_plot.png"
-        else:
-            filename = f"scatter_plot_{model_label.lower()}_log.png" if use_log else f"scatter_plot_{model_label.lower()}.png"
+        filename = "scatter_plot_log.png" if use_log else "scatter_plot.png"
     os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots"), exist_ok=True)
     plt.savefig(os.path.join(RESULTS_PATH, run_id, "plots", filename), bbox_inches='tight')
     plt.close()
@@ -136,13 +130,19 @@ def plot_time_series(
     st.pyplot(plt)
 
 
-def get_shap_values(run_id: str, X_test: pd.DataFrame) -> None:
+def get_shap_values(run_id, X_test):
     """
-    Compute and save SHAP values for the saved XGBoost model of a run.
+    Create SHAP plots for the XGBoost model.
+    Args:
+        xgb: Trained XGBoost model.
+        X_test: Dataframe of data feature columns
+        features: List of feature names.
+        targets: List of target names.
     """
     logging.info("Loading XGBoost model...")
     model = xgb.XGBRegressor()
     model.load_model(os.path.join(RESULTS_PATH, run_id, "checkpoints", "final_best.json"))
+    
     logging.info("Creating SHAP explainer...")
     explainer = shap.TreeExplainer(model, approximate=True)
     
@@ -257,7 +257,7 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets):
     plt.close()
 
 
-def plot_shap(run_id: str, X_test_with_index: pd.DataFrame, features: List[str], targets: List[str]):
+def plot_shap(run_id, X_test_with_index, features, targets):
     logging.info("Creating SHAP plots...")
     # Remove non-feature columns from X_test if they exist
     X_test = X_test_with_index.drop(columns=NON_FEATURE_COLUMNS, errors="ignore")

@@ -1,4 +1,3 @@
-import argparse
 import logging
 import numpy as np
 import pandas as pd
@@ -16,12 +15,12 @@ def preprocessing(run_id):
     prepared, features, targets = prepare_features_and_targets(data)
     prepared = prepared.dropna(subset=targets)
     (
-    X_train, y_train, X_train_index_columns,
-    X_val, y_val, X_val_index_columns,
-    X_test_with_index, y_test,
-    test_data,
-    x_scaler, y_scaler,
-    train_groups, val_groups
+        X_train, y_train, X_train_index_columns,
+        X_val, y_val, X_val_index_columns,
+        X_test_with_index, y_test, 
+        test_data,
+        x_scaler, y_scaler,
+        train_groups, val_groups
     ) = prepare_data(prepared, targets, features)
     save_session_state(x_scaler, run_id, "x_scaler.pkl")
     save_session_state(y_scaler, run_id, "y_scaler.pkl")
@@ -32,14 +31,14 @@ def preprocessing(run_id):
         "X_train": X_train,
         "y_train": y_train,
         "X_train_index_columns": X_train_index_columns,
-    "X_val": X_val,
-    "y_val": y_val,
-    "X_val_index_columns": X_val_index_columns,
+        "X_val": X_val,
+        "y_val": y_val,
+        "X_val_index_columns": X_val_index_columns,
         "X_test_with_index": X_test_with_index,
         "y_test": y_test,
         "test_data": test_data,
-    "train_groups": train_groups,
-    "val_groups": val_groups
+        "train_groups": train_groups,
+        "val_groups": val_groups
     }
 
 
@@ -56,18 +55,19 @@ def train_xgb(session_state, run_id, start_stage=1):
     
     X_train_with_index = pd.concat([X_train, X_train_index_columns], axis=1)
     X_val_with_index = pd.concat([X_val, X_val_index_columns], axis=1)
-
-    # Use single validation set for search (no Dask to keep it simple), then train on train+val
+    
+    X_combined = pd.concat([X_train, X_val], axis=0, ignore_index=True)
+    y_combined = np.concatenate([y_train, y_val], axis=0)
+    X_combined_with_index = pd.concat([X_train_with_index, X_val_with_index], axis=0, ignore_index=True)
+    combined_groups = np.concatenate([train_groups, val_groups], axis=0)
+    
     best_params, all_results = hyperparameter_search(
         X_train, y_train, X_train_with_index, train_groups,
         targets, run_id, start_stage=start_stage, use_cv=False,
         X_val=X_val, y_val=y_val, X_val_with_index=X_val_with_index, val_groups=val_groups,
         use_dask=False
     )
-
-    X_combined = pd.concat([X_train, X_val], axis=0, ignore_index=True)
-    y_combined = np.concatenate([y_train, y_val], axis=0)
-    train_and_save_model(X_combined, y_combined, targets, best_params, run_id, use_dask=False)
+    train_and_save_model(X_combined, y_combined, combined_groups, targets, best_params, run_id, use_dask=False)
 
     return best_params
 
@@ -127,9 +127,15 @@ def main():
         setup_logging(run_id)
         session_state = load_session_state(run_id)
         ### implement ###
-    # Example: run training directly using existing session_state
-    best_params = train_xgb(session_state, run_id)
-    session_state["best_params"] = best_params
+        # X_train = session_state["X_train"]
+        # y_train = session_state["y_train"]
+        # train_groups = session_state["train_groups"]
+        # targets = session_state["targets"]
+        
+        # best_params = {'subsample': 0.9, 'scale_pos_weight': 100, 'reg_lambda': 10, 'reg_alpha': 10, 'num_boost_round': 300, 'max_depth': 12, 'eta': 0.01, 'gamma': 1, 'colsample_bytree': 0.6}
+        # train_and_save_model(X_train, y_train, train_groups, targets, best_params, run_id)
+        best_params = train_xgb(session_state, run_id)
+        session_state["best_params"] = best_params
         save_session_state(session_state, run_id)
         preds = test_xgb(session_state, run_id)
         session_state["preds"] = preds

@@ -7,10 +7,12 @@ scikit-learn==1.6.1
 
 # XGBoost with GPU support
 xgboost[gpu]==2.1.4
-# Dask and Distributed Computing
 dask[dataframe]
-dask==2024.8.0
-distributed==2024.8.0
+# Dask and Distributed Computing
+dask>=2024.8.0
+distributed>=2024.8.0
+dask-cuda>=22.4.0  # Optional: for better NVIDIA GPU integration
+
 # Visualization
 matplotlib==3.9.4
 seaborn==0.13.2 
@@ -22,7 +24,7 @@ shap==0.47.2
 streamlit==1.45.0
 
 # GPU Support - Fixed package name for Python 3.9
-# cupy-cuda116  # For CUDA 11.6
+cupy-cuda116  # For CUDA 11.6
 # OR use: cupy-cuda102  # For CUDA 10.2
 
 # RNN

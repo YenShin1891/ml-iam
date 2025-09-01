@@ -44,7 +44,28 @@ def setup_logging(run_id, log_file=None):
     logging.info("Logging is set up for %s.", run_id)
 
 
-# for run_id
+# for model checkpoints
+def save_session_state(session_state, run_id, checkpoint_file_name=CHECKPOINT_FILE_NAME):
+    """
+    Save the session state to a file under the specified run directory.
+    """
+    run_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints")
+    os.makedirs(run_dir, exist_ok=True)
+    file_path = os.path.join(run_dir, checkpoint_file_name)
+    with open(file_path, "wb") as f:
+        pickle.dump(session_state, f)
+    logging.info("Session state saved to %s.", file_path)
+
+def load_session_state(run_id, checkpoint_file_name=CHECKPOINT_FILE_NAME):
+    file_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", checkpoint_file_name)
+    try:
+        with open(file_path, "rb") as f:
+            return pickle.load(f)
+    except FileNotFoundError:
+        logging.error("No saved session state found at %s.", file_path)
+        return {}
+
+
 def get_next_run_id():
     """
     Generate the next run_id by checking existing run directories in the results folder.

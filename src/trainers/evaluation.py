@@ -6,8 +6,9 @@ import pandas as pd
 import concurrent.futures
 from tqdm import tqdm
 import xgboost as xgb
-from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
+from xgboost import DMatrix
 
+from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
 
 def group_test_data(X_test_with_index, cache=None):
     """
@@ -59,7 +60,6 @@ def group_test_data(X_test_with_index, cache=None):
     cache[cache_key] = result
     
     return result
-
 
 
 def autoregressive_predictions(model, group_indices, group_matrix, prev_indices, prev2_indices, start_pos):
@@ -125,7 +125,6 @@ def test_xgb_autoregressively(X_test_with_index, y_test, run_id=None, model=None
 
     return full_preds
 
-    
 
 def save_metrics(run_id, y_true, y_pred):
     """

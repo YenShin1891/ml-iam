@@ -28,7 +28,8 @@ def split_data(prepared, test_size=0.1):
     return train_data, test_data
 
 
-def encode_categorical_columns(data: pd.DataFrame, columns = ['Region', 'Model_Family']):
+
+def encode_categorical_columns(data, columns):
     for col in columns:
         if col in data.columns:
             data[col] = data[col].astype('category').cat.codes
@@ -39,25 +40,32 @@ def prepare_data(prepared, targets, features):
     train_data, test_data = split_data(prepared)
 
     X_train = train_data[features].copy()
-    y_train = train_data[targets].values.copy()
     X_train_index_columns = train_data[[col for col in INDEX_COLUMNS if col not in features]].copy()
+    y_train = train_data[targets].values.copy()
+    X_val = val_data[features].copy()
+    X_val_index_columns = val_data[[col for col in INDEX_COLUMNS if col not in features]].copy()
+    y_val = val_data[targets].values.copy()
     X_test = test_data[features].copy()
     X_test_index_columns = test_data[[col for col in INDEX_COLUMNS if col not in features]].copy()
     y_test = test_data[targets].values.copy()
 
     categorical_columns = ['Region', 'Model_Family']
     X_train = encode_categorical_columns(X_train, categorical_columns)
+    X_val = encode_categorical_columns(X_val, categorical_columns)
     X_test = encode_categorical_columns(X_test, categorical_columns)
     
     x_scaler = StandardScaler()
     X_train_scaled = x_scaler.fit_transform(X_train)
+    X_val_scaled = x_scaler.transform(X_val)
     X_test_scaled = x_scaler.transform(X_test)
 
     X_train_scaled = pd.DataFrame(X_train_scaled, columns=X_train.columns, index=X_train.index)
+    X_val_scaled = pd.DataFrame(X_val_scaled, columns=X_val.columns, index=X_val.index)
     X_test_scaled = pd.DataFrame(X_test_scaled, columns=X_test.columns, index=X_test.index)
     
     y_scaler = StandardScaler()
     y_train_scaled = y_scaler.fit_transform(y_train)
+    y_val_scaled = y_scaler.transform(y_val)
     y_test_scaled = y_scaler.transform(y_test)
     
     X_test_with_index_scaled = pd.concat(
@@ -66,16 +74,16 @@ def prepare_data(prepared, targets, features):
     )
     
     train_groups = train_data[INDEX_COLUMNS].astype(str).agg('_'.join, axis=1).values
+    val_groups = val_data[INDEX_COLUMNS].astype(str).agg('_'.join, axis=1).values
 
     return (
-        X_train_scaled, y_train_scaled,
-        X_train_index_columns,
+        X_train_scaled, y_train_scaled, X_train_index_columns, 
+        X_val_scaled, y_val_scaled, X_val_index_columns,
         X_test_with_index_scaled, y_test_scaled,
         test_data,
         x_scaler, y_scaler,
-        train_groups
+        train_groups, val_groups
     )
-
 
 def load_and_process_data() -> pd.DataFrame:
     logging.info("Loading and processing data...")
