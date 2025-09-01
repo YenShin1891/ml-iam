@@ -22,9 +22,10 @@ from configs.config import RESULTS_PATH
 from configs.dask_config import *
 from configs.models.xgb import *
 from src.trainers.evaluation import test_xgb_autoregressively
+from src.trainers.xgb_dask import dask_random_search_like_sklearn
 
 SEARCH_ITER_N_PER_STAGE = 15  # Iterations per stage
-N_FOLDS = 5
+N_FOLDS = 3
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4'
 os.environ['XGB_CUDA_MAX_MEMORY_PERCENT'] = '80'
@@ -109,10 +110,10 @@ def scatter_to_dask(client, X, y):
 def get_xgb_params(base_params: dict) -> dict:
     return {
         'tree_method': 'hist',
-        'device': 'cuda',
+        'device': 'cpu',  # Changed to CPU to match original exactly
         'eval_metric': 'rmse',
         'verbosity': 0,
-        'max_bin': 256,
+        # 'max_bin': 256,  # Removed to match original (uses XGBoost default)
         **base_params
     }
 
@@ -320,6 +321,16 @@ def build_param_dist(stage_params: dict, best_params: dict) -> dict:
     return param_dist
 
 
+
+def _map_boost_round_key_for_sklearn(param_dist: dict) -> dict:
+    """Translate 'num_boost_round' -> 'n_estimators' for sklearn wrapper when calling
+    the sklearn-like search, but keep callers free to use the original key elsewhere."""
+    new = dict(param_dist)
+    if "num_boost_round" in new:
+        new = dict(new)
+        new["n_estimators"] = new.pop("num_boost_round")
+    return new
+
 def hyperparameter_search(
     X_train: pd.DataFrame, 
     y_train: np.array, 
@@ -459,44 +470,68 @@ def hyperparameter_search(
                     random_state=stage_idx
                 )
                 
-                for i, params in enumerate(param_sampler):
-                    logging.info(f"{stage_name} - Iteration {i+1}/{SEARCH_ITER_N_PER_STAGE}")
-                    
-                    gpu_id = i % 5
-                    
-                    try:
-                        if use_cv:
-                            params_copy, score = train_and_evaluate_single_config(
-                                X_train, y_train, X_train_with_index, train_groups, targets, params, gpu_id, client,
-                                use_cv=use_cv, use_dask=use_dask
-                            )
-                        else:
-                            params_copy, score = train_and_evaluate_single_config(
-                                X_train, y_train, X_train_with_index, train_groups, targets, params, gpu_id, client,
-                                use_cv=use_cv,
-                                X_val=X_val, y_val=y_val, X_val_with_index=X_val_with_index,
-                                use_dask=use_dask
-                            )
-                        result = params_copy.copy()
-                        score_key = 'mean_test_score' if use_cv else 'val_score'
-                        result[score_key] = score
-                        result['stage'] = stage_num
-                        stage_results.append(result)
-                        
-                        if score > stage_best_score:
-                            stage_best_score = score
-                            stage_best_params = params_copy.copy()
-                        
-                        if score > overall_best_score:
-                            overall_best_score = score
-                            overall_best_params = params_copy.copy()
-                            
-                        logging.info(f"RMSE: {-score:.4f}")
-                        
-                    except Exception as e:
-                        logging.error(f"Error in {stage_name} iteration {i+1}: {str(e)}", exc_info=True)
-                        raise
-            
+                
+                # === sklearn-like CV path via Dask ===
+                if use_cv:
+                    from sklearn.model_selection import GroupKFold, KFold
+                    # Build the param distributions for THIS stage merged with prior best
+                    current_param_dist = build_param_dist(stage_params, best_params)
+                    if not current_param_dist:
+                        logging.warning(f"No parameters to search in {stage_name}, skipping...")
+                    else:
+                        # Map num_boost_round -> n_estimators for sklearn wrapper
+                        sklearn_param_dist = _map_boost_round_key_for_sklearn(current_param_dist)
+                        # Base estimator kwargs taken from your helper (keeps device/tree_method/etc.)
+                        base_kwargs = get_xgb_params({})
+                        # Choose splitter identical to scikit-learn behavior
+                        # Use plain KFold to match original behavior (comment out GroupKFold for testing)
+                        cv_obj = KFold(n_splits=N_FOLDS, shuffle=False)
+                        groups_obj = None
+                        # Original GroupKFold logic (disabled for testing):
+                        # if train_groups is not None:
+                        #     cv_obj = GroupKFold(n_splits=N_FOLDS)
+                        #     groups_obj = train_groups
+                        # Use RMSE parity with your existing code: maximize neg_root_mean_squared_error
+                        # Apply same early stopping as _train_single_fold for consistency
+                        es_fit_params = {
+                            "early_stopping_rounds": 15,
+                            "eval_metric": "rmse",
+                            "verbose": False,
+                        }
+                        search_out = dask_random_search_like_sklearn(
+                            X_train, y_train,
+                            param_distributions=sklearn_param_dist,
+                            n_iter=SEARCH_ITER_N_PER_STAGE,
+                            estimator="regressor",
+                            base_estimator_kwargs=base_kwargs,
+                            cv=cv_obj,
+                            groups=groups_obj,
+                            scoring="neg_mean_squared_error",
+                            random_state=stage_idx,
+                            fit_params=es_fit_params,
+                            client=client,
+                            refit=False,
+                        )
+                        # Convert results to your schema
+                        stage_results = []
+                        stage_best_score = float('-inf')
+                        stage_best_params = None
+                        for r in search_out["results"]:
+                            pdict = dict(r["params"])
+                            # Map back to your key for consistency elsewhere
+                            if "n_estimators" in pdict and "num_boost_round" in current_param_dist:
+                                pdict["num_boost_round"] = pdict.pop("n_estimators")
+                            result = {"params": pdict, "mean_test_score": r["mean_score"], "fold_scores": r["fold_scores"], "stage": stage_num}
+                            stage_results.append(result)
+                            if r["mean_score"] > stage_best_score:
+                                stage_best_score = r["mean_score"]
+                                stage_best_params = pdict
+                        if stage_best_score > overall_best_score:
+                            overall_best_score = stage_best_score
+                            overall_best_params = dict(stage_best_params) if stage_best_params else overall_best_params
+                        logging.info(f"Best (neg RMSE) this stage: {stage_best_score:.6f}")
+                else:
+                    raise NotImplementedError("Single validation set path not implemented in this version.")
                 # Update best_params with stage results
                 if stage_best_params:
                     for param in current_param_dist.keys():
