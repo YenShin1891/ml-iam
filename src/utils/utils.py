@@ -150,9 +150,8 @@ def create_dask_client():
         local_directory='/tmp/dask-worker-space'  
     )
 
-import tensorflow as tf
-
 def masked_mse(y_true, y_pred):
+    import tensorflow as tf
     # Ensure both y_true and y_pred are float32
     y_true = tf.cast(y_true, dtype=tf.float32)
     y_pred = tf.cast(y_pred, dtype=tf.float32)

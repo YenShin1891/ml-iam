@@ -15,7 +15,7 @@ dask.config.set({
 
 CLIENT_CONFIGS = {
     'n_workers': 1,
-    'threads_per_worker': 5,
+    'threads_per_worker': 1,
     'memory_limit': '16GB',
     'silence_logs': logging.WARNING,
     'dashboard_address': None,

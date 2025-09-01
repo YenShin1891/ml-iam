@@ -20,7 +20,7 @@ from xgboost.dask import DaskDMatrix, train as dask_train
 
 from configs.config import RESULTS_PATH
 from configs.dask_config import *
-from configs.model.xgb import *
+from configs.models.xgb import *
 from src.trainers.evaluation import test_xgb_autoregressively
 
 SEARCH_ITER_N_PER_STAGE = 15  # Iterations per stage

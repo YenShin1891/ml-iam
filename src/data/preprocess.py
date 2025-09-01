@@ -163,7 +163,6 @@ def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
     )
     
     return prepared, features, targets
-<<<<<<< HEAD
 
 
 def remove_rows_with_missing_outputs(X, y, X2=None):
@@ -189,4 +188,4 @@ def remove_rows_with_missing_outputs(X, y, X2=None):
 
     if X2 is not None:
         if isinstance(X2, pd.DataFrame):
-        y = y[mask].reset_index(drop=True)
+            y = y[mask].reset_index(drop=True)
