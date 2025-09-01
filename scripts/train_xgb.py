@@ -137,6 +137,12 @@ def parse_arguments():
         help="Resume from a specific step. Requires --run_id to be specified.",
         required=False,
     )
+    parser.add_argument(
+        "--note",
+        type=str,
+        help="Note describing the run condition/type for later reference.",
+        required=False,
+    )
     args = parser.parse_args()
     
     # Validation: if resume is specified, run_id must be provided
@@ -147,17 +153,20 @@ def parse_arguments():
     if not args.resume and args.run_id:
         parser.error("--run_id should only be specified when using --resume")
     
-    return args.run_id, args.resume
+    return args.run_id, args.resume, args.note
 
 
 def main():
-    run_id, resume = parse_arguments()
+    run_id, resume, note = parse_arguments()
 
     if resume is None:
         # Full pipeline: process -> search -> train -> test -> plot
         run_id = get_next_run_id()
         setup_logging(run_id)
         session_state = preprocessing(run_id)
+        if note:
+            session_state["note"] = note
+            logging.info("Run note: %s", note)
         save_session_state(session_state, run_id)
         search_xgb(session_state, run_id)
         save_session_state(session_state, run_id)
