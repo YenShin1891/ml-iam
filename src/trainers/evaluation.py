@@ -62,7 +62,7 @@ def group_test_data(X_test_with_index, cache=None):
     return result
 
 
-def autoregressive_predictions(model, group_indices, group_matrix, prev_indices, prev2_indices, start_pos):
+def autoregressive_predictions(model, group_indices, group_matrix, prev_indices, prev2_indices, start_pos, y_scaler=None, x_scaler=None, feature_columns=None):
     num_targets = model.predict(group_matrix[start_pos:start_pos + 1]).shape[1]
     preds_target = np.full((len(group_indices), num_targets), np.nan, dtype=float)
     
@@ -72,20 +72,67 @@ def autoregressive_predictions(model, group_indices, group_matrix, prev_indices,
     for t in range(start_pos + 1, len(group_indices)):
         X_test_curr = group_matrix[t].copy()
         if t - 1 >= start_pos:
-            X_test_curr[prev_indices] = preds_target[t - 1, :]  # Use predictions from t-1 for all targets
+            if y_scaler is not None and x_scaler is not None and feature_columns is not None:
+                # Convert scaled predictions to raw values, then scale as features
+                raw_preds = y_scaler.inverse_transform(preds_target[t - 1, :].reshape(1, -1))[0]
+                # Create dummy data with just the target values to scale properly
+                dummy_data = np.full((1, len(feature_columns)), x_scaler.mean_)  # Use feature means as baseline
+                
+                # Map predictions to their corresponding prev_* columns correctly
+                prev_col_indices = [i for i, is_prev in enumerate(prev_indices) if is_prev]
+                for pred_idx, raw_pred in enumerate(raw_preds):
+                    if pred_idx < len(prev_col_indices):
+                        col_idx = prev_col_indices[pred_idx]
+                        dummy_data[0, col_idx] = raw_pred
+                
+                # Transform to get feature-scaled values - create DataFrame to avoid warnings
+                dummy_df = pd.DataFrame(dummy_data, columns=feature_columns)
+                scaled_data = x_scaler.transform(dummy_df)[0]
+                X_test_curr[prev_indices] = scaled_data[prev_indices]
+            else:
+                X_test_curr[prev_indices] = preds_target[t - 1, :]  # Fallback to original behavior
         if t - 2 >= start_pos:
-            X_test_curr[prev2_indices] = preds_target[t - 2, :]  # Use predictions from t-2 for all targets
+            if y_scaler is not None and x_scaler is not None and feature_columns is not None:
+                # Convert scaled predictions to raw values, then scale as features  
+                raw_preds = y_scaler.inverse_transform(preds_target[t - 2, :].reshape(1, -1))[0]
+                # Create dummy data with just the target values to scale properly
+                dummy_data = np.full((1, len(feature_columns)), x_scaler.mean_)  # Use feature means as baseline
+                
+                # Map predictions to their corresponding prev2_* columns correctly
+                prev2_col_indices = [i for i, is_prev2 in enumerate(prev2_indices) if is_prev2]
+                for pred_idx, raw_pred in enumerate(raw_preds):
+                    if pred_idx < len(prev2_col_indices):
+                        col_idx = prev2_col_indices[pred_idx]
+                        dummy_data[0, col_idx] = raw_pred
+                
+                # Transform to get feature-scaled values - create DataFrame to avoid warnings
+                dummy_df = pd.DataFrame(dummy_data, columns=feature_columns)
+                scaled_data = x_scaler.transform(dummy_df)[0]
+                X_test_curr[prev2_indices] = scaled_data[prev2_indices]
+            else:
+                X_test_curr[prev2_indices] = preds_target[t - 2, :]  # Fallback to original behavior
         preds_target[t, :] = model.predict(X_test_curr.reshape(1, -1))[0]  # Predict for all targets
 
     return preds_target
 
 
-def test_xgb_autoregressively(X_test_with_index, y_test, run_id=None, model=None, disable_progress=False, cache=None):
+def test_xgb_autoregressively(X_test_with_index, y_test, run_id=None, model=None, disable_progress=False, cache=None, y_scaler=None, x_scaler=None):
     """
     Test the model autoregressively on the test set.
     """
     if cache is None:
         cache = {}
+    
+    # Load scalers if not provided and run_id is available
+    if y_scaler is None and x_scaler is None and run_id is not None:
+        try:
+            from src.utils.utils import load_session_state
+            y_scaler = load_session_state(run_id, "y_scaler.pkl")
+            x_scaler = load_session_state(run_id, "x_scaler.pkl")
+        except:
+            logging.warning("Could not load scalers, falling back to original behavior")
+            y_scaler = None
+            x_scaler = None
         
     group_indices_list, group_matrices, prev_indices_list, prev2_indices_list = group_test_data(X_test_with_index, cache)
     full_preds = np.full(y_test.shape, np.nan, dtype=float)
@@ -94,11 +141,14 @@ def test_xgb_autoregressively(X_test_with_index, y_test, run_id=None, model=None
         model = xgb.XGBRegressor()
         model.load_model(os.path.join(RESULTS_PATH, run_id, "checkpoints", "final_best.json"))
 
+    # Get feature column names
+    feature_columns = [col for col in X_test_with_index.columns if col not in NON_FEATURE_COLUMNS]
+
     def process_group(args):
         group_indices, group_matrix, prev_indices, prev2_indices = args
         # With no nan values in y_test, we always use the first instance as seed.
         start_pos = 0
-        preds_target = autoregressive_predictions(model, group_indices, group_matrix, prev_indices, prev2_indices, start_pos)
+        preds_target = autoregressive_predictions(model, group_indices, group_matrix, prev_indices, prev2_indices, start_pos, y_scaler, x_scaler, feature_columns)
         return group_indices, preds_target
 
     index_to_pos = {idx: pos for pos, idx in enumerate(X_test_with_index.index)}
