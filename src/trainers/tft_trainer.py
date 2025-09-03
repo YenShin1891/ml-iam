@@ -53,16 +53,16 @@ def hyperparameter_search_tft(
         trainer = create_search_trainer(trainer_cfg, checkpoint_callback)
 
         train_loader, val_loader = create_dataloaders(train_dataset, val_dataset, trainer_cfg.batch_size)
-        trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
+        # trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
-        val_loss = trainer.callback_metrics["val_loss"].item()
-        search_results.append({**params, "val_loss": val_loss})
+    #     val_loss = trainer.callback_metrics["val_loss"].item()
+    #     search_results.append({**params, "val_loss": val_loss})
 
-        if val_loss < best_score:
-            best_score = val_loss
-            best_params = params
+    #     if val_loss < best_score:
+    #         best_score = val_loss
+        best_params = params
 
-    logging.info(f"Best TFT Params: {best_params} with Val Loss: {best_score:.4f}")
+    # logging.info(f"Best TFT Params: {best_params} with Val Loss: {best_score:.4f}")
     return best_params
 
 
