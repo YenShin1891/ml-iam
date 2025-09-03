@@ -2,15 +2,17 @@
 
 # Core Data Science Libraries
 pandas==2.2.2
-numpy==1.24.4
-scikit-learn==1.6.1
+numpy==1.26.4  # streamlit might need numpy 2.0.2 because of dependency issues
+scipy==1.10.1  # Compatible with numpy 1.24.4
+scikit-learn==1.3.2  # Compatible with numpy 1.24.4 and scipy 1.10.1
 
 # XGBoost with GPU support
-xgboost[gpu]==2.1.4
+xgboost==2.1.4
 
 # Dask and Distributed Computing
-dask==2024.8.0
+dask[dataframe]==2024.8.0
 distributed==2024.8.0
+# dask-cuda  # Optional: for better NVIDIA GPU integration - commented out due to version conflicts
 
 # Visualization
 matplotlib==3.9.4
@@ -23,13 +25,7 @@ shap==0.47.2
 streamlit==1.45.0
 
 # GPU Support - Fixed package name for Python 3.9
-# cupy-cuda116  # For CUDA 11.6
-# OR use: cupy-cuda102  # For CUDA 10.2
+cupy-cuda11x==12.3.0  # Compatible with numpy 1.24.4
 
 # RNN
-tensorflow
-
-# TFT
-torch
-lightning
-pytorch_forecasting
+# tensorflow

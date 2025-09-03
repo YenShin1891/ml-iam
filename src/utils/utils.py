@@ -1,4 +1,5 @@
 import inspect
+import json
 import logging
 import os
 import pickle
@@ -44,7 +45,28 @@ def setup_logging(run_id, log_file=None):
     logging.info("Logging is set up for %s.", run_id)
 
 
-# for run_id
+# for model checkpoints
+def save_session_state(session_state, run_id, checkpoint_file_name=CHECKPOINT_FILE_NAME):
+    """
+    Save the session state to a file under the specified run directory.
+    """
+    run_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints")
+    os.makedirs(run_dir, exist_ok=True)
+    file_path = os.path.join(run_dir, checkpoint_file_name)
+    with open(file_path, "wb") as f:
+        pickle.dump(session_state, f)
+    logging.info("Session state saved to %s.", file_path)
+
+def load_session_state(run_id, checkpoint_file_name=CHECKPOINT_FILE_NAME):
+    file_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", checkpoint_file_name)
+    try:
+        with open(file_path, "rb") as f:
+            return pickle.load(f)
+    except FileNotFoundError:
+        logging.error("No saved session state found at %s.", file_path)
+        return {}
+
+
 def get_next_run_id():
     """
     Generate the next run_id by checking existing run directories in the results folder.
@@ -65,13 +87,13 @@ def get_next_run_id():
 
 
 # for model checkpoints
-def save_session_state(session_state, run_id):
+def save_session_state(session_state, run_id, checkpoint_file_name=CHECKPOINT_FILE_NAME):
     """
     Save the session state to a file under the specified run directory.
     """
     run_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints")
     os.makedirs(run_dir, exist_ok=True)
-    file_path = os.path.join(run_dir, CHECKPOINT_FILE_NAME)
+    file_path = os.path.join(run_dir, checkpoint_file_name)
     with open(file_path, "wb") as f:
         pickle.dump(session_state, f)
     logging.info("Session state saved to %s.", file_path)
@@ -93,9 +115,8 @@ class DowngradeUnpickler(pickle.Unpickler):
         return super().find_class(module, name)
     
 
-def load_session_state(run_id):
-    run_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints")
-    file_path = os.path.join(run_dir, CHECKPOINT_FILE_NAME)
+def load_session_state(run_id, checkpoint_file_name=CHECKPOINT_FILE_NAME):
+    file_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", checkpoint_file_name)
     try:
         with open(file_path, "rb") as f:
             return DowngradeUnpickler(f).load()
@@ -106,7 +127,7 @@ def load_session_state(run_id):
     
 def load_model(run_id):
     run_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints")
-    file_path = os.path.join(run_dir, "best_model.json")
+    file_path = os.path.join(run_dir, "final_best.json")
     try:
         import xgboost as xgb
         model = xgb.XGBRegressor()
@@ -115,6 +136,25 @@ def load_model(run_id):
     except Exception as e:
         logging.error("Error loading model: %s", str(e))
         return None
+
+def load_best_params(session_state):
+    """
+    Load best_params from best_params.json file in current directory.
+    """
+    param_path = os.path.join(RESULTS_PATH, "best_params.json")
+    with open(param_path, "r") as f:
+        best_params = json.load(f)
+    
+    # Convert parameter names to match XGBoost training expectations
+    if 'n_estimators' in best_params:
+        best_params['num_boost_round'] = best_params.pop('n_estimators')
+    if 'learning_rate' in best_params:
+        best_params['eta'] = best_params.pop('learning_rate')
+    
+    session_state["best_params"] = best_params
+    logging.info("Loaded best_params from best_params.json: %s", best_params)
+    
+    return session_state
 
 # dask
 def create_dask_client():
@@ -130,9 +170,8 @@ def create_dask_client():
         local_directory='/tmp/dask-worker-space'  
     )
 
-import tensorflow as tf
-
 def masked_mse(y_true, y_pred):
+    import tensorflow as tf
     # Ensure both y_true and y_pred are float32
     y_true = tf.cast(y_true, dtype=tf.float32)
     y_pred = tf.cast(y_pred, dtype=tf.float32)

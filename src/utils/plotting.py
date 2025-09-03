@@ -8,10 +8,9 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 import numpy as np
 import pandas as pd
-from PIL import Image
-import shap
-import streamlit as st
-from tqdm import tqdm
+import os
+import json
+import xgboost as xgb
 
 from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
 
@@ -46,15 +45,7 @@ def configure_axes(
     ax.set_ylabel(ylabel)
 
 
-def plot_scatter(
-    run_id: str,
-    test_data: pd.DataFrame,
-    y_test: np.ndarray,
-    preds: np.ndarray,
-    targets: List[str],
-    use_log: bool = False,
-    model_label: str = "XGBoost"
-) -> None:
+def plot_scatter(run_id, test_data, y_test, preds, targets, use_log=False, filename=None, model_name="Model"):
     logging.info("Creating scatter plot...")
     rows, cols = 3, 3
     fig, axes = plt.subplots(rows, cols, figsize=(20, 20))
@@ -87,16 +78,13 @@ def plot_scatter(
             min_val,
             max_val,
             "IAM (log scale)" if use_log else "IAM",
-            f"{model_label} (log scale)" if use_log else model_label,
+            f"{model_name} (log scale)" if use_log else model_name,
         )
         ax.legend(title='Year', loc='upper left', bbox_to_anchor=(1, 1), fontsize='small')
 
     plt.tight_layout()
-    # Preserve legacy filenames for XGBoost
-    if model_label == "XGBoost":
+    if filename is None:
         filename = "scatter_plot_log.png" if use_log else "scatter_plot.png"
-    else:
-        filename = f"scatter_plot_{model_label.lower()}_log.png" if use_log else f"scatter_plot_{model_label.lower()}.png"
     os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots"), exist_ok=True)
     plt.savefig(os.path.join(RESULTS_PATH, run_id, "plots", filename), bbox_inches='tight')
     plt.close()
@@ -142,9 +130,22 @@ def plot_time_series(
     st.pyplot(plt)
 
 
-def get_shap_values(run_id: str, xgb, X_test: pd.DataFrame) -> None:
+def get_shap_values(run_id, X_test):
+    """
+    Create SHAP plots for the XGBoost model.
+    Args:
+        xgb: Trained XGBoost model.
+        X_test: Dataframe of data feature columns
+        features: List of feature names.
+        targets: List of target names.
+    """
+    logging.info("Loading XGBoost model...")
+    model = xgb.XGBRegressor()
+    model.load_model(os.path.join(RESULTS_PATH, run_id, "checkpoints", "final_best.json"))
+    
     logging.info("Creating SHAP explainer...")
-    explainer = shap.TreeExplainer(xgb, approximate=True)
+    explainer = shap.TreeExplainer(model, approximate=True)
+    
     logging.info("Calculating SHAP values...")
     shap_values = explainer.shap_values(X_test)
     np.save(os.path.join(RESULTS_PATH, run_id, "plots", "shap_values.npy"), shap_values)
@@ -256,7 +257,7 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets):
     plt.close()
 
 
-def plot_shap(run_id, xgb, X_test_with_index, features, targets):
+def plot_shap(run_id, X_test_with_index, features, targets):
     logging.info("Creating SHAP plots...")
     # Remove non-feature columns from X_test if they exist
     X_test = X_test_with_index.drop(columns=NON_FEATURE_COLUMNS, errors="ignore")
@@ -267,47 +268,9 @@ def plot_shap(run_id, xgb, X_test_with_index, features, targets):
         indices = np.random.choice(X_test.shape[0], 100, replace=False)
         X_test = X_test.iloc[indices]
 
-    get_shap_values(run_id, xgb, X_test)
+    get_shap_values(run_id, X_test)
     logging.info("Transforming outputs to former inputs...")
     shap_values = np.load(os.path.join(RESULTS_PATH, run_id, "plots", "shap_values.npy"), allow_pickle=True)
     shap_values = transform_outputs_to_former_inputs(run_id, shap_values, targets, features)
     logging.info("Drawing SHAP plots...")
     draw_shap_plot(run_id, shap_values, X_test, features, targets)
-
-
-# def shap_plot_per_target(models, X_test, features, targets):
-#     # subsample if needed
-#     if X_test.shape[0] > 500:
-#         indices = np.random.choice(X_test.shape[0], 500, replace=False)
-#         X_test = X_test[indices]
-#     n = 8
-#     plt.rcParams.update({'font.size': 12}) 
-
-#     if not os.path.exists("plots"):
-#         os.makedirs("plots")
-#     if not os.path.exists("plots/temp"):
-#         os.makedirs("plots/temp")
-
-#     plot_paths = []
-#     units = ["Mt CO2/yr", "Mt CH4/yr", "Mt N2O/yr", "PJ/yr", "PJ/yr", "PJ/yr", "PJ/yr", "PJ/yr", "PJ/yr"]
-#     for i, target in enumerate(targets):
-#         explainer = shap.TreeExplainer(models[target])
-#         shap_values = explainer.shap_values(X_test)
-#         shap.plots.violin(shap_values, X_test, feature_names=features, max_display=n, show=False)
-#         plt.gca().yaxis.set_tick_params(labelsize=10)
-#         plt.gca().set_xlabel("Impact on " + target +" (" + units[i] + ")")
-#         plt.tight_layout()
-#         plot_path = os.path.join("plots/temp", f"shap_{i}.png")
-#         plt.savefig(plot_path)
-#         plot_paths.append(plot_path)
-#         plt.close()
-    
-#     html_content = '<div style="display: grid; grid-template-columns: repeat(2, 1fr); grid-gap: 10px;">'
-#     timestamp = int(time.time())
-#     for plot_path in plot_paths:
-#         html_content += f'<div><img src="{plot_path}?t={timestamp}" style="width: 100%;" /></div>'
-#     html_content += '</div>'
-#     # save the HTML content to a file
-#     with open("plots/shap_plots.html", "w") as f:
-#         f.write(html_content)
-#     display(HTML(html_content))

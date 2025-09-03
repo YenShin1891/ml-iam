@@ -1,8 +1,9 @@
-"""Configuration constants for ML-IAM project."""
+# Directories
+DATA_PATH = "/mnt/nas3/kcp-yeeun/data/processed"
+RESULTS_PATH = "/mnt/nas3/kcp-yeeun/results"
 
-# Data paths
-DATA_PATH = "/mnt/nas2/kcp-yeeun/data/processed"
-RESULTS_PATH = "/mnt/nas2/kcp-yeeun/results"
+# Constants
+YEAR_STARTS_AT = 6
 DATASET_NAME = 'processed_series_0401.csv'
 
 # Model configuration

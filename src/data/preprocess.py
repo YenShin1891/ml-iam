@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import logging
+from sklearn.preprocessing import StandardScaler
 
 from configs.config import (
     DATA_PATH, DATASET_NAME, RESULTS_PATH,
@@ -9,13 +10,12 @@ from configs.config import (
     OUTPUT_VARIABLES, INDEX_COLUMNS, NON_FEATURE_COLUMNS
 )
 
-
-def split_data(prepared):
+def split_data(prepared, test_size=0.1, val_size=0.1):
     groups = list(prepared.groupby(INDEX_COLUMNS))
     n_groups = len(groups)
-    # split 8:1:1
-    n_train_groups = int(n_groups * 0.8)
-    n_val_groups = int(n_groups * 0.1)
+    n_test_groups = int(n_groups * test_size)
+    n_val_groups = int(n_groups * val_size)
+    n_train_groups = n_groups - n_test_groups - n_val_groups
     
     np.random.shuffle(groups)
 
@@ -26,32 +26,68 @@ def split_data(prepared):
     train_data = pd.concat([group[1] for group in train_groups]).reset_index(drop=True)
     val_data = pd.concat([group[1] for group in val_groups]).reset_index(drop=True)
     test_data = pd.concat([group[1] for group in test_groups]).reset_index(drop=True)
+    
+    logging.info(f"Train: {len(train_data)} rows, Val: {len(val_data)} rows, Test: {len(test_data)} rows")
 
     return train_data, val_data, test_data
 
 
-def encode_categorical_columns(data, columns = ['Region', 'Model_Family']):
+
+def encode_categorical_columns(data, columns):
     for col in columns:
         if col in data.columns:
             data[col] = data[col].astype('category').cat.codes
+    return data
 
 
 def prepare_data(prepared, targets, features):
     train_data, val_data, test_data = split_data(prepared)
 
     X_train = train_data[features].copy()
+    X_train_index_columns = train_data[[col for col in INDEX_COLUMNS if col not in features]].copy()
     y_train = train_data[targets].values.copy()
     X_val = val_data[features].copy()
+    X_val_index_columns = val_data[[col for col in INDEX_COLUMNS if col not in features]].copy()
     y_val = val_data[targets].values.copy()
-    X_test_with_index = test_data[features + [col for col in INDEX_COLUMNS if col not in features]].copy()
+    X_test = test_data[features].copy()
+    X_test_index_columns = test_data[[col for col in INDEX_COLUMNS if col not in features]].copy()
     y_test = test_data[targets].values.copy()
 
-    encode_categorical_columns(X_train)
-    encode_categorical_columns(X_val)
-    encode_categorical_columns(X_test_with_index)
+    categorical_columns = ['Region', 'Model_Family']
+    X_train = encode_categorical_columns(X_train, categorical_columns)
+    X_val = encode_categorical_columns(X_val, categorical_columns)
+    X_test = encode_categorical_columns(X_test, categorical_columns)
+    
+    x_scaler = StandardScaler()
+    X_train_scaled = x_scaler.fit_transform(X_train)
+    X_val_scaled = x_scaler.transform(X_val)
+    X_test_scaled = x_scaler.transform(X_test)
 
-    return X_train, y_train, X_val, y_val, X_test_with_index, y_test, test_data
+    X_train_scaled = pd.DataFrame(X_train_scaled, columns=X_train.columns, index=X_train.index)
+    X_val_scaled = pd.DataFrame(X_val_scaled, columns=X_val.columns, index=X_val.index)
+    X_test_scaled = pd.DataFrame(X_test_scaled, columns=X_test.columns, index=X_test.index)
+    
+    y_scaler = StandardScaler()
+    y_train_scaled = y_scaler.fit_transform(y_train)
+    y_val_scaled = y_scaler.transform(y_val)
+    y_test_scaled = y_scaler.transform(y_test)
+    
+    X_test_with_index_scaled = pd.concat(
+        [X_test_scaled.reset_index(drop=True), X_test_index_columns.reset_index(drop=True)],
+        axis=1
+    )
+    
+    train_groups = train_data[INDEX_COLUMNS].astype(str).agg('_'.join, axis=1).values
+    val_groups = val_data[INDEX_COLUMNS].astype(str).agg('_'.join, axis=1).values
 
+    return (
+        X_train_scaled, y_train_scaled, X_train_index_columns, 
+        X_val_scaled, y_val_scaled, X_val_index_columns,
+        X_test_with_index_scaled, y_test_scaled,
+        test_data,
+        x_scaler, y_scaler,
+        train_groups, val_groups
+    )
 
 def load_and_process_data() -> pd.DataFrame:
     logging.info("Loading and processing data...")
@@ -156,82 +192,4 @@ def remove_rows_with_missing_outputs(X, y, X2=None):
 
     if X2 is not None:
         if isinstance(X2, pd.DataFrame):
-            X2 = X2[mask].reset_index(drop=True)
-        else:
-            X2 = X2[mask]
-        return X, y, X2
-    else:
-        return X, y
-
-
-def add_missingness_indicators(
-    prepared: pd.DataFrame,
-    features: list,
-    time_known: list = ["Year", "DeltaYears"],
-    categorical_columns: list = None,
-):
-    """
-    Add <col>_is_missing indicators to the full prepared dataframe BEFORE splitting.
-    Indicators are stored as string categoricals ("0"/"1") for categorical encoding.
-    Returns (prepared_with_indicators, updated_features).
-    """
-    if categorical_columns is None:
-        from configs.config import CATEGORICAL_COLUMNS as CFG_CATS
-        categorical_columns = CFG_CATS
-
-    updated_features = list(features)
-
-    cont_cols = [
-        c for c in features
-        if c not in set((categorical_columns or []) + list(time_known))
-        and not c.endswith("_is_missing")
-    ]
-
-    for col in cont_cols:
-        miss_col = f"{col}_is_missing"
-        # create as string categoricals ("0"/"1")
-        if miss_col not in prepared.columns:
-            prepared[miss_col] = (
-                prepared[col].isna().map({True: "1", False: "0"}).astype("category")
-            )
-        if miss_col not in updated_features:
-            updated_features.append(miss_col)
-
-    return prepared, updated_features
-
-
-def impute_with_train_medians(
-    train_data: pd.DataFrame,
-    val_data: pd.DataFrame,
-    test_data: pd.DataFrame,
-    features: list,
-    time_known: list = ["Year", "DeltaYears"],
-    categorical_columns: list = None,
-):
-    """
-    Impute continuous feature NaNs in train/val/test with the train median of each column.
-    Does NOT add indicators (use add_missingness_indicators before splitting).
-    Returns (train_data, val_data, test_data).
-    """
-    if categorical_columns is None:
-        from configs.config import CATEGORICAL_COLUMNS as CFG_CATS
-        categorical_columns = CFG_CATS
-
-    cont_cols = [
-        c for c in features
-        if c not in set((categorical_columns or []) + list(time_known))
-        and not c.endswith("_is_missing")
-    ]
-
-    for col in cont_cols:
-        if col not in train_data.columns:
-            continue
-        fill_value = pd.to_numeric(train_data[col], errors="coerce").median()
-        if pd.isna(fill_value):
-            logging.warning(f"Column '{col}' has all-NaN in train; filling with 0.0")
-            fill_value = 0.0
-        for df in (train_data, val_data, test_data):
-            if col in df.columns:
-                df[col] = df[col].fillna(fill_value)
-
-    return train_data, val_data, test_data
+            y = y[mask].reset_index(drop=True)
