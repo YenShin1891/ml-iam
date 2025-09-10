@@ -2,7 +2,8 @@ import json
 import logging
 import os
 import tempfile
-from typing import List, Optional
+from typing import List, Optional, Dict
+import re
 
 import matplotlib.pyplot as plt
 from matplotlib import cm
@@ -28,17 +29,7 @@ def preprocess_data(
     return test_data_valid, y_test_valid, preds_valid
 
 
-def configure_axes(
-    ax, 
-    use_log: bool, 
-    min_val: float, 
-    max_val: float, 
-    xlabel: str, 
-    ylabel: str
-) -> None:
-    if use_log:
-        ax.set_xscale('log')
-        ax.set_yscale('log')
+def configure_axes(ax, min_val: float, max_val: float, xlabel: str, ylabel: str) -> None:
     ax.set_xlim(min_val, max_val)
     ax.set_ylim(min_val, max_val)
     ax.set_aspect('equal', adjustable='box')
@@ -46,7 +37,7 @@ def configure_axes(
     ax.set_ylabel(ylabel)
 
 
-def plot_scatter(run_id, test_data, y_test, preds, targets, use_log=False, filename=None, model_name="Model"):
+def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[str] = None, model_name: str = "Model"):
     logging.info("Creating scatter plot...")
     rows, cols = 3, 3
     fig, axes = plt.subplots(rows, cols, figsize=(20, 20))
@@ -64,28 +55,21 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, use_log=False, filen
             ax.scatter(group_y_test, group_preds, alpha=0.5, color=color, label=year)
 
         ax.set_title(targets[i])
-        if use_log:
-            abs_y_test = np.abs(y_test_valid)
-            abs_preds = np.abs(preds_valid)
-            min_val = max(min(abs_y_test.min(), abs_preds.min()), 1e-10)
-            max_val = max(abs_y_test.max(), abs_preds.max())
-        else:
-            min_val = min(y_test_valid.min(), preds_valid.min())
-            max_val = max(y_test_valid.max(), preds_valid.max())
+        min_val = min(y_test_valid.min(), preds_valid.min())
+        max_val = max(y_test_valid.max(), preds_valid.max())
 
         configure_axes(
             ax,
-            use_log,
             min_val,
             max_val,
-            "IAM (log scale)" if use_log else "IAM",
-            f"{model_name} (log scale)" if use_log else model_name,
+            "IAM",
+            model_name,
         )
         ax.legend(title='Year', loc='upper left', bbox_to_anchor=(1, 1), fontsize='small')
 
     plt.tight_layout()
     if filename is None:
-        filename = "scatter_plot_log.png" if use_log else "scatter_plot.png"
+        filename = "scatter_plot.png"
     os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots"), exist_ok=True)
     plt.savefig(os.path.join(RESULTS_PATH, run_id, "plots", filename), bbox_inches='tight')
     plt.close()
@@ -225,7 +209,27 @@ def transform_outputs_to_former_inputs(
     return input_only
 
 
-def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False):
+def _make_display_name(feature: str) -> str:
+    """Return a display name based on prev/prevN_ convention.
+    - No prev prefix -> add " (current)"
+    - prev_foo -> "foo (last 5y)"
+    - prevN_foo -> "foo (last {N*5}y)"
+    """
+    m = re.match(r"^prev(\d*)_(.+)$", feature)
+    if m:
+        n_str, base = m.group(1), m.group(2)
+        years = 5 if n_str == "" else int(n_str) * 5
+        return f"{base} (last {years}y)"
+    return f"{feature} (current)"
+
+
+def _build_display_names(features: List[str], feature_name_map: Optional[Dict[str, str]] = None) -> List[str]:
+    """Build display names for a list of features using optional overrides."""
+    feature_name_map = feature_name_map or {}
+    return [feature_name_map.get(feat, _make_display_name(feat)) for feat in features]
+
+
+def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, feature_name_map: Optional[Dict[str, str]] = None):
     units = ["Mt CO2/yr", "Mt CH4/yr", "Mt N2O/yr", "PJ/yr", "PJ/yr", "PJ/yr", "PJ/yr", "PJ/yr", "PJ/yr"]
     n = 8
 
@@ -257,10 +261,25 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=F
                 filtered_shap_values = shap_values[:, feature_mask, i]
                 filtered_X_test = X_test.iloc[:, feature_mask]
                 filtered_features = [features[j] for j in range(len(features)) if feature_mask[j]]
-                
-                shap.summary_plot(filtered_shap_values, filtered_X_test, feature_names=filtered_features, max_display=n, plot_type="violin", show=False)
+                filtered_display_names = _build_display_names(filtered_features, feature_name_map)
+                shap.summary_plot(
+                    filtered_shap_values,
+                    filtered_X_test,
+                    feature_names=filtered_display_names,
+                    max_display=n,
+                    plot_type="violin",
+                    show=False,
+                )
             else:
-                shap.summary_plot(shap_values[:, :, i], X_test, feature_names=features, max_display=n, plot_type="violin", show=False)
+                display_names = _build_display_names(features, feature_name_map)
+                shap.summary_plot(
+                    shap_values[:, :, i],
+                    X_test,
+                    feature_names=display_names,
+                    max_display=n,
+                    plot_type="violin",
+                    show=False,
+                )
             
             fig_shap.tight_layout()
             fig_shap.savefig(temp_filename, format='png', bbox_inches='tight')
@@ -282,8 +301,13 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=F
     plt.close()
 
 
-def plot_shap(run_id, X_test_with_index, features, targets):
+def plot_shap(run_id, X_test_with_index, features, targets, feature_name_map: Optional[Dict[str, str]] = None):
     logging.info("Creating SHAP plots...")
+    # If model checkpoint doesn't exist, skip SHAP plotting gracefully
+    ckpt_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", "final_best.json")
+    if not os.path.exists(ckpt_path):
+        logging.warning("Skipping SHAP plots: model checkpoint not found at %s", ckpt_path)
+        return
     # Remove non-feature columns from X_test if they exist
     X_test = X_test_with_index.drop(columns=NON_FEATURE_COLUMNS, errors="ignore")
     X_test = X_test.reset_index(drop=True)
@@ -298,6 +322,6 @@ def plot_shap(run_id, X_test_with_index, features, targets):
     shap_values = np.load(os.path.join(RESULTS_PATH, run_id, "plots", "shap_values.npy"), allow_pickle=True)
     shap_values = transform_outputs_to_former_inputs(run_id, shap_values, targets, features)
     logging.info("Drawing regular SHAP plots...")
-    draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False)
+    draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, feature_name_map=feature_name_map)
     logging.info("Drawing SHAP plots excluding top feature...")
-    draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=True)
+    draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=True, feature_name_map=feature_name_map)
