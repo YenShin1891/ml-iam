@@ -6,8 +6,8 @@ from sklearn.preprocessing import StandardScaler
 
 from configs.config import (
     DATA_PATH, DATASET_NAME, RESULTS_PATH,
-    YEAR_RANGE,
-    OUTPUT_VARIABLES, INDEX_COLUMNS, NON_FEATURE_COLUMNS
+    YEAR_RANGE, N_LAG_FEATURES,
+    OUTPUT_VARIABLES, INDEX_COLUMNS, NON_FEATURE_COLUMNS, CATEGORICAL_COLUMNS
 )
 
 def split_data(prepared, test_size=0.1, val_size=0.1):
@@ -120,19 +120,27 @@ def load_and_process_data() -> pd.DataFrame:
     return var_pivoted
 
 
-def add_prev_outputs_twice(group: pd.DataFrame, output_variables: list) -> pd.DataFrame:
-    prev_output_df = group[output_variables].shift(1)
-    prev_output_df.columns = ['prev_' + col for col in prev_output_df.columns]
-    prev_output_df2 = group[output_variables].shift(2)
-    prev_output_df2.columns = ['prev2_' + col for col in prev_output_df2.columns]
-    combined = pd.concat([group, prev_output_df, prev_output_df2], axis=1).iloc[2:]
+def add_prev_features(group: pd.DataFrame, output_variables: list, n_lags: int = N_LAG_FEATURES) -> pd.DataFrame:
+    # Create configurable number of lagged features for output variables
+    lagged_dfs = [group]  # Start with original data
+    
+    for lag in range(1, n_lags + 1):
+        lagged_df = group[output_variables].shift(lag)
+        if lag == 1:
+            lagged_df.columns = ['prev_' + col for col in lagged_df.columns]
+        else:
+            lagged_df.columns = [f'prev{lag}_' + col for col in lagged_df.columns]
+        lagged_dfs.append(lagged_df)
+    
+    # Combine original data with all lagged features, drop first n_lags rows (NaN due to shifts)
+    combined = pd.concat(lagged_dfs, axis=1).iloc[n_lags:]
     return combined
 
 
 def prepare_features_and_targets(data: pd.DataFrame) -> tuple:
     logging.info("Preparing features and targets...")
     prepared = data.groupby(INDEX_COLUMNS).apply(
-        add_prev_outputs_twice, output_variables = OUTPUT_VARIABLES
+        add_prev_features, output_variables = OUTPUT_VARIABLES
     ).reset_index(drop=True)
     prepared['Year'] = prepared['Year'].astype(int)
     

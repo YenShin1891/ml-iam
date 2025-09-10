@@ -119,9 +119,6 @@ def plot_xgb(session_state, run_id):
     test_data = session_state["test_data"]
 
     plot_scatter(run_id, test_data, y_test, preds, targets, model_name="XGBoost")
-    x_scaler = load_session_state(run_id, "x_scaler.pkl")
-    y_scaler = load_session_state(run_id, "y_scaler.pkl")
-    plot_scatter(run_id, test_data, y_scaler.inverse_transform(y_test), y_scaler.inverse_transform(preds), targets, filename="scatter_plot_inversed.png", model_name="XGBoost")
     plot_shap(run_id, X_test_with_index, features, targets)
 
 
