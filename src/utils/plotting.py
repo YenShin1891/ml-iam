@@ -8,9 +8,10 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 import numpy as np
 import pandas as pd
-import os
-import json
+import shap
 import xgboost as xgb
+from PIL import Image
+from tqdm import tqdm
 
 from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
 
@@ -170,7 +171,8 @@ def transform_outputs_to_former_inputs(
         })
         sorted_df = sorted_df.sort_values(by="Importance", ascending=False)
         sorted_df_list.append(sorted_df)
-        sorted_df.to_csv(os.path.join(RESULTS_PATH, run_id, "plots", f"shap{i+1}_{target}.csv"), index=False)
+        os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots", "csv"), exist_ok=True)
+        sorted_df.to_csv(os.path.join(RESULTS_PATH, run_id, "plots", "csv", f"shap{i+1}_{target}.csv"), index=False)
         # divide all shap values by target_value
         shap_values[:, :, i] = shap_values[:, :, i] / target_value
 
@@ -215,15 +217,15 @@ def transform_outputs_to_former_inputs(
             "Importance": new_importance
         })
         new_sorted_df = new_sorted_df.sort_values(by="Importance", ascending=False)
-        new_sorted_df.to_csv(os.path.join(RESULTS_PATH, run_id, "plots", f"shap{i+1}_{target}_input_only.csv"), index=False)
+        new_sorted_df.to_csv(os.path.join(RESULTS_PATH, run_id, "plots", "csv", f"shap{i+1}_{target}_input_only.csv"), index=False)
 
-    with open(os.path.join(RESULTS_PATH, run_id, "plots", "feature_renaming.json"), 'w') as json_file:
+    with open(os.path.join(RESULTS_PATH, run_id, "plots", "csv", "feature_renaming.json"), 'w') as json_file:
         json.dump(feature_renaming, json_file, indent=4)
 
     return input_only
 
 
-def draw_shap_plot(run_id, shap_values, X_test, features, targets):
+def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False):
     units = ["Mt CO2/yr", "Mt CH4/yr", "Mt N2O/yr", "PJ/yr", "PJ/yr", "PJ/yr", "PJ/yr", "PJ/yr", "PJ/yr"]
     n = 8
 
@@ -237,23 +239,46 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets):
         if i < num_targets:
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmpfile:
                 temp_filename = tmpfile.name
+            
             # Create a new figure for the SHAP plot
             fig_shap = plt.figure()
-            shap.summary_plot(shap_values[:, :, i], X_test, feature_names=features, max_display=n, plot_type="violin", show=False)
+            
+            if exclude_top:
+                # Find the top feature for this target and exclude it
+                target_shap_values = np.abs(shap_values[:, :, i])
+                mean_shap_values = np.mean(target_shap_values, axis=0)
+                top_feature_idx = np.argmax(mean_shap_values)
+                
+                # Create masks to exclude the top feature
+                feature_mask = np.ones(len(features), dtype=bool)
+                feature_mask[top_feature_idx] = False
+                
+                # Filter data
+                filtered_shap_values = shap_values[:, feature_mask, i]
+                filtered_X_test = X_test.iloc[:, feature_mask]
+                filtered_features = [features[j] for j in range(len(features)) if feature_mask[j]]
+                
+                shap.summary_plot(filtered_shap_values, filtered_X_test, feature_names=filtered_features, max_display=n, plot_type="violin", show=False)
+            else:
+                shap.summary_plot(shap_values[:, :, i], X_test, feature_names=features, max_display=n, plot_type="violin", show=False)
+            
             fig_shap.tight_layout()
             fig_shap.savefig(temp_filename, format='png', bbox_inches='tight')
             plt.close(fig_shap)  # Close the SHAP figure
+            
             img = Image.open(temp_filename)
             ax.imshow(img)
             ax.axis('off')
-            ax.set_title("Impact on " + targets[i] + " (" + units[i] + ")")
+            title_suffix = " (excluding top feature)" if exclude_top else ""
+            ax.set_title("Impact on " + targets[i] + " (" + units[i] + ")" + title_suffix)
             os.remove(temp_filename)
         else:
             ax.axis('off')
 
     plt.tight_layout()
-    os.makedirs(os.path.join(RESULTS_PATH, run_id,  "plots"), exist_ok=True)
-    plt.savefig(os.path.join(RESULTS_PATH, run_id, "plots", "shap_plot.png"))
+    os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots"), exist_ok=True)
+    filename = "shap_plot_no_first.png" if exclude_top else "shap_plot.png"
+    plt.savefig(os.path.join(RESULTS_PATH, run_id, "plots", filename))
     plt.close()
 
 
@@ -272,5 +297,7 @@ def plot_shap(run_id, X_test_with_index, features, targets):
     logging.info("Transforming outputs to former inputs...")
     shap_values = np.load(os.path.join(RESULTS_PATH, run_id, "plots", "shap_values.npy"), allow_pickle=True)
     shap_values = transform_outputs_to_former_inputs(run_id, shap_values, targets, features)
-    logging.info("Drawing SHAP plots...")
-    draw_shap_plot(run_id, shap_values, X_test, features, targets)
+    logging.info("Drawing regular SHAP plots...")
+    draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False)
+    logging.info("Drawing SHAP plots excluding top feature...")
+    draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=True)
