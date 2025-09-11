@@ -1,12 +1,9 @@
 """
-Refactored data processing pipeline from the original Jupyter notebook into a
-reusable module with a small CLI.
-
-Major steps (mirrors the notebook):
+Data processing pipeline:
 - Read AR6 scenario CSVs
 - Build variable stats and select variables (inputs + configured outputs)
 - Merge scenario categories
-- Resolve units (EJ/yr→PJ/yr, Million tkm→bn tkm/yr, Million pkm→bn pkm/yr)
+- Resolve units (e.g. EJ/yr→PJ/yr)
 - Melt/pivot into year-indexed wide format
 - Apply completeness threshold and compute NA stats
 - Produce time-series wide dataset (rows: model/scenario/region/variable; cols: years)
@@ -19,6 +16,7 @@ Metadata CSVs are expected under <repo_root>/metadata/.
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 from typing import Iterable, List, Tuple, Optional, cast
 
@@ -28,6 +26,7 @@ import pandas as pd
 from configs.paths import DATA_PATH, RESULTS_PATH, RAW_DATA_PATH
 from configs.data import YEAR_STARTS_AT
 from configs import data as dp
+from src.utils.utils import setup_console_logging
 
 
 # ---------- Paths & constants ----------
@@ -136,7 +135,9 @@ def resolve_units(df: pd.DataFrame, year_starts_at: int):
         bad = unit_check[unit_check > 1]
         raise ValueError(f"Unit mismatch found for {len(bad)} combinations. Sample: {bad.head(5)}")
 
-    unit_table = df.loc[:, df.columns[: (year_starts_at + 1)]].copy()
+    # Keep the leading columns up to and including 'Unit' for the unit table
+    leading_cols = list(df.columns[: (year_starts_at + 1)])
+    unit_table = df.loc[:, leading_cols].copy()
     df = df.drop(columns=["Unit"])  # remove Unit after capturing unit_table
     return df, unit_table
 
@@ -202,25 +203,26 @@ def run_pipeline(
     filenames: Iterable[str] | None = None,
 ) -> Path:
     """Execute the end-to-end processing and return the path to the dataset CSV."""
-
     # Defaults for AR6 file names (v1.1) matching the original notebook
     if filenames is None:
         filenames = dp.RAW_FILENAMES
 
-    analysis_dir = results_dir / "analysis"
-    ensure_dirs(data_dir, results_dir, analysis_dir)
+    # We'll materialize artifacts into a versioned directory inside DATA_PATH.
+    # Create base output dirs; versioned dir is created after version is computed.
+    ensure_dirs(data_dir, results_dir)
 
     # Load
+    logging.info("Loading raw CSV files…")
     df_list = load_raw_files(raw_dir, filenames)
+    logging.info(f"Loaded {len(df_list)} frames; rows per file: {[len(df) for df in df_list]}")
     var_class, scenario_cat = load_metadata()
+    logging.info(f"Loaded metadata: var_class={len(var_class)} rows, scenario_cat={len(scenario_cat)} rows")
 
     # Stats and selection
     stat_table_raw = build_stat_table(df_list)
     stat_table = merge_variable_classification(stat_table_raw, var_class)
     selected_vars = select_variables(stat_table, output_variables, min_count=min_count or dp.MIN_COUNT)
-
-    # Save selection snapshot
-    selected_vars.to_csv(analysis_dir / "var_selected.csv", index=False)
+    logging.info(f"Selected {len(selected_vars)} out of {len(stat_table)} variables (inputs + configured outputs)")
 
     # Filter variables
     filtered = filter_by_selected_variables(df_list, selected_vars)
@@ -231,51 +233,68 @@ def run_pipeline(
     # Unit normalization and capture unit table
     processed_list: List[pd.DataFrame] = []
     unit_tables: List[pd.DataFrame] = []
-    for d in filtered:
+    for i, d in enumerate(filtered, start=1):
         proc, unit_tbl = resolve_units(d, YEAR_STARTS_AT)
         processed_list.append(proc)
         unit_tables.append(cast(pd.DataFrame, unit_tbl))
 
     unit_table = pd.concat(unit_tables, axis=0, ignore_index=True)
-    if dp.SAVE_ANALYSIS:
-        unit_table.to_csv(analysis_dir / "unit_table.csv", index=False)
+    # Defer writing until versioned directory is known
 
     # Year-wise wide frame
+    logging.info("Melting and pivoting into year-indexed wide frames…")
     processed_year_frames = [melt_and_pivot_year(d, YEAR_STARTS_AT) for d in processed_list]
     processed_df_year = pd.concat(processed_year_frames, axis=0, ignore_index=True)
+    logging.info(f"Year-wise concatenated shape: {processed_df_year.shape}")
 
     # Completeness filtering
+    before_rows = len(processed_df_year)
     processed_df_year = apply_completeness_threshold(
         processed_df_year, selected_vars, completeness_ratio or dp.COMPLETENESS_RATIO
     )
+    logging.info(f"Rows: {before_rows} -> {len(processed_df_year)} after completeness filter")
 
     # Missing stats
     value_only = processed_df_year.drop(columns=["Model", "Scenario", "Scenario_Category", "Region", "Year"], errors="ignore")
     stat_table_with_na = compute_missing_stats(value_only, stat_table)
-    if dp.SAVE_ANALYSIS:
-        stat_table_with_na.to_csv(analysis_dir / "stat_table.csv", index=False)
+    # Defer writing until versioned directory is known
 
     # Final time-series wide dataset
+    logging.info("Creating final time-series wide dataset…")
     final_series = to_series_wide(processed_df_year)
-    # Build versioned dataset name
-    if dataset_name is None:
-        from datetime import datetime
+    logging.info(f"Final series shape: {final_series.shape}")
 
+    # Build version label and versioned directory name
+    from datetime import datetime
+    if dataset_name is None:
         parts = [dp.NAME_PREFIX, f"min{min_count or dp.MIN_COUNT}", f"comp{(completeness_ratio or dp.COMPLETENESS_RATIO):.1f}"]
         if dp.TAGS:
             parts.extend(dp.TAGS)
         if dp.INCLUDE_DATE:
             parts.append(datetime.now().strftime(dp.DATE_FMT))
-        dataset_name = "-".join(parts) + ".csv"
+        version_label = "-".join(parts)  # no extension
+    else:
+        # Use provided name without extension as the version label
+        version_label = Path(dataset_name).stem
 
-    out_path = data_dir / dataset_name
+    version_dir = data_dir / version_label
+    ensure_dirs(version_dir)
+
+    # Write analysis artifacts now into the versioned directory
+    if dp.SAVE_ANALYSIS:
+        selected_vars.to_csv(version_dir / "var_selected.csv", index=False)
+        unit_table.to_csv(version_dir / "unit_table.csv", index=False)
+        stat_table_with_na.to_csv(version_dir / "stat_table.csv", index=False)
+
+    # Save processed series into the versioned directory with a stable filename
+    out_path = version_dir / "processed_series.csv"
     final_series.to_csv(out_path, index=False)
 
     # Write a small manifest for traceability
     try:
         import json
         manifest = {
-            "dataset": str(out_path.name),
+            "dataset": str(out_path.relative_to(version_dir)),
             "raw_dir": str(raw_dir),
             "filenames": list(filenames),
             "min_count": int(min_count or dp.MIN_COUNT),
@@ -284,25 +303,17 @@ def run_pipeline(
             "output_variables": list(output_variables),
             "tags": list(getattr(dp, "TAGS", [])),
         }
-        (results_dir / "analysis" / (out_path.stem + "-manifest.json")).write_text(json.dumps(manifest, indent=2))
+        # Write manifest alongside the dataset using the version label in the filename
+        (version_dir / f"{version_label}-manifest.json").write_text(json.dumps(manifest, indent=2))
     except Exception as e:
-        print(f"Warning: failed to write manifest: {e}")
-
-    # Maintain a 'latest' symlink for easy discovery
-    try:
-        latest_link = data_dir / f"{dp.NAME_PREFIX}-latest.csv"
-        if latest_link.exists() or latest_link.is_symlink():
-            latest_link.unlink()
-        latest_link.symlink_to(out_path.name)
-    except Exception as e:
-        print(f"Warning: failed to create latest symlink: {e}")
+        logging.warning(f"Failed to write manifest: {e}")
 
     # Basic logging
     total = final_series.shape[0] * final_series.shape[1]
     missing = final_series.isna().sum().sum()
     pct = (missing / total * 100.0) if total else 0.0
-    print(f"Saved dataset: {out_path}")
-    print(f"Rows: {final_series.shape[0]}, Cols: {final_series.shape[1]}, Missing: {missing}/{total} ({pct:.2f}%)")
+    logging.info(f"Saved dataset: {out_path}")
+    logging.info(f"Rows: {final_series.shape[0]}, Cols: {final_series.shape[1]}, Missing: {missing}/{total} ({pct:.2f}%)")
 
     return out_path
 
@@ -328,6 +339,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
+    # Configure console logging with shared format (default INFO)
+    setup_console_logging(level=logging.INFO)
+
     # Use OUTPUT_VARIABLES from unified config
     output_vars = dp.OUTPUT_VARIABLES
 
@@ -339,10 +353,8 @@ def main() -> None:
         output_variables=output_vars,
         min_count=args.min_count,
         completeness_ratio=args.completeness,
-        filenames=args.filenames,
+    filenames=args.filenames,
     )
-    print(out_csv)
-
 
 if __name__ == "__main__":
     main()

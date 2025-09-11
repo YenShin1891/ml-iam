@@ -32,7 +32,7 @@ MIN_COUNT = 10100
 COMPLETENESS_RATIO = 0.4
 
 # Versioning / naming
-NAME_PREFIX = "processed_series"
+NAME_PREFIX = "pipeline"
 INCLUDE_DATE = True
 DATE_FMT = "%Y-%m-%d"
 TAGS = ["tgt=9vars", "unit=normalized"]

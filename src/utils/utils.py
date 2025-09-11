@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import pickle
+from typing import Optional
 from datetime import datetime, timezone, timedelta
 from dask.distributed import Client
 
@@ -19,6 +20,53 @@ class KSTFormatter(logging.Formatter):
         return record_time.strftime(datefmt or '%Y-%m-%d %H:%M:%S')
     
 
+def _make_formatter(fmt: str = '%(asctime)s - %(levelname)s - %(message)s') -> logging.Formatter:
+    """Return a KST-based formatter with the standard format."""
+    return KSTFormatter(fmt)
+
+
+def _make_stream_handler(level: int = logging.INFO, fmt: Optional[str] = None) -> logging.Handler:
+    """Create a StreamHandler with KST formatting."""
+    h = logging.StreamHandler()
+    if fmt is None:
+        fmt = '%(asctime)s - %(levelname)s - %(message)s'
+    h.setFormatter(_make_formatter(fmt))
+    h.setLevel(level)
+    return h
+
+
+def _make_file_handler(file_path: str, level: int = logging.INFO, fmt: Optional[str] = None) -> logging.Handler:
+    """Create a FileHandler with KST formatting."""
+    h = logging.FileHandler(file_path)
+    if fmt is None:
+        fmt = '%(asctime)s - %(levelname)s - %(message)s'
+    h.setFormatter(_make_formatter(fmt))
+    h.setLevel(level)
+    return h
+
+
+def setup_console_logging(level: int = logging.INFO, logger_name: Optional[str] = None) -> logging.Logger:
+    """
+    Configure a logger to log to console only using the same KST format as training.
+
+    Args:
+        level: Logging level (default INFO)
+        logger_name: Optional named logger; if None, configures the root logger.
+
+    Returns:
+        The configured logger instance.
+    """
+    logger = logging.getLogger(logger_name) if logger_name else logging.getLogger()
+    # Avoid duplicate handlers if called multiple times
+    logger.handlers.clear()
+    logger.setLevel(level)
+    logger.addHandler(_make_stream_handler(level))
+    # When using a named logger, avoid propagating to root to prevent duplicate prints
+    if logger_name:
+        logger.propagate = False
+    return logger
+
+
 def setup_logging(run_id, log_file=None):
     """
     Set up logging with a log file under the specified run directory.
@@ -30,41 +78,16 @@ def setup_logging(run_id, log_file=None):
     log_dir = os.path.join(RESULTS_PATH, run_id, "logs")
     os.makedirs(log_dir, exist_ok=True)
 
-    handlers = [logging.StreamHandler()]
-    handlers.append(logging.FileHandler(os.path.join(log_dir, log_file)))
+    handlers = [
+        _make_stream_handler(logging.INFO),
+        _make_file_handler(os.path.join(log_dir, log_file), logging.INFO),
+    ]
 
-    formatter = KSTFormatter('%(asctime)s - %(levelname)s - %(message)s')
-
-    for handler in handlers:
-        handler.setFormatter(formatter)
-
-    logging.basicConfig(
-        level=logging.INFO,
-        handlers=handlers
-    )
+    logging.basicConfig(level=logging.INFO, handlers=handlers)
     logging.info("Logging is set up for %s.", run_id)
 
 
-# for model checkpoints
-def save_session_state(session_state, run_id, checkpoint_file_name=CHECKPOINT_FILE_NAME):
-    """
-    Save the session state to a file under the specified run directory.
-    """
-    run_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints")
-    os.makedirs(run_dir, exist_ok=True)
-    file_path = os.path.join(run_dir, checkpoint_file_name)
-    with open(file_path, "wb") as f:
-        pickle.dump(session_state, f)
-    logging.info("Session state saved to %s.", file_path)
-
-def load_session_state(run_id, checkpoint_file_name=CHECKPOINT_FILE_NAME):
-    file_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", checkpoint_file_name)
-    try:
-        with open(file_path, "rb") as f:
-            return pickle.load(f)
-    except FileNotFoundError:
-        logging.error("No saved session state found at %s.", file_path)
-        return {}
+# for model checkpoints (legacy simple pickle helpers retained below)
 
 
 def get_next_run_id():

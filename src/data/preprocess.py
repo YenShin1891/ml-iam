@@ -122,7 +122,13 @@ def prepare_data(prepared, targets, features):
 
 def load_and_process_data() -> pd.DataFrame:
     logging.info("Loading and processing data...")
-    processed_series = pd.read_csv(os.path.join(DATA_PATH, DATASET_NAME))
+    # Load the dataset specified in configs.data.DATASET_NAME.
+    # DATASET_NAME can include a subdirectory (e.g., "version-label/processed_series.csv").
+    dataset_path = os.path.join(DATA_PATH, DATASET_NAME)
+    if not os.path.isfile(dataset_path):
+        raise FileNotFoundError(f"Processed dataset not found: {dataset_path}. Update configs.data.DATASET_NAME.")
+    logging.info(f"Reading processed dataset: {dataset_path}")
+    processed_series = pd.read_csv(dataset_path)
     # Identify year and non-year columns robustly
     all_cols = list(processed_series.columns)
     year_cols = [c for c in all_cols if str(c).isdigit()]
