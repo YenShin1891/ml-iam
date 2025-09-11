@@ -8,7 +8,8 @@ from tqdm import tqdm
 import xgboost as xgb
 from xgboost import DMatrix
 
-from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH, N_LAG_FEATURES
+from configs.paths import RESULTS_PATH
+from configs.data import INDEX_COLUMNS, NON_FEATURE_COLUMNS, N_LAG_FEATURES
 
 def group_test_data(X_test_with_index, cache=None):
     """
@@ -77,7 +78,7 @@ def autoregressive_predictions(model, group_indices, group_matrix, lag_indices_d
     Generate autoregressive predictions for a single grouped series.
 
     Notes:
-    - Supports arbitrary N_LAG_FEATURES based on configs.config.N_LAG_FEATURES.
+    - Supports arbitrary N_LAG_FEATURES based on configs.data.N_LAG_FEATURES.
     - Does not rely on lag_indices_dict; uses feature column names to locate
       lagged feature columns of the form prev_<var> or prev{lag}_<var>.
     - Assumes model.predict returns a vector of targets aligned with
@@ -96,7 +97,7 @@ def autoregressive_predictions(model, group_indices, group_matrix, lag_indices_d
     preds_target[start_pos, :] = first_pred.reshape(1, -1)[0]
 
     # Precompute lagged feature column indices once
-    from configs.config import OUTPUT_VARIABLES
+    from configs.data import OUTPUT_VARIABLES
     out_vars = OUTPUT_VARIABLES[:num_targets]
     # Build a dict: lag -> list of column indices (or None) for each output variable
     lag_col_indices = {}

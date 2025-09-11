@@ -6,7 +6,7 @@ import pickle
 from datetime import datetime, timezone, timedelta
 from dask.distributed import Client
 
-from configs.config import RESULTS_PATH
+from configs.paths import RESULTS_PATH
 
 # constants
 CHECKPOINT_FILE_NAME = "session_state.pkl"

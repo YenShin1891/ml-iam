@@ -7,7 +7,7 @@ import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 import json
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 import time
 from dask.distributed import Client
 import dask.dataframe as dd
@@ -18,13 +18,13 @@ from contextlib import contextmanager
 from xgboost import XGBRegressor
 from xgboost.dask import DaskDMatrix, train as dask_train
 
-from configs.config import RESULTS_PATH
-from configs.dask_config import *
-from configs.models.xgb import *
+from configs.paths import RESULTS_PATH
+from configs.models import (
+    XGBRuntimeConfig,
+    XGBTrainerConfig,
+    XGBSearchSpace,
+)
 from src.trainers.evaluation import test_xgb_autoregressively
-
-SEARCH_ITER_N_PER_STAGE = 15  # Iterations per stage
-N_FOLDS = 5
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4'
 os.environ['XGB_CUDA_MAX_MEMORY_PERCENT'] = '80'
@@ -106,21 +106,24 @@ def scatter_to_dask(client, X, y):
     return X_dask, y_dask
 
 
-def get_xgb_params(base_params: dict) -> dict:
+def get_xgb_params(base_params: dict, trainer_cfg: Optional[XGBTrainerConfig] = None) -> dict:
+    """Compose final XGBoost params from base hyperparams and trainer defaults."""
+    if trainer_cfg is None:
+        trainer_cfg = XGBTrainerConfig()
     return {
-        'tree_method': 'hist',
-        'device': 'cuda',
-        'eval_metric': 'rmse',
-        'verbosity': 0,
-        'max_bin': 256,
-        **base_params
+        'tree_method': trainer_cfg.tree_method,
+        'device': trainer_cfg.device,
+        'eval_metric': trainer_cfg.eval_metric,
+        'verbosity': trainer_cfg.verbosity,
+        'max_bin': trainer_cfg.max_bin,
+        **base_params,
     }
 
 
 def train_and_evaluate_single_config(
-    X, y, X_with_index, train_groups, targets, params, gpu_id, client, 
-    use_cv=True, X_val=None, y_val=None, X_val_with_index=None, n_folds=N_FOLDS,
-    use_dask=True
+    X, y, X_with_index, train_groups, targets, params, gpu_id, client,
+    use_cv=True, X_val=None, y_val=None, X_val_with_index=None, n_folds=5,
+    use_dask=True, early_stopping_rounds: int = 15, trainer_cfg: Optional[XGBTrainerConfig] = None,
 ) -> Tuple[Dict, float]:
     """
     Train and evaluate a single parameter configuration using either k-fold CV or single validation set.
@@ -160,7 +163,7 @@ def train_and_evaluate_single_config(
     --------
     Tuple[Dict, float]: A tuple containing the parameters and the negative RMSE score.
     """
-    with cuda_device(str(gpu_id % 5)):
+    with cuda_device(str(gpu_id)):
         try:
             if use_cv:
                 # Cross-validation mode
@@ -179,7 +182,8 @@ def train_and_evaluate_single_config(
                     
                     fold_score = _train_single_fold(
                         X_train, y_train, X_val_fold, y_val_fold, X_val_with_index_fold,
-                        targets, params, client, fold_cache[cache_key], fold+1, use_dask
+                        targets, params, client, fold_cache[cache_key], fold+1, use_dask,
+                        early_stopping_rounds=early_stopping_rounds, trainer_cfg=trainer_cfg,
                     )
                     scores.append(fold_score)
                     
@@ -194,7 +198,8 @@ def train_and_evaluate_single_config(
                 logging.info(f"Training with params: {params}")
                 fold_score = _train_single_fold(
                     X, y, X_val, y_val, X_val_with_index,
-                    targets, params, client, {}, 1, use_dask
+                    targets, params, client, {}, 1, use_dask,
+                    early_stopping_rounds=early_stopping_rounds, trainer_cfg=trainer_cfg,
                 )
                 score = -fold_score
 
@@ -212,7 +217,10 @@ def train_and_evaluate_single_config(
                 pass
 
 
-def _train_single_fold(X_train, y_train, X_val, y_val, X_val_with_index, targets, params, client, cache, fold_num, use_dask=True):
+def _train_single_fold(
+    X_train, y_train, X_val, y_val, X_val_with_index, targets, params, client, cache, fold_num,
+    use_dask=True, early_stopping_rounds: int = 15, trainer_cfg: Optional[XGBTrainerConfig] = None,
+):
     """
     Helper function to train and evaluate a single fold/validation set.
     
@@ -228,7 +236,7 @@ def _train_single_fold(X_train, y_train, X_val, y_val, X_val_with_index, targets
     y_train_df = pd.DataFrame(y_train, columns=targets)
     y_val_df = pd.DataFrame(y_val, columns=targets)
     
-    xgb_params = get_xgb_params(params)
+    xgb_params = get_xgb_params(params, trainer_cfg=trainer_cfg)
     num_boost_round = xgb_params.pop('num_boost_round')
     
     if use_dask:
@@ -244,7 +252,7 @@ def _train_single_fold(X_train, y_train, X_val, y_val, X_val_with_index, targets
             dtrain,
             num_boost_round=num_boost_round,
             evals=[(dval, 'validation')],
-            early_stopping_rounds=15,
+            early_stopping_rounds=early_stopping_rounds,
             verbose_eval=25
         )
         
@@ -273,11 +281,11 @@ def _train_single_fold(X_train, y_train, X_val, y_val, X_val_with_index, targets
         # Regular XGBoost training
         regular_model = XGBRegressor(
             n_estimators=num_boost_round,
-            early_stopping_rounds=15,
+            early_stopping_rounds=early_stopping_rounds,
             **xgb_params
         )
         
-        regular_model.fit(
+    regular_model.fit(
             X_train, y_train_df,
             eval_set=[(X_val, y_val_df)],
             verbose=25
@@ -303,21 +311,7 @@ def _train_single_fold(X_train, y_train, X_val, y_val, X_val_with_index, targets
     return rmse
 
 
-def build_param_dist(stage_params: dict, best_params: dict) -> dict:
-    """
-    Merge current stage params with best params from previous stages.
-    If a param is None in stage_params, use the value from best_params.
-    """
-    param_dist = {}
-    for param, values in stage_params.items():
-        if values is None:
-            if param in best_params:
-                param_dist[param] = [best_params[param]]
-            else:
-                raise ValueError(f"Parameter '{param}' required from previous stage but not found in best_params.")
-        else:
-            param_dist[param] = values
-    return param_dist
+# build_param_dist is provided by XGBSearchSpace to keep config logic with configs
 
 
 def hyperparameter_search(
@@ -329,10 +323,10 @@ def hyperparameter_search(
     run_id: str, 
     start_stage: int = 1,
     use_cv: bool = True,
-    X_val: pd.DataFrame = None,
-    y_val: np.array = None,
-    X_val_with_index: pd.DataFrame = None,
-    val_groups: np.array = None,
+    X_val: Optional[pd.DataFrame] = None,
+    y_val: Optional[np.array] = None,
+    X_val_with_index: Optional[pd.DataFrame] = None,
+    val_groups: Optional[np.array] = None,
     use_dask: bool = True
 ) -> Tuple[Dict, Dict]:
     """
@@ -397,14 +391,16 @@ def hyperparameter_search(
         'stage_3': []
     }
     
+    # Trainer and runtime configs (aligned with TFT style)
+    trainer_cfg = XGBTrainerConfig()
+    runtime_cfg = XGBRuntimeConfig()
+    runtime_cfg.apply()
+
     best_params = {}
     overall_best_score = float('-inf')
     overall_best_params = None
-    stages = [
-        ("Stage 1: Tree Structure", STAGE_1_PARAMS),
-        ("Stage 2: Learning Rate & Trees", STAGE_2_PARAMS),
-        ("Stage 3: Regularization", STAGE_3_PARAMS)
-    ]
+    search_space = XGBSearchSpace()
+    stages = search_space.stages()
     
     # Load checkpoints from completed stages before start_stage
     for stage_num in range(1, start_stage):
@@ -424,7 +420,7 @@ def hyperparameter_search(
     try:
         # Create client only if using Dask
         if use_dask:
-            client_context = dask_client_context(**CLIENT_CONFIGS)
+            client_context = dask_client_context(**runtime_cfg.client_kwargs)
         else:
             # Create a dummy context manager for non-Dask mode
             from contextlib import nullcontext
@@ -443,7 +439,7 @@ def hyperparameter_search(
                 logging.info(f"Starting {stage_name}{cv_suffix} - {training_mode}")
                 logging.info(f"{'='*50}")
                 
-                current_param_dist = build_param_dist(stage_params, best_params)
+                current_param_dist = XGBSearchSpace.build_param_dist(stage_params, best_params)
                 
                 if not current_param_dist:
                     logging.warning(f"No parameters to search in {stage_name}, skipping...")
@@ -454,28 +450,35 @@ def hyperparameter_search(
                 stage_best_params = None
                 
                 param_sampler = ParameterSampler(
-                    current_param_dist, 
-                    n_iter=SEARCH_ITER_N_PER_STAGE, 
-                    random_state=stage_idx
+                    current_param_dist,
+                    n_iter=trainer_cfg.search_iter_n_per_stage,
+                    random_state=stage_idx,
                 )
                 
                 for i, params in enumerate(param_sampler):
-                    logging.info(f"{stage_name} - Iteration {i+1}/{SEARCH_ITER_N_PER_STAGE}")
+                    logging.info(f"{stage_name} - Iteration {i+1}/{trainer_cfg.search_iter_n_per_stage}")
                     
-                    gpu_id = i % 5
+                    # Select GPU from configured pool round-robin
+                    gpu_id = trainer_cfg.gpu_ids[i % len(trainer_cfg.gpu_ids)]
                     
                     try:
                         if use_cv:
                             params_copy, score = train_and_evaluate_single_config(
                                 X_train, y_train, X_train_with_index, train_groups, targets, params, gpu_id, client,
-                                use_cv=use_cv, use_dask=use_dask
+                                use_cv=use_cv, use_dask=use_dask,
+                                n_folds=trainer_cfg.n_folds,
+                                early_stopping_rounds=trainer_cfg.early_stopping_rounds,
+                                trainer_cfg=trainer_cfg,
                             )
                         else:
                             params_copy, score = train_and_evaluate_single_config(
                                 X_train, y_train, X_train_with_index, train_groups, targets, params, gpu_id, client,
                                 use_cv=use_cv,
                                 X_val=X_val, y_val=y_val, X_val_with_index=X_val_with_index,
-                                use_dask=use_dask
+                                use_dask=use_dask,
+                                n_folds=trainer_cfg.n_folds,
+                                early_stopping_rounds=trainer_cfg.early_stopping_rounds,
+                                trainer_cfg=trainer_cfg,
                             )
                         result = params_copy.copy()
                         score_key = 'mean_test_score' if use_cv else 'val_score'
@@ -526,9 +529,11 @@ def hyperparameter_search(
         logging.info(f"{'='*50}")
         logging.info(f"Overall Best RMSE: {-overall_best_score:.4f}")
         logging.info(f"Final Best Parameters: {overall_best_params}")
-        
-        return overall_best_params, all_results
-        
+
+        # Ensure non-None dict for type safety
+        safe_best = overall_best_params or best_params or {}
+        return safe_best, all_results
+
     except Exception as e:
         logging.error(f"Error in staged hyperparameter search: {str(e)}", exc_info=True)
         raise
@@ -548,12 +553,15 @@ def train_and_save_model(
     with cuda_device("0"):  # Use GPU 0 for final training
         try:
             y_train_df = pd.DataFrame(y_train, columns=targets)
-            xgb_params = get_xgb_params(best_params)
+            trainer_cfg = XGBTrainerConfig()
+            runtime_cfg = XGBRuntimeConfig()
+            runtime_cfg.apply()
+            xgb_params = get_xgb_params(best_params, trainer_cfg=trainer_cfg)
             num_boost_round = xgb_params.pop('num_boost_round')
             
             if use_dask:
                 # Dask training
-                with dask_client_context(**CLIENT_CONFIGS) as client:
+                with dask_client_context(**runtime_cfg.client_kwargs) as client:
                     X_train_dask, y_train_dask = scatter_to_dask(client, X_train, y_train_df)
                     dtrain = DaskDMatrix(client, X_train_dask, y_train_dask)
 

@@ -4,10 +4,15 @@ import numpy as np
 import logging
 from sklearn.preprocessing import StandardScaler
 
-from configs.config import (
-    DATA_PATH, DATASET_NAME, RESULTS_PATH,
-    YEAR_RANGE, N_LAG_FEATURES,
-    OUTPUT_VARIABLES, INDEX_COLUMNS, NON_FEATURE_COLUMNS, CATEGORICAL_COLUMNS
+from configs.paths import DATA_PATH, RESULTS_PATH
+from configs.data import (
+    DATASET_NAME,
+    YEAR_RANGE,
+    N_LAG_FEATURES,
+    OUTPUT_VARIABLES,
+    INDEX_COLUMNS,
+    NON_FEATURE_COLUMNS,
+    CATEGORICAL_COLUMNS,
 )
 
 def split_data(prepared, test_size=0.1, val_size=0.1):
@@ -38,6 +43,32 @@ def encode_categorical_columns(data, columns):
         if col in data.columns:
             data[col] = data[col].astype('category').cat.codes
     return data
+
+
+def add_missingness_indicators(df: pd.DataFrame, features: list):
+    """Add binary _is_missing indicators for the given feature columns.
+
+    Returns updated (df, features) where features includes the new indicator columns.
+    """
+    indicators = df[features].isna().astype(int)
+    indicators.columns = [f"{c}_is_missing" for c in indicators.columns]
+    df = pd.concat([df, indicators], axis=1)
+    return df, features + list(indicators.columns)
+
+
+def impute_with_train_medians(train_df: pd.DataFrame, val_df: pd.DataFrame, test_df: pd.DataFrame, features: list):
+    """Impute NaNs in features using medians computed on the training split.
+
+    Returns (train_df_imputed, val_df_imputed, test_df_imputed).
+    """
+    medians = train_df[features].median(numeric_only=True)
+    train_df = train_df.copy()
+    val_df = val_df.copy()
+    test_df = test_df.copy()
+    train_df[features] = train_df[features].fillna(medians)
+    val_df[features] = val_df[features].fillna(medians)
+    test_df[features] = test_df[features].fillna(medians)
+    return train_df, val_df, test_df
 
 
 def prepare_data(prepared, targets, features):
@@ -92,26 +123,32 @@ def prepare_data(prepared, targets, features):
 def load_and_process_data() -> pd.DataFrame:
     logging.info("Loading and processing data...")
     processed_series = pd.read_csv(os.path.join(DATA_PATH, DATASET_NAME))
-    processed_series = processed_series.loc[:, :'2100']
-    non_year_columns = processed_series.loc[:, :'1990']  # First year column is '1990'
-    year_columns = processed_series.loc[:, str(YEAR_RANGE[0]):str(YEAR_RANGE[1])]
-    
-    # create a heatmap to visualize missing values
-    import seaborn as sns
-    import matplotlib.pyplot as plt
-    # index is the variable names
-    year_columns.index = processed_series['Variable']
-    plt.figure(figsize=(20, 80))
-    sns.heatmap(year_columns.isnull(), cbar=False, cmap='viridis')
-    plt.title('Missing Values Heatmap')
-    plt.xlabel('Year')
-    plt.ylabel('Variable')
-    plt.show()
-    plt.savefig(os.path.join(RESULTS_PATH, 'missing_values_heatmap.png'))
+    # Identify year and non-year columns robustly
+    all_cols = list(processed_series.columns)
+    year_cols = [c for c in all_cols if str(c).isdigit()]
+    # Constrain by configured year range if present
+    y0, y1 = str(YEAR_RANGE[0]), str(YEAR_RANGE[1])
+    year_cols = [c for c in year_cols if y0 <= str(c) <= y1]
+    non_year_cols = [c for c in all_cols if c not in year_cols]
+
+    # Optional: save a heatmap of missing values over variables x years
+    try:
+        import seaborn as sns  # type: ignore
+        import matplotlib.pyplot as plt  # type: ignore
+        heatmap_df = processed_series.set_index('Variable')[year_cols]
+        plt.figure(figsize=(20, 80))
+        sns.heatmap(heatmap_df.isnull(), cbar=False, cmap='viridis')
+        plt.title('Missing Values Heatmap')
+        plt.xlabel('Year')
+        plt.ylabel('Variable')
+        os.makedirs(RESULTS_PATH, exist_ok=True)
+        plt.savefig(os.path.join(RESULTS_PATH, 'missing_values_heatmap.png'), bbox_inches='tight')
+        plt.close()
+    except Exception:
+        logging.warning("Could not generate missing values heatmap; continuing.")
 
     year_melted = processed_series.melt(
-        id_vars=non_year_columns, value_vars=year_columns,
-        var_name='Year', value_name='value'
+        id_vars=non_year_cols, value_vars=year_cols, var_name='Year', value_name='value'
     )
     var_pivoted = year_melted.pivot_table(
         index=['Model', 'Model_Family', 'Scenario', 'Scenario_Category', 'Region', 'Year'],

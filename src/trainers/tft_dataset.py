@@ -8,8 +8,8 @@ import pandas as pd
 import torch
 from pytorch_forecasting import TimeSeriesDataSet
 
-from configs.config import RESULTS_PATH
-from configs.models import TFTDatasetConfig
+from configs.paths import RESULTS_PATH
+from configs.models.tft import TFTDatasetConfig
 
 
 def build_datasets(session_state: Dict) -> Tuple[TimeSeriesDataSet, TimeSeriesDataSet]:

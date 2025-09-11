@@ -9,7 +9,7 @@ import pandas as pd
 import torch
 from sklearn.model_selection import ParameterSampler
 
-from configs.config import RESULTS_PATH
+from configs.paths import RESULTS_PATH
 from configs.models import TFTSearchSpace, TFTTrainerConfig
 from .tft_dataset import (
     build_datasets,
@@ -151,7 +151,7 @@ def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
         if not template_time_idx or not template_group_ids:
             raise ValueError("Saved dataset template is missing time_idx or group_ids")
 
-        # Create test dataloader
+    # Create test dataloader
         test_loader = test_dataset.to_dataloader(
             train=False,
             batch_size=64,

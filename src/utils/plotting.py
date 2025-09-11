@@ -14,7 +14,8 @@ import xgboost as xgb
 from PIL import Image
 from tqdm import tqdm
 
-from configs.config import INDEX_COLUMNS, NON_FEATURE_COLUMNS, RESULTS_PATH
+from configs.paths import RESULTS_PATH
+from configs.data import INDEX_COLUMNS, NON_FEATURE_COLUMNS
 
 def preprocess_data(
     test_data: pd.DataFrame, 
