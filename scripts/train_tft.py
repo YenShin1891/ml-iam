@@ -96,8 +96,7 @@ def plot_tft(session_state, run_id):
     
     if horizon_df is not None and horizon_y_true is not None:
         logging.info("Using forecast horizon subset (%d rows) for plotting.", len(horizon_df))
-        plot_scatter(run_id, horizon_df, horizon_y_true, preds, targets, use_log=False, model_label="TFT")
-        plot_scatter(run_id, horizon_df, horizon_y_true, preds, targets, use_log=True, model_label="TFT")
+    plot_scatter(run_id, horizon_df, horizon_y_true, preds, targets, model_name="TFT")
     else:
         raise ValueError("No forecast horizon data found in session state. Please run the test step with predict=True.")
 

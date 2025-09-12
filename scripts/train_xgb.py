@@ -11,8 +11,8 @@ from src.utils.plotting import plot_scatter, plot_shap
 
 np.random.seed(0)
 
-def preprocessing(run_id):
-    data = load_and_process_data()
+def preprocessing(run_id, dataset=None):
+    data = load_and_process_data(version=dataset)
     prepared, features, targets = prepare_features_and_targets(data)
     prepared = prepared.dropna(subset=targets)
     (
@@ -119,9 +119,6 @@ def plot_xgb(session_state, run_id):
     test_data = session_state["test_data"]
 
     plot_scatter(run_id, test_data, y_test, preds, targets, model_name="XGBoost")
-    x_scaler = load_session_state(run_id, "x_scaler.pkl")
-    y_scaler = load_session_state(run_id, "y_scaler.pkl")
-    plot_scatter(run_id, test_data, y_scaler.inverse_transform(y_test), y_scaler.inverse_transform(preds), targets, filename="scatter_plot_inversed.png", model_name="XGBoost")
     plot_shap(run_id, X_test_with_index, features, targets)
 
 
@@ -147,6 +144,12 @@ def parse_arguments():
         help="Skip hyperparameter search step when running full pipeline.",
         required=False,
     )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        help="Dataset subdirectory name to use for processed_series.csv. Falls back to DEFAULT_DATASET if not specified.",
+        required=False,
+    )
     args = parser.parse_args()
     
     # Validation: if resume is specified, run_id must be provided
@@ -157,17 +160,17 @@ def parse_arguments():
     if not args.resume and args.run_id:
         parser.error("--run_id should only be specified when using --resume")
     
-    return args.run_id, args.resume, args.note, args.skip_search
+    return args.run_id, args.resume, args.note, args.skip_search, args.dataset
 
 
 def main():
-    run_id, resume, note, skip_search = parse_arguments()
+    run_id, resume, note, skip_search, dataset = parse_arguments()
 
     if resume is None:
         # Full pipeline: process -> search -> train -> test -> plot
         run_id = get_next_run_id()
         setup_logging(run_id)
-        session_state = preprocessing(run_id)
+        session_state = preprocessing(run_id, dataset)
         save_session_state(session_state, run_id)
         resume = "train" if skip_search else "search"  # Start from train step if skipping search
     else:

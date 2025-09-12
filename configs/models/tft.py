@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Union
 
-from configs.config import CATEGORICAL_COLUMNS, INDEX_COLUMNS, MAX_SERIES_LENGTH
+from configs.data import CATEGORICAL_COLUMNS, INDEX_COLUMNS, MAX_SERIES_LENGTH
 
 
 @dataclass

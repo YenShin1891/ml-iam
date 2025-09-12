@@ -10,8 +10,8 @@ from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_forecasting import TemporalFusionTransformer, RMSE, TimeSeriesDataSet
 from pytorch_forecasting.metrics import MultiLoss
 
-from configs.config import RESULTS_PATH
-from configs.models import TFTTrainerConfig
+from configs.paths import RESULTS_PATH
+from configs.models.tft import TFTTrainerConfig
 from .tft_utils import get_default_num_workers
 
 
