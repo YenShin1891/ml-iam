@@ -281,11 +281,9 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=F
                     plot_type="violin",
                     show=False,
                 )
-            
             fig_shap.tight_layout()
             fig_shap.savefig(temp_filename, format='png', bbox_inches='tight')
             plt.close(fig_shap)  # Close the SHAP figure
-            
             img = Image.open(temp_filename)
             ax.imshow(img)
             ax.axis('off')
