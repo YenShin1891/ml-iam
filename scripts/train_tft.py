@@ -143,9 +143,7 @@ def main():
         return
     else:
         setup_logging(run_id)
-        # session_state = load_session_state(run_id)
-        session_state = process_data()
-        save_session_state(session_state, run_id)
+        session_state = load_session_state(run_id)
 
     # Step-wise execution when resuming
     if resume == "search":
@@ -154,10 +152,10 @@ def main():
     if resume in ["search", "train"]:
         train_tft(session_state, run_id)
         save_session_state(session_state, run_id)
-    if resume in ["test"]:
+    if resume in ["search", "train", "test"]:
         test_tft(session_state, run_id)
         save_session_state(session_state, run_id)
-    if resume in ["test", "plot"]:
+    if resume in ["search", "train", "test", "plot"]:
         plot_tft(session_state, run_id)
 
 
