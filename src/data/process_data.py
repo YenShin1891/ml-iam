@@ -83,11 +83,17 @@ def merge_variable_classification(stat_table: pd.DataFrame, var_class: pd.DataFr
     return stat_table.merge(subset, on="Variable", how="left")
 
 
-def select_variables(stat_table: pd.DataFrame, output_variables: Iterable[str], min_count: Optional[int]) -> pd.DataFrame:
+def select_variables(stat_table: pd.DataFrame, output_variables: Iterable[str], min_count: Optional[int], include_intermediate: bool = False) -> pd.DataFrame:
     selected = stat_table.copy()
     if min_count is not None:
         selected = selected[selected["Count"] >= min_count]
+    
+    # Base mask: input variables and configured output variables
     mask = (selected["Type"] == "input") | (selected["Variable"].isin(list(output_variables)))
+    
+    if include_intermediate:
+        mask = mask | (selected["Type"] == "intermediate")
+    
     return cast(pd.DataFrame, selected.loc[mask].reset_index(drop=True))
 
 
@@ -221,8 +227,15 @@ def run_pipeline(
     # Stats and selection
     stat_table_raw = build_stat_table(df_list)
     stat_table = merge_variable_classification(stat_table_raw, var_class)
-    selected_vars = select_variables(stat_table, output_variables, min_count=min_count or dp.MIN_COUNT)
-    logging.info(f"Selected {len(selected_vars)} out of {len(stat_table)} variables (inputs + configured outputs)")
+    
+    # Check if 'include-intermediate' tag is present
+    include_intermediate = "include-intermediate" in getattr(dp, "TAGS", [])
+    
+    selected_vars = select_variables(stat_table, output_variables, min_count=min_count or dp.MIN_COUNT, include_intermediate=include_intermediate)
+    if include_intermediate:
+        logging.info(f"Selected {len(selected_vars)} out of {len(stat_table)} variables (inputs + intermediates + configured outputs)")
+    else:
+        logging.info(f"Selected {len(selected_vars)} out of {len(stat_table)} variables (inputs + configured outputs)")
 
     # Filter variables
     filtered = filter_by_selected_variables(df_list, selected_vars)
@@ -302,6 +315,7 @@ def run_pipeline(
             "year_starts_at": int(YEAR_STARTS_AT),
             "output_variables": list(output_variables),
             "tags": list(getattr(dp, "TAGS", [])),
+            "include_intermediate": include_intermediate,
         }
         # Write manifest alongside the dataset using the version label in the filename
         (version_dir / f"{version_label}-manifest.json").write_text(json.dumps(manifest, indent=2))
@@ -314,8 +328,35 @@ def run_pipeline(
     pct = (missing / total * 100.0) if total else 0.0
     logging.info(f"Saved dataset: {out_path}")
     logging.info(f"Rows: {final_series.shape[0]}, Cols: {final_series.shape[1]}, Missing: {missing}/{total} ({pct:.2f}%)")
+    
+    # Update dataset versions list for easy CLI reference
+    update_dataset_versions_list(data_dir, version_label)
 
     return out_path
+
+
+def update_dataset_versions_list(data_dir, new_version_name):
+    """Update dataset_versions.txt by appending new version names in creation order."""
+    versions_file = data_dir / "dataset_versions.txt"
+    
+    # Read existing versions if file exists
+    existing_versions = []
+    if versions_file.exists():
+        try:
+            with open(versions_file, 'r') as f:
+                existing_versions = [line.strip() for line in f if line.strip()]
+        except FileNotFoundError:
+            existing_versions = []
+    
+    # Only add if this version doesn't already exist
+    if new_version_name not in existing_versions:
+        # Append new version to the end
+        with open(versions_file, 'a') as f:
+            f.write(f"{new_version_name}\n")
+        
+        logging.info(f"Added {new_version_name} to dataset versions list")
+    else:
+        logging.info(f"Version {new_version_name} already exists in versions list")
 
 
 def parse_args() -> argparse.Namespace:

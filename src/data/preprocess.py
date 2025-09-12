@@ -6,7 +6,7 @@ from sklearn.preprocessing import StandardScaler
 
 from configs.paths import DATA_PATH, RESULTS_PATH
 from configs.data import (
-    DATASET_NAME,
+    DEFAULT_DATASET,
     YEAR_RANGE,
     N_LAG_FEATURES,
     OUTPUT_VARIABLES,
@@ -120,13 +120,16 @@ def prepare_data(prepared, targets, features):
         train_groups, val_groups
     )
 
-def load_and_process_data() -> pd.DataFrame:
+def load_and_process_data(version=None) -> pd.DataFrame:
     logging.info("Loading and processing data...")
-    # Load the dataset specified in configs.data.DATASET_NAME.
-    # DATASET_NAME can include a subdirectory (e.g., "version-label/processed_series.csv").
-    dataset_path = os.path.join(DATA_PATH, DATASET_NAME)
+    # Load the dataset specified in configs.data.DEFAULT_DATASET or from version subdirectory.
+    # If version is provided, use version/processed_series.csv, otherwise use DEFAULT_DATASET.
+    if version:
+        dataset_path = os.path.join(DATA_PATH, version, "processed_series.csv")
+    else:
+        dataset_path = os.path.join(DATA_PATH, DEFAULT_DATASET)
     if not os.path.isfile(dataset_path):
-        raise FileNotFoundError(f"Processed dataset not found: {dataset_path}. Update configs.data.DATASET_NAME.")
+        raise FileNotFoundError(f"Processed dataset not found: {dataset_path}. Update configs.data.DEFAULT_DATASET.")
     logging.info(f"Reading processed dataset: {dataset_path}")
     processed_series = pd.read_csv(dataset_path)
     # Identify year and non-year columns robustly
