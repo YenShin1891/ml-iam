@@ -198,19 +198,26 @@ def prepare_features_and_targets(data: pd.DataFrame) -> tuple:
     return prepared, features, targets
 
 
-def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
-    logging.info("Preparing features and targets for TFT...")
+def prepare_features_and_targets_sequence(data: pd.DataFrame) -> tuple:
+    """
+    Prepare features and targets for sequence models (TFT, LSTM, etc.).
+
+    This function does NOT add lagged features as sequence models handle
+    temporal dependencies internally. It adds Step and DeltaYears for
+    time series indexing.
+    """
+    logging.info("Preparing features and targets for sequence models...")
     prepared = data.copy()
-    # Do not need lagging for TFT as it uses autoregressive prediction
+    # Do not need lagging for sequence models as they use autoregressive prediction
     prepared['Year'] = prepared['Year'].astype(int)
 
     targets = OUTPUT_VARIABLES
     features = [col for col in prepared.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
-    
+
     prepared.dropna(subset=targets, inplace=True)
 
     # Make 'Step' and 'DeltaYears' after dropping NaNs
-    # Step must align with group_ids used by TimeSeriesDataSet
+    # Step must align with group_ids used by sequence models
     group_cols = INDEX_COLUMNS
     prepared.sort_values(group_cols + ['Year'], inplace=True)
     prepared['Step'] = prepared.groupby(group_cols).cumcount().astype('int64')
@@ -219,8 +226,17 @@ def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
     prepared['DeltaYears'] = (
         prepared.groupby(group_cols)['Year'].diff().fillna(0).astype(int)
     )
-    
+
     return prepared, features, targets
+
+
+def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
+    """
+    Legacy function for TFT. Now calls prepare_features_and_targets_sequence.
+    Kept for backward compatibility.
+    """
+    logging.info("Preparing features and targets for TFT (using sequence preprocessing)...")
+    return prepare_features_and_targets_sequence(data)
 
 
 def remove_rows_with_missing_outputs(X, y, X2=None):

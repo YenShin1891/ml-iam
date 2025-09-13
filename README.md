@@ -4,7 +4,7 @@ This repository provides a reproducible pipeline for emulating Integrated Assess
 
 * Gradient Boosted Trees (XGBoost)
 * Temporal Fusion Transformer (TFT, PyTorch Lightning)
-* Recurrent Neural Network (RNN, TensorFlow) (outdated)
+* Long Short-Term Memory (LSTM, PyTorch Lightning)
 
 It standardizes data ingestion from the IPCC AR6 Scenario Explorer, feature engineering, model search / training, evaluation, and exploratory visualization via a Streamlit dashboard.
 
@@ -16,7 +16,7 @@ It standardizes data ingestion from the IPCC AR6 Scenario Explorer, feature engi
 4. Data & Licensing (AR6)
 5. Configuration
 6. Data Processing
-7. Training Pipelines (XGB / TFT / RNN)
+7. Training Pipelines (XGB / TFT / LSTM)
 8. Dashboard
 9. Project Layout
 10. Recommended Citation
@@ -26,7 +26,7 @@ It standardizes data ingestion from the IPCC AR6 Scenario Explorer, feature engi
 ---
 ## 1. Features
 * Unified AR6 scenario preprocessing & feature engineering.
-* Modular model families: XGBoost / TFT; RNN (outdated).
+* Modular model families: XGBoost / TFT / LSTM.
 * Resumable pipelines with per‑`run_id` persisted state.
 * Autoregressive evaluation + SHAP & visualization utilities.
 * Streamlit dashboard (exploratory, WIP).
@@ -53,8 +53,8 @@ python scripts/train_xgb.py
 # Train TFT full pipeline
 python scripts/train_tft.py
 
-# Train RNN full pipeline
-python scripts/train_rnn.py
+# Train LSTM full pipeline
+python scripts/train_lstm.py
 
 # Launch dashboard (foreground)
 streamlit run scripts/dashboard.py
@@ -146,14 +146,14 @@ Resume at a later step:
 python scripts/train_tft.py --resume train --run_id 2024_09_15_001
 ```
 
-### RNN (`scripts/train_rnn.py`) (outdated)
-Minimal TensorFlow implementation retained for baseline comparison.
+### LSTM (`scripts/train_lstm.py`)
+PyTorch Lightning implementation with sequence modeling capabilities:
 ```bash
-python scripts/train_rnn.py
+python scripts/train_lstm.py
 ```
-Re-use an existing run for testing & plotting only:
+Resume at a later step:
 ```bash
-python scripts/train_rnn.py --run_id <existing_id>
+python scripts/train_lstm.py --resume train --run_id 2024_09_15_001
 ```
 
 ---
@@ -177,7 +177,7 @@ nohup streamlit run scripts/dashboard.py --logger.level=info --server.runOnSave=
 ├── scripts/
 │   ├── train_xgb.py       # XGBoost pipeline driver
 │   ├── train_tft.py       # TFT pipeline driver
-│   ├── train_rnn.py       # RNN pipeline driver
+│   ├── train_lstm.py      # LSTM pipeline driver
 │   └── dashboard.py       # Streamlit dashboard (exploration)
 ├── src/
 │   ├── data/              # Preprocessing, feature engineering, dataset builders
