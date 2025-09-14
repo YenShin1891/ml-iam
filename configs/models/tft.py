@@ -14,8 +14,8 @@ class TFTDatasetConfig:
 
     time_idx: str = "Step"
     group_ids: List[str] = field(default_factory=lambda: INDEX_COLUMNS)
-    max_encoder_length: int = 1
-    min_encoder_length: int = 1
+    max_encoder_length: int = 2
+    min_encoder_length: int = 2
     max_prediction_length: int = MAX_SERIES_LENGTH
     min_prediction_length: int = 1
     add_relative_time_idx: bool = True

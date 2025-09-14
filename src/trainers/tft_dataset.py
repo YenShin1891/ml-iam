@@ -2,7 +2,7 @@
 
 import logging
 import os
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List, Any
 
 import pandas as pd
 import torch
@@ -10,27 +10,71 @@ from pytorch_forecasting import TimeSeriesDataSet
 
 from configs.paths import RESULTS_PATH
 from configs.models.tft import TFTDatasetConfig
+from configs.data import CATEGORICAL_COLUMNS, INDEX_COLUMNS
+
+
+SENTINEL_CATEGORY = "MISSING"  # retained in case future logic needs it
+
+
+# --- Categorical encoder construction (restored from working logic) ---
+try:
+    from pytorch_forecasting.data.encoders import NaNLabelEncoder  # type: ignore
+except Exception:  # pragma: no cover
+    NaNLabelEncoder = None  # type: ignore
+
+
+def _ordered_categorical_cols(features: List[str]) -> List[str]:
+    """Deterministic order: group ids + static categoricals + indicator columns."""
+    static_cols = list(INDEX_COLUMNS) + [c for c in CATEGORICAL_COLUMNS if c in features]
+    indicator_cols = [f for f in features if f.endswith("_is_missing")]
+    ordered = list(dict.fromkeys(static_cols + indicator_cols))
+    return ordered
+
+
+def _build_union_encoders(session_state: Dict, categorical_cols: List[str], add_nan: bool = False) -> Dict[str, Any]:
+    """Fit NaNLabelEncoder with a closed vocabulary aggregated across splits."""
+    if NaNLabelEncoder is None:
+        logging.warning("NaNLabelEncoder unavailable; skipping pretrained categorical encoders.")
+        return {}
+    dfs = [session_state.get("train_data"), session_state.get("val_data"), session_state.get("test_data")]
+    df_all = pd.concat([d for d in dfs if isinstance(d, pd.DataFrame)], axis=0, ignore_index=True)
+    encoders: Dict[str, Any] = {}
+    for col in categorical_cols:
+        if col not in df_all.columns:
+            series = pd.Series(["__NA__"], name=col)
+        else:
+            raw = df_all[col].astype(str).fillna("__NA__")
+            categories = sorted(pd.unique(raw))
+            series = pd.Series(pd.Categorical(raw, categories=categories, ordered=True), name=col)
+        enc = NaNLabelEncoder(add_nan=add_nan)
+        enc.fit(series)
+        encoders[col] = enc
+    return encoders
 
 
 def build_datasets(session_state: Dict) -> Tuple[TimeSeriesDataSet, TimeSeriesDataSet]:
-    """Build train/val TimeSeriesDataSet objects using shared template logic."""
-    val_data = session_state["val_data"]
-
+    """Build train/val TimeSeriesDataSet objects using shared template logic (encoders handle categoricals)."""
+    val_data = session_state["val_data"].copy()
     train_dataset, _ = create_train_dataset(session_state)
     val_dataset = from_train_template(train_dataset, val_data, mode="eval")
-
     return train_dataset, val_dataset
 
 
 def create_train_dataset(session_state: Dict) -> Tuple[TimeSeriesDataSet, TFTDatasetConfig]:
-    """Create training dataset with configuration."""
-    train_data = session_state["train_data"]
+    """Create training dataset with configuration, coercing categorical-like columns first."""
+    train_data = session_state["train_data"].copy()
     features = session_state["features"]
     targets = session_state["targets"]
-    
+
     config = TFTDatasetConfig()
+
+    # Build union encoders (include group ids to stabilize mapping) then inject
+    categorical_cols = _ordered_categorical_cols(features)
+    pretrained_encoders = _build_union_encoders(session_state, categorical_cols, add_nan=False)
+    config.pretrained_categorical_encoders = pretrained_encoders
+
     params = config.build(features, targets, mode="train")
-    
+
     train_dataset = TimeSeriesDataSet(train_data, **params)
     return train_dataset, config
 

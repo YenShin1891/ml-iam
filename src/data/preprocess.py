@@ -52,6 +52,11 @@ def add_missingness_indicators(df: pd.DataFrame, features: list):
     """
     indicators = df[features].isna().astype(int)
     indicators.columns = [f"{c}_is_missing" for c in indicators.columns]
+
+    # Convert indicators to strings for TFT compatibility
+    # TFT expects categorical columns to be strings, not numeric
+    indicators = indicators.astype(str)
+
     df = pd.concat([df, indicators], axis=1)
     return df, features + list(indicators.columns)
 
