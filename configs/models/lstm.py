@@ -33,8 +33,8 @@ class LSTMTrainerConfig:
 
     # Model architecture
     hidden_size: int = 64
-    num_layers: int = 1
-    dropout: float = 0.0
+    num_layers: int = 2
+    dropout: float = 0.1
     bidirectional: bool = False
 
     # Dense layers after LSTM
@@ -42,8 +42,8 @@ class LSTMTrainerConfig:
     dense_dropout: float = 0.0
 
     # Training parameters
-    learning_rate: float = 0.001
-    batch_size: int = 32
+    learning_rate: float = 0.01
+    batch_size: int = 64
     max_epochs: int = 100
     patience: int = 5
     gradient_clip_val: float = 1.0
