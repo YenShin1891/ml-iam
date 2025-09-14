@@ -55,6 +55,11 @@ def search_lstm(session_state, run_id):
     """Run hyperparameter search and store best_params in session_state."""
     logging.info("Starting hyperparameter search for LSTM...")
 
+    # Process data inside search function to avoid duplication in distributed training
+    data_state = process_data()
+    session_state.update(data_state)  # Add data to session state
+    save_session_state(session_state, run_id)  # Save data for later phases
+
     train_data = session_state["train_data"]
     val_data = session_state["val_data"]
     targets = session_state["targets"]
@@ -190,23 +195,28 @@ def main():
             save_session_state(session_state, run_id)
     else:
         setup_logging(run_id)
-        session_state = load_session_state(run_id)
+        if resume == "search":
+            # Search phase: empty session state, data processing happens in search function
+            session_state = {}
+        else:
+            # Train/test/plot phases: load existing session state
+            session_state = load_session_state(run_id)
 
     if note:
         session_state["note"] = note
         logging.info("Run note: %s", note)
 
-    # Step-wise execution when resuming
+    # Step-wise execution when resuming - each phase runs independently
     if resume == "search":
         search_lstm(session_state, run_id)
         save_session_state(session_state, run_id)
-    if resume in ["search", "train"]:
+    elif resume == "train":
         train_lstm(session_state, run_id)
         save_session_state(session_state, run_id)
-    if resume in ["search", "train", "test"]:
+    elif resume == "test":
         test_lstm(session_state, run_id)
         save_session_state(session_state, run_id)
-    if resume in ["search", "train", "test", "plot"]:
+    elif resume == "plot":
         plot_lstm(session_state, run_id)
 
 

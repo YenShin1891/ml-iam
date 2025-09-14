@@ -251,7 +251,16 @@ def save_metrics(run_id, y_true, y_pred):
     mae = np.mean(np.abs(y_true - y_pred))
     rmse = np.sqrt(mse)
     r2 = 1 - (np.sum((y_true - y_pred) ** 2) / np.sum((y_true - np.mean(y_true)) ** 2))
-    pearson_corr = np.corrcoef(y_true.flatten(), y_pred.flatten())[0, 1]
+    try:
+        y_true_flat = y_true.flatten()
+        y_pred_flat = y_pred.flatten()
+        if len(y_true_flat) == len(y_pred_flat) and len(y_true_flat) > 1:
+            pearson_corr = np.corrcoef(y_true_flat, y_pred_flat)[0, 1]
+        else:
+            pearson_corr = np.nan
+    except Exception as e:
+        logging.warning("Failed to compute Pearson correlation: %s", e)
+        pearson_corr = np.nan
 
     # Store the metrics
     metrics = pd.DataFrame({

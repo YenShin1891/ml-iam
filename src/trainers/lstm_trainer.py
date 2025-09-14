@@ -467,13 +467,13 @@ def create_lstm_search_trainer(
     config: LSTMTrainerConfig,
     checkpoint_callback: ModelCheckpoint
 ) -> Trainer:
-    """Create trainer for LSTM hyperparameter search."""
+    """Create trainer for LSTM hyperparameter search with multi-device support."""
     early_stop = EarlyStopping(monitor=config.monitor, patience=config.patience, mode=config.mode)
 
     return Trainer(
         max_epochs=config.max_epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
-        devices=config.devices,
+        devices=config.devices,  # Multi-device for search to handle 8 processes per GPU
         strategy="auto",
         gradient_clip_val=config.gradient_clip_val,
         callbacks=[early_stop, checkpoint_callback],
@@ -485,7 +485,7 @@ def create_lstm_search_trainer(
 def create_lstm_final_trainer(config: LSTMTrainerConfig) -> Trainer:
     """Create trainer for final LSTM model training."""
     # Custom progress bar with less frequent updates
-    progress_bar = TQDMProgressBar(refresh_rate=2000)
+    progress_bar = TQDMProgressBar(refresh_rate=5000)
 
     return Trainer(
         max_epochs=config.max_epochs,
@@ -493,7 +493,7 @@ def create_lstm_final_trainer(config: LSTMTrainerConfig) -> Trainer:
         devices=1,  # Use single device for final training to avoid distributed issues
         strategy="auto",
         gradient_clip_val=config.gradient_clip_val,
-        logger=False,
+        logger=True,
         callbacks=[progress_bar],
         enable_checkpointing=False,  # Manual saving
         num_sanity_val_steps=0,  # Skip validation sanity checks
@@ -558,6 +558,153 @@ def create_lstm_datasets_with_forecasting(
         raise ValueError(f"Unknown mode: {mode}")
 
 
+def hyperparameter_search_lstm_parallel(
+    train_data: pd.DataFrame,
+    val_data: pd.DataFrame,
+    targets: List[str],
+    run_id: str,
+    features: List[str] = None
+) -> Dict:
+    """Perform parallel hyperparameter search for LSTM model."""
+    import torch.multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+    import torch.distributed as dist
+
+    search_cfg = LSTMSearchSpace()
+    if features is None:
+        from configs.data import NON_FEATURE_COLUMNS, INDEX_COLUMNS
+        exclude_columns = NON_FEATURE_COLUMNS + INDEX_COLUMNS + ['Step']
+        features = [col for col in train_data.columns if col not in targets and col not in exclude_columns]
+
+    # Generate all parameter combinations
+    param_list = list(ParameterSampler(
+        search_cfg.param_dist, n_iter=search_cfg.search_iter_n, random_state=0
+    ))
+
+    # Get number of available GPUs
+    num_gpus = torch.cuda.device_count()
+    logging.info(f"Using {num_gpus} GPUs for parallel hyperparameter search")
+
+    # Group parameters by GPU (distribute evenly)
+    param_groups = [[] for _ in range(num_gpus)]
+    for i, params in enumerate(param_list):
+        param_groups[i % num_gpus].append((i, params))
+
+    # Function to train on a specific GPU
+    def train_on_gpu(gpu_id, param_assignments, shared_results):
+        torch.cuda.set_device(gpu_id)
+        device_results = []
+
+        for trial_id, params in param_assignments:
+            logging.info(f"GPU {gpu_id} - Trial {trial_id+1}: {params}")
+
+            try:
+                # Create datasets
+                sequence_length = params.get("sequence_length", 1)
+                train_dataset, val_dataset = create_lstm_datasets(
+                    train_data, val_data, features, targets, sequence_length=sequence_length
+                )
+
+                # Create data loaders
+                batch_size = params.get("batch_size", 32)
+                train_loader, val_loader = create_lstm_dataloaders(
+                    train_dataset, val_dataset, batch_size=batch_size
+                )
+
+                # Create model with search parameters
+                config = LSTMTrainerConfig(
+                    hidden_size=params.get("hidden_size", 64),
+                    num_layers=params.get("num_layers", 1),
+                    dropout=params.get("dropout", 0.0),
+                    bidirectional=params.get("bidirectional", False),
+                    dense_hidden_size=params.get("dense_hidden_size", 64),
+                    dense_dropout=params.get("dense_dropout", 0.0),
+                    learning_rate=params.get("learning_rate", 0.001),
+                    batch_size=batch_size,
+                    weight_decay=params.get("weight_decay", 0.0),
+                    sequence_length=sequence_length,
+                    max_epochs=20,
+                    patience=3,
+                    devices=1  # Single device per process
+                )
+
+                output_size = len(targets)
+                model = create_lstm_model(features, output_size, config)
+
+                # Create trainer for single GPU
+                search_checkpoint = ModelCheckpoint(
+                    dirpath=os.path.join(RESULTS_PATH, run_id, "search", f"trial_{trial_id}"),
+                    filename="best",
+                    monitor="val_loss",
+                    mode="min",
+                    save_top_k=1
+                )
+
+                trainer = Trainer(
+                    max_epochs=config.max_epochs,
+                    accelerator="gpu",
+                    devices=[gpu_id],  # Specific GPU
+                    strategy="auto",
+                    gradient_clip_val=config.gradient_clip_val,
+                    callbacks=[EarlyStopping(monitor="val_loss", patience=config.patience, mode="min"), search_checkpoint],
+                    logger=False,
+                    enable_progress_bar=False,
+                )
+
+                # Train
+                trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+
+                # Get validation loss
+                val_loss = trainer.callback_metrics["val_loss"].item()
+                result = {**params, "val_loss": val_loss, "trial_id": trial_id}
+                device_results.append(result)
+
+                logging.info(f"GPU {gpu_id} - Trial {trial_id+1} completed with val_loss: {val_loss:.4f}")
+
+            except Exception as e:
+                logging.error(f"GPU {gpu_id} - Trial {trial_id+1} failed: {str(e)}")
+                device_results.append({**params, "val_loss": float("inf"), "trial_id": trial_id, "error": str(e)})
+
+        shared_results.extend(device_results)
+
+    # Run parallel training
+    with mp.Manager() as manager:
+        shared_results = manager.list()
+        processes = []
+
+        for gpu_id in range(num_gpus):
+            if param_groups[gpu_id]:  # Only start process if there are parameters to train
+                p = mp.Process(target=train_on_gpu, args=(gpu_id, param_groups[gpu_id], shared_results))
+                p.start()
+                processes.append(p)
+
+        # Wait for all processes to complete
+        for p in processes:
+            p.join()
+
+        # Convert to regular list
+        search_results = list(shared_results)
+
+    # Find best parameters
+    valid_results = [r for r in search_results if r["val_loss"] != float("inf")]
+    if not valid_results:
+        raise RuntimeError("All hyperparameter trials failed")
+
+    best_result = min(valid_results, key=lambda x: x["val_loss"])
+    best_params = {k: v for k, v in best_result.items() if k not in ["val_loss", "trial_id", "error"]}
+    best_score = best_result["val_loss"]
+
+    # Save search results
+    search_results_df = pd.DataFrame(search_results)
+    search_results_path = os.path.join(RESULTS_PATH, run_id, "search_results.csv")
+    os.makedirs(os.path.dirname(search_results_path), exist_ok=True)
+    search_results_df.to_csv(search_results_path, index=False)
+    logging.info(f"Search results saved to: {search_results_path}")
+
+    logging.info(f"Best LSTM Params: {best_params} with Val Loss: {best_score:.4f}")
+    return best_params
+
+
 def hyperparameter_search_lstm(
     train_data: pd.DataFrame,
     val_data: pd.DataFrame,
@@ -565,7 +712,24 @@ def hyperparameter_search_lstm(
     run_id: str,
     features: List[str] = None
 ) -> Dict:
-    """Perform hyperparameter search for LSTM model."""
+    """Perform hyperparameter search for LSTM model (wrapper function)."""
+    # Use parallel search if multiple GPUs available, otherwise sequential
+    if torch.cuda.device_count() > 1:
+        logging.info(f"Using parallel hyperparameter search with {torch.cuda.device_count()} GPUs")
+        return hyperparameter_search_lstm_parallel(train_data, val_data, targets, run_id, features)
+    else:
+        logging.info("Using sequential hyperparameter search (single GPU)")
+        return hyperparameter_search_lstm_sequential(train_data, val_data, targets, run_id, features)
+
+
+def hyperparameter_search_lstm_sequential(
+    train_data: pd.DataFrame,
+    val_data: pd.DataFrame,
+    targets: List[str],
+    run_id: str,
+    features: List[str] = None
+) -> Dict:
+    """Sequential hyperparameter search (original implementation)."""
 
     search_cfg = LSTMSearchSpace()
     # Use features from preprocessing if provided, otherwise derive from columns (but this shouldn't happen)
@@ -608,7 +772,8 @@ def hyperparameter_search_lstm(
             weight_decay=params.get("weight_decay", 0.0),
             sequence_length=sequence_length,
             max_epochs=20,  # Reduced for search
-            patience=3  # Reduced for search
+            patience=3,  # Reduced for search
+            devices=1  # Use single device for sequential search
         )
 
         output_size = len(targets)
@@ -638,6 +803,13 @@ def hyperparameter_search_lstm(
             best_params = params
 
         logging.info(f"Trial {i+1} Val Loss: {val_loss:.4f}")
+
+    # Save search results like TFT
+    search_results_df = pd.DataFrame(search_results)
+    search_results_path = os.path.join(RESULTS_PATH, run_id, "search_results.csv")
+    os.makedirs(os.path.dirname(search_results_path), exist_ok=True)
+    search_results_df.to_csv(search_results_path, index=False)
+    logging.info(f"Search results saved to: {search_results_path}")
 
     logging.info(f"Best LSTM Params: {best_params} with Val Loss: {best_score:.4f}")
     return best_params
@@ -719,6 +891,8 @@ def train_final_lstm(
 
 def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
     """Make predictions using trained LSTM model."""
+    from src.trainers.evaluation import save_metrics
+
     # Get data from session state (stored as DataFrames like TFT)
     test_data = session_state["test_data"]
     targets = session_state["targets"]
@@ -767,7 +941,7 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
     trainer = Trainer(
         devices=1,  # Use single device for prediction to avoid distributed issues
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
-        enable_progress_bar=True,
+        enable_progress_bar=False,  # Disable progress bar to reduce log clutter
         logger=False
     )
 
@@ -776,21 +950,57 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
     predictions_list = [p.cpu().numpy() for p in raw_predictions]
     predictions_array = np.vstack(predictions_list)
 
+    # Post-process predictions (like TFT)
+    if predictions_array.ndim == 3 and predictions_array.shape[1] == 1:
+        predictions_array = predictions_array.squeeze(axis=1)
+
+    logging.info("Raw predictions shape: %s", predictions_array.shape)
+
     # Inverse transform predictions
     predictions_unscaled = scaler_y.inverse_transform(predictions_array)
 
-    # Align predictions with test data
+    # Align predictions with test data properly
+    # LSTM predictions correspond to sequences within groups, not direct row mapping
     aligned_preds = np.full((len(test_data), len(targets)), np.nan)
 
-    # Handle sequence length offset - predictions correspond to sequences within groups
-    valid_indices = min(len(predictions_unscaled), len(test_data))
-    aligned_preds[:valid_indices] = predictions_unscaled[:valid_indices]
+    # Process each group separately to handle sequence alignment
+    pred_idx = 0
+    from configs.data import INDEX_COLUMNS
+    group_ids = INDEX_COLUMNS
+
+    for group_name, group_data in test_data.groupby(group_ids):
+        group_size = len(group_data)
+        group_indices = group_data.index
+
+        # Number of valid sequences in this group
+        num_sequences = max(0, group_size - sequence_length + 1)
+
+        # Align predictions for this group
+        for i in range(num_sequences):
+            if pred_idx < len(predictions_unscaled):
+                # The prediction corresponds to the last item of the sequence
+                target_row_idx = group_indices[i + sequence_length - 1]
+                data_row_idx = test_data.index.get_loc(target_row_idx)
+
+                aligned_preds[data_row_idx] = predictions_unscaled[pred_idx]
+                pred_idx += 1
 
     logging.info("LSTM prediction completed. Shape: %s", aligned_preds.shape)
 
+    # Get valid (non-NaN) predictions and targets for metrics (like TFT pattern)
+    y_test = test_data[targets].values
+    valid_mask = ~np.isnan(aligned_preds).any(axis=1)
+    valid_preds = aligned_preds[valid_mask]
+    valid_targets = y_test[valid_mask]
+
+    logging.info("Valid predictions: %d out of %d", len(valid_preds), len(y_test))
+
+    # Save metrics using only valid predictions and targets
+    save_metrics(run_id, valid_targets, valid_preds)
+
     # Store horizon data for plotting (like TFT pattern)
     session_state["horizon_df"] = test_data
-    session_state["horizon_y_true"] = test_data[targets].values
+    session_state["horizon_y_true"] = valid_targets
 
     return aligned_preds
 
