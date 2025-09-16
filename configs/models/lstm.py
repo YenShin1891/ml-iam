@@ -32,9 +32,9 @@ class LSTMTrainerConfig:
     """Training configuration for LSTM model, following TFT pattern."""
 
     # Model architecture
-    hidden_size: int = 64
+    hidden_size: int = 128
     num_layers: int = 2
-    dropout: float = 0.1
+    dropout: float = 0.2
     bidirectional: bool = False
 
     # Dense layers after LSTM
@@ -43,7 +43,7 @@ class LSTMTrainerConfig:
 
     # Training parameters
     learning_rate: float = 0.01
-    batch_size: int = 64
+    batch_size: int = 128
     max_epochs: int = 100
     patience: int = 5
     gradient_clip_val: float = 1.0
@@ -54,14 +54,14 @@ class LSTMTrainerConfig:
 
     # Optimizer
     optimizer: str = "adam"
-    weight_decay: float = 0.0
+    weight_decay: float = 1e-5
 
     # Scheduler
     scheduler: Optional[str] = None
     scheduler_params: Dict[str, Any] = field(default_factory=dict)
 
     # Data processing
-    sequence_length: int = 2
+    sequence_length: int = 1
     mask_value: float = -1.0
 
     # Early stopping
@@ -101,21 +101,24 @@ class LSTMSearchSpace:
     """Hyperparameter search space for LSTM model."""
 
     # Model architecture search space - heavily reduced for better coverage
-    hidden_size: List[int] = field(default_factory=lambda: [32, 64])
-    num_layers: List[int] = field(default_factory=lambda: [1, 2])
+    hidden_size: List[int] = field(default_factory=lambda: [64, 128])
+    num_layers: List[int] = field(default_factory=lambda: [2, 3])
     dropout: List[float] = field(default_factory=lambda: [0.1, 0.2])
 
     # Dense layers
-    dense_hidden_size: List[int] = field(default_factory=lambda: [32, 64])
+    dense_hidden_size: List[int] = field(default_factory=lambda: [64, 128])
     dense_dropout: List[float] = field(default_factory=lambda: [0.0, 0.1])
 
     # Training parameters - focused around optimal TFT values
     learning_rate: List[float] = field(default_factory=lambda: [0.01, 0.02])
-    batch_size: List[int] = field(default_factory=lambda: [32, 64])
+    batch_size: List[int] = field(default_factory=lambda: [64, 128])
     weight_decay: List[float] = field(default_factory=lambda: [0.0, 1e-5])
 
+    # Sequence length to search (reintroduced)
+    sequence_length: List[int] = field(default_factory=lambda: [1, 2, 3, 4])
+
     # Search configuration
-    search_iter_n: int = 24
+    search_iter_n: int = 48
 
     @property
     def param_dist(self) -> Dict[str, List]:
@@ -129,6 +132,7 @@ class LSTMSearchSpace:
             "learning_rate": self.learning_rate,
             "batch_size": self.batch_size,
             "weight_decay": self.weight_decay,
+            "sequence_length": self.sequence_length,
         }
 
 

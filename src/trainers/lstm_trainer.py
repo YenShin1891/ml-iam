@@ -490,7 +490,7 @@ def create_lstm_final_trainer(config: LSTMTrainerConfig) -> Trainer:
     return Trainer(
         max_epochs=config.max_epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
-        devices=1,  # Use single device for final training to avoid distributed issues
+        devices=config.devices,
         strategy="auto",
         gradient_clip_val=config.gradient_clip_val,
         logger=True,
@@ -600,7 +600,7 @@ def hyperparameter_search_lstm_parallel(
 
             try:
                 # Create datasets
-                sequence_length = params.get("sequence_length", 1)
+                sequence_length = params.get("sequence_length", LSTMTrainerConfig().sequence_length)
                 train_dataset, val_dataset = create_lstm_datasets(
                     train_data, val_data, features, targets, sequence_length=sequence_length
                 )
@@ -701,6 +701,24 @@ def hyperparameter_search_lstm_parallel(
     search_results_df.to_csv(search_results_path, index=False)
     logging.info(f"Search results saved to: {search_results_path}")
 
+    # Log best params per sequence_length and save a CSV report
+    if "sequence_length" in search_results_df.columns:
+        finite_df = search_results_df[np.isfinite(search_results_df["val_loss"])].copy()
+        if not finite_df.empty:
+            idx = finite_df.groupby("sequence_length")["val_loss"].idxmin()
+            best_by_seq = finite_df.loc[idx].sort_values("sequence_length")
+            best_by_seq_path = os.path.join(RESULTS_PATH, run_id, "search_best_by_seq_len.csv")
+            best_by_seq.to_csv(best_by_seq_path, index=False)
+            logging.info("Best params per sequence_length:")
+            for _, row in best_by_seq.iterrows():
+                seq = int(row["sequence_length"]) if not pd.isna(row["sequence_length"]) else None
+                score = float(row["val_loss"]) if not pd.isna(row["val_loss"]) else None
+                params_str = ", ".join(
+                    f"{k}={row[k]}" for k in search_results_df.columns
+                    if k not in ("val_loss", "trial_id", "error") and k in row and not pd.isna(row[k])
+                )
+                logging.info(f"  seq_len={seq}: val_loss={score:.4f} | {params_str}")
+
     logging.info(f"Best LSTM Params: {best_params} with Val Loss: {best_score:.4f}")
     return best_params
 
@@ -748,7 +766,7 @@ def hyperparameter_search_lstm_sequential(
         logging.info(f"LSTM Search Iteration {i+1}/{search_cfg.search_iter_n} - Params: {params}")
 
         # Create datasets
-        sequence_length = params.get("sequence_length", 1)
+        sequence_length = params.get("sequence_length", LSTMTrainerConfig().sequence_length)
         train_dataset, val_dataset = create_lstm_datasets(
             train_data, val_data, features, targets, sequence_length=sequence_length
         )
@@ -811,6 +829,24 @@ def hyperparameter_search_lstm_sequential(
     search_results_df.to_csv(search_results_path, index=False)
     logging.info(f"Search results saved to: {search_results_path}")
 
+    # Log best params per sequence_length and save a CSV report
+    if "sequence_length" in search_results_df.columns:
+        finite_df = search_results_df[np.isfinite(search_results_df["val_loss"])].copy()
+        if not finite_df.empty:
+            idx = finite_df.groupby("sequence_length")["val_loss"].idxmin()
+            best_by_seq = finite_df.loc[idx].sort_values("sequence_length")
+            best_by_seq_path = os.path.join(RESULTS_PATH, run_id, "search_best_by_seq_len.csv")
+            best_by_seq.to_csv(best_by_seq_path, index=False)
+            logging.info("Best params per sequence_length:")
+            for _, row in best_by_seq.iterrows():
+                seq = int(row["sequence_length"]) if not pd.isna(row["sequence_length"]) else None
+                score = float(row["val_loss"]) if not pd.isna(row["val_loss"]) else None
+                params_str = ", ".join(
+                    f"{k}={row[k]}" for k in search_results_df.columns
+                    if k not in ("val_loss", "trial_id", "error") and k in row and not pd.isna(row[k])
+                )
+                logging.info(f"  seq_len={seq}: val_loss={score:.4f} | {params_str}")
+
     logging.info(f"Best LSTM Params: {best_params} with Val Loss: {best_score:.4f}")
     return best_params
 
@@ -835,7 +871,7 @@ def train_final_lstm(
         features = [col for col in train_data.columns if col not in targets and col not in exclude_columns]
 
     # Create dataset with combined data
-    sequence_length = best_params.get("sequence_length", 1)
+    sequence_length = best_params.get("sequence_length", LSTMTrainerConfig().sequence_length)
     combined_dataset = LSTMDataset(
         combined_data, features, targets, sequence_length=sequence_length, fit_scalers=True
     )
@@ -877,6 +913,13 @@ def train_final_lstm(
     # Train on combined data
     trainer.fit(model=model, train_dataloaders=combined_loader)
 
+    # Log final training loss
+    final_train_loss = trainer.callback_metrics.get("train_loss")
+    if final_train_loss is not None:
+        logging.info(f"Final training loss: {final_train_loss:.4f}")
+    else:
+        logging.warning("Final training loss not available in callback metrics")
+
     # Save final checkpoint manually
     final_ckpt_path = os.path.join(final_dir, "best.ckpt")
     trainer.save_checkpoint(final_ckpt_path)
@@ -909,7 +952,7 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
     config = session_state.get("lstm_config")
     scaler_X = session_state.get("lstm_scaler_X")
     scaler_y = session_state.get("lstm_scaler_y")
-    sequence_length = session_state.get("lstm_sequence_length", 1)
+    sequence_length = session_state.get("lstm_sequence_length", LSTMTrainerConfig().sequence_length)
 
     if config is None or scaler_X is None or scaler_y is None:
         raise ValueError("LSTM config and scalers not found in session state")

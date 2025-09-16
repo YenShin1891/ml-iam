@@ -25,7 +25,7 @@ from src.utils.utils import (
     save_session_state,
     setup_logging,
 )
-from src.utils.plotting import plot_scatter
+from src.utils.plotting import plot_scatter, plot_lstm_shap
 
 np.random.seed(0)
 seed_everything(42, workers=True)
@@ -57,10 +57,14 @@ def search_lstm(session_state, run_id):
     REQUIRED_KEYS = ["features", "targets", "train_data", "val_data", "test_data"]
     missing = [k for k in REQUIRED_KEYS if k not in session_state]
     if missing:
-        raise RuntimeError(
-            f"Session state missing required data keys for search: {missing}. "
-            "Preprocess first (run without --resume) or manually load and save session_state before resuming search."
+        logging.info(
+            "Session state missing keys %s for search; running preprocessing now...",
+            missing,
         )
+        data_bundle = process_data()
+        # Merge freshly processed data into session state
+        session_state.update(data_bundle)
+        save_session_state(session_state, run_id)
 
     train_data = session_state["train_data"]
     val_data = session_state["val_data"]
@@ -111,10 +115,12 @@ def test_lstm(session_state, run_id):
 
 
 def plot_lstm(session_state, run_id):
-    """Plot LSTM predictions."""
+    """Plot LSTM predictions and SHAP plots."""
     logging.info("Plotting LSTM predictions...")
     preds = session_state.get("preds")
     targets = session_state["targets"]
+    features = session_state["features"]
+
     if preds is None:
         raise ValueError("No predictions found in session state. Please run the test step first.")
 
@@ -122,17 +128,26 @@ def plot_lstm(session_state, run_id):
     horizon_df = session_state.get('horizon_df')
     horizon_y_true = session_state.get('horizon_y_true')
 
-    if horizon_df is not None and horizon_y_true is not None:
+    if horizon_df is not None:
         logging.info("Using forecast horizon subset (%d rows) for plotting.", len(horizon_df))
-        plot_scatter(run_id, horizon_df, horizon_y_true, preds, targets, model_name="LSTM")
+        # Derive y_true from horizon_df to ensure shape alignment with preds
+        y_true_aligned = horizon_df[targets].values
+        plot_scatter(run_id, horizon_df, y_true_aligned, preds, targets, model_name="LSTM")
+        test_data_for_shap = horizon_df
     else:
         test_data = session_state.get("test_data")
         test_targets = session_state.get("test_data")[targets].values if test_data is not None else None
 
         if test_data is not None and test_targets is not None:
             plot_scatter(run_id, test_data, test_targets, preds, targets, model_name="LSTM")
+            test_data_for_shap = test_data
         else:
             raise ValueError("No test data found in session state. Please run the test step with predict=True.")
+
+    # Generate SHAP plots
+    from configs.models.lstm import LSTMTrainerConfig
+    sequence_length = session_state.get("lstm_sequence_length", LSTMTrainerConfig().sequence_length)
+    plot_lstm_shap(run_id, test_data_for_shap, features, targets, sequence_length=sequence_length)
 
 
 def parse_arguments():
@@ -178,7 +193,9 @@ def main():
     if resume is None:
         # New full run still performs preprocessing once, then executes chosen steps.
         run_id = get_next_run_id()
-        setup_logging(run_id)
+        # Only primary rank initializes logging to avoid duplication
+        if os.getenv("PL_TRAINER_GLOBAL_RANK") in (None, "0") and os.getenv("GLOBAL_RANK") in (None, "0") and os.getenv("RANK") in (None, "0"):
+            setup_logging(run_id)
         session_state = process_data()
         save_session_state(session_state, run_id)
         resume = "train" if skip_search else "search"
@@ -200,7 +217,9 @@ def main():
             logging.info("Using default LSTM parameters (search skipped): %s", session_state["best_params"])
             save_session_state(session_state, run_id)
     else:
-        setup_logging(run_id)
+        # Only primary rank initializes logging to avoid duplication
+        if os.getenv("PL_TRAINER_GLOBAL_RANK") in (None, "0") and os.getenv("GLOBAL_RANK") in (None, "0") and os.getenv("RANK") in (None, "0"):
+            setup_logging(run_id)
         # Always load existing session state for any resume phase; preprocessing is never redone implicitly.
         session_state = load_session_state(run_id)
 
@@ -223,4 +242,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # Run CLI pipeline only on primary process to avoid duplicate runs under DDP
+    rank_vars = [
+        os.getenv("PL_TRAINER_GLOBAL_RANK"),
+        os.getenv("GLOBAL_RANK"),
+        os.getenv("RANK"),
+    ]
+    is_primary = all(rv in (None, "0") for rv in rank_vars)
+    if is_primary:
+        main()
