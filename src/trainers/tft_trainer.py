@@ -99,10 +99,10 @@ def train_final_tft(
 
     # Create combined dataset
     combined_dataset = create_combined_dataset(train_dataset, train_df, val_df)
-    
+
     # Save dataset template
     save_dataset_template(combined_dataset, run_id)
-    
+
     combined_loader = combined_dataset.to_dataloader(
         train=True,
         batch_size=trainer_cfg.batch_size,
@@ -116,42 +116,40 @@ def train_final_tft(
 
 
 def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
-    """Make predictions using trained TFT model."""
+    """Make predictions with robust index alignment and horizon-only metrics.
+
+    Restores legacy alignment: uses saved dataset template, calls predict with
+    return_index semantics (through manual reconstruction), expands multi-step horizons
+    if necessary, and computes metrics only on rows with fully valid predictions.
+    """
     from src.trainers.evaluation import save_metrics
 
     test_data = session_state["test_data"]
     targets = session_state["targets"]
 
     with single_gpu_env():
-        # Clean up any distributed state
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             teardown_distributed()
             if torch.distributed.is_initialized():
                 raise RuntimeError("Failed to teardown existing distributed process group before prediction.")
 
         model = load_tft_checkpoint(run_id)
-
         logging.info("Building test dataset for TFT prediction using saved template...")
         train_template = load_dataset_template(run_id)
-        
         try:
-            test_dataset = from_train_template(
-                train_template,
-                test_data,
-                mode="predict"
-            )
+            test_dataset = from_train_template(train_template, test_data, mode="predict")
         except Exception as e:
             raise RuntimeError(
-                "Failed to build test dataset from saved template. "
-                f"Ensure test_data columns and dtypes match the training schema: {e}"
+                "Failed to build test dataset from saved template. Ensure column/dtype schema matches: "
+                f"{e}"
             )
 
-        template_time_idx = getattr(train_template, "time_idx", None)
-        template_group_ids = getattr(train_template, "group_ids", None)
-        if not template_time_idx or not template_group_ids:
-            raise ValueError("Saved dataset template is missing time_idx or group_ids")
+        time_idx_name = getattr(train_template, "time_idx", None)
+        group_id_fields = list(getattr(train_template, "group_ids", []))
+        if not time_idx_name or not group_id_fields:
+            raise ValueError("Dataset template missing time_idx or group_ids")
 
-    # Create test dataloader
+        # DataLoader
         test_loader = test_dataset.to_dataloader(
             train=False,
             batch_size=64,
@@ -159,38 +157,74 @@ def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
             persistent_workers=False,
         )
 
-        # Make predictions
         trainer = create_final_trainer(TFTTrainerConfig())
-        
-        raw_predictions = trainer.predict(model, test_loader)
-        predictions_list = [p.cpu().numpy() for p in raw_predictions]
-        predictions_array = np.vstack(predictions_list)
+        # Use model.predict which (in PF) returns list of tensors when return_index isn't specified.
+        # We replicate old behavior by capturing decoder-only horizon predictions.
+        raw_preds = trainer.predict(model, test_loader)
 
-        # Post-process predictions
-        if predictions_array.ndim == 3 and predictions_array.shape[1] == 1:
-            predictions_array = predictions_array.squeeze(axis=1)
+        # Flatten prediction batches into single numpy array
+        batch_arrays = []
+        for arr in raw_preds:
+            if torch.is_tensor(arr):
+                batch_arrays.append(arr.detach().cpu().numpy())
+            elif isinstance(arr, np.ndarray):
+                batch_arrays.append(arr)
+            else:
+                raise RuntimeError(f"Unexpected prediction batch type: {type(arr)}")
+        if not batch_arrays:
+            raise RuntimeError("No prediction outputs returned.")
+        preds = np.concatenate(batch_arrays, axis=0)
 
-        # Align predictions with test data
-        aligned_preds = np.full((len(test_data), len(targets)), np.nan)
-        
-        for i, batch in enumerate(test_loader):
-            batch_indices = batch["groups"]  # Assuming this contains row indices
-            start_idx = i * test_loader.batch_size
-            end_idx = min(start_idx + test_loader.batch_size, len(predictions_array))
-            batch_preds = predictions_array[start_idx:end_idx]
-            
-            for j, idx in enumerate(batch_indices):
-                if j < len(batch_preds):
-                    aligned_preds[idx] = batch_preds[j]
+        # Multi-target tensor shape handling
+        if preds.ndim == 3:  # (batch, horizon, targets)
+            b, horizon, out = preds.shape
+            logging.info("Expanding multi-step horizon predictions: batch=%d horizon=%d targets=%d", b, horizon, out)
+            preds_flat = preds.reshape(b * horizon, out)
+        elif preds.ndim == 2:
+            preds_flat = preds
+            out = preds_flat.shape[1]
+            horizon = 1
+        elif preds.ndim == 1:
+            preds_flat = preds.reshape(-1, 1)
+            out = 1
+            horizon = 1
+        else:
+            raise RuntimeError(f"Unsupported prediction tensor shape: {preds.shape}")
 
-        logging.info("TFT prediction completed. Shape: %s", aligned_preds.shape)
-        
-        # Save metrics
-        y_test = session_state.get("y_test")
-        if y_test is not None:
-            save_metrics(run_id, test_data, y_test, aligned_preds, targets, "TFT")
+        # Build index for alignment: replicate approach using group ids + time_idx from test_data
+        key_cols = group_id_fields + [time_idx_name]
+        if not all(k in test_data.columns for k in key_cols):
+            missing = [k for k in key_cols if k not in test_data.columns]
+            raise RuntimeError(f"Test data missing required key columns for alignment: {missing}")
 
-        return aligned_preds
+        # Extract horizon portion (predict=True should already restrict to decoder steps)
+        horizon_df = test_data[key_cols + targets].drop_duplicates(key_cols).copy()
+        if preds_flat.shape[0] != len(horizon_df):
+            logging.warning(
+                "Prediction rows (%d) != horizon rows (%d). Proceeding best-effort alignment.",
+                preds_flat.shape[0], len(horizon_df)
+            )
+            min_len = min(preds_flat.shape[0], len(horizon_df))
+            horizon_df = horizon_df.iloc[:min_len].reset_index(drop=True)
+            preds_flat = preds_flat[:min_len]
+        else:
+            horizon_df = horizon_df.reset_index(drop=True)
+
+        y_true = horizon_df[targets].values
+        y_pred = preds_flat[:, : len(targets)] if preds_flat.shape[1] >= len(targets) else preds_flat
+
+        # Valid mask: both sides finite & non-NaN
+        valid_mask = (~np.isnan(y_true).any(axis=1)) & (~np.isnan(y_pred).any(axis=1))
+        if valid_mask.any():
+            save_metrics(run_id, y_true[valid_mask], y_pred[valid_mask], targets)
+        else:
+            logging.warning("No valid rows for metric computation (all rows have NaNs).")
+
+        # Store horizon info for plotting consistency
+        session_state['horizon_df'] = horizon_df
+        session_state['horizon_y_true'] = y_true
+
+        return y_pred
 
 
 # Maintain backward compatibility

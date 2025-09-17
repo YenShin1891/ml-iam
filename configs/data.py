@@ -18,6 +18,23 @@ OUTPUT_VARIABLES = [
     "Emissions|N2O",
 ]
 
+# Units for each output variable (single source of truth)
+# Keys must exactly match entries in OUTPUT_VARIABLES
+UNITS_BY_OUTPUT = {
+    "Primary Energy|Coal": "PJ/yr",
+    "Primary Energy|Gas": "PJ/yr",
+    "Primary Energy|Oil": "PJ/yr",
+    "Primary Energy|Solar": "PJ/yr",
+    "Primary Energy|Wind": "PJ/yr",
+    "Primary Energy|Nuclear": "PJ/yr",
+    "Emissions|CO2": "Mt CO2/yr",
+    "Emissions|CH4": "Mt CH4/yr",
+    "Emissions|N2O": "Mt N2O/yr",
+}
+
+# Convenience: units list aligned to OUTPUT_VARIABLES order
+OUTPUT_UNITS = [UNITS_BY_OUTPUT[var] for var in OUTPUT_VARIABLES]
+
 # Raw input filenames (AR6 v1.1)
 RAW_FILENAMES = [
     "AR6_Scenarios_Database_ISO3_v1.1.csv",

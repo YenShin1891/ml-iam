@@ -11,11 +11,12 @@ import numpy as np
 import pandas as pd
 import shap
 import xgboost as xgb
+import torch
 from PIL import Image
 from tqdm import tqdm
 
 from configs.paths import RESULTS_PATH
-from configs.data import INDEX_COLUMNS, NON_FEATURE_COLUMNS
+from configs.data import INDEX_COLUMNS, NON_FEATURE_COLUMNS, OUTPUT_UNITS
 
 def preprocess_data(
     test_data: pd.DataFrame, 
@@ -23,10 +24,26 @@ def preprocess_data(
     preds: np.ndarray, 
     target_index: int
 ) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
-    mask = ~np.isnan(y_test[:, target_index]) & ~np.isnan(preds[:, target_index])
+    # Ensure 2D arrays
+    if y_test.ndim == 1:
+        y_test = y_test.reshape(-1, 1)
+    if preds.ndim == 1:
+        preds = preds.reshape(-1, 1)
+
+    # Align lengths defensively
+    n = len(test_data)
+    if y_test.shape[0] != n or preds.shape[0] != n:
+        m = min(n, y_test.shape[0], preds.shape[0])
+        test_data = test_data.iloc[:m].reset_index(drop=True)
+        y_test = y_test[:m]
+        preds = preds[:m]
+
+    # Build valid mask for the requested target index
+    col = min(target_index, y_test.shape[1] - 1, preds.shape[1] - 1)
+    mask = (~np.isnan(y_test[:, col])) & (~np.isnan(preds[:, col]))
     test_data_valid = test_data[mask].reset_index(drop=True)
-    y_test_valid = y_test[mask, target_index]
-    preds_valid = preds[mask, target_index]
+    y_test_valid = y_test[mask, col]
+    preds_valid = preds[mask, col]
     return test_data_valid, y_test_valid, preds_valid
 
 
@@ -143,7 +160,7 @@ def transform_outputs_to_former_inputs(
     shap_values: np.ndarray, 
     targets: List[str], 
     features: List[str]
-) -> None:
+) -> np.ndarray:
     sorted_df_list = []
     for i, target in enumerate(targets):
         target_shap_values = np.abs(shap_values[:, :, i])  # Absolute SHAP values for the target
@@ -230,8 +247,7 @@ def _build_display_names(features: List[str], feature_name_map: Optional[Dict[st
     return [feature_name_map.get(feat, _make_display_name(feat)) for feat in features]
 
 
-def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, feature_name_map: Optional[Dict[str, str]] = None):
-    units = ["Mt CO2/yr", "Mt CH4/yr", "Mt N2O/yr", "PJ/yr", "PJ/yr", "PJ/yr", "PJ/yr", "PJ/yr", "PJ/yr"]
+def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, feature_name_map: Optional[Dict[str, str]] = None, model_prefix=""):
     n = 8
 
     # Create a 3*3 grid of subplots
@@ -263,9 +279,18 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=F
                 filtered_X_test = X_test.iloc[:, feature_mask]
                 filtered_features = [features[j] for j in range(len(features)) if feature_mask[j]]
                 filtered_display_names = _build_display_names(filtered_features, feature_name_map)
+
+                # Apply categorical preprocessing to filtered data too
+                filtered_X_test_processed = filtered_X_test.copy()
+                from configs.data import CATEGORICAL_COLUMNS
+                categorical_cols_in_filtered = [col for col in CATEGORICAL_COLUMNS if col in filtered_X_test_processed.columns]
+
+                for col in categorical_cols_in_filtered:
+                    filtered_X_test_processed[col] = filtered_X_test_processed[col].astype('category').cat.codes
+
                 shap.summary_plot(
                     filtered_shap_values,
-                    filtered_X_test,
+                    filtered_X_test_processed.values.astype(np.float64),
                     feature_names=filtered_display_names,
                     max_display=n,
                     plot_type="violin",
@@ -273,9 +298,23 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=F
                 )
             else:
                 display_names = _build_display_names(features, feature_name_map)
+
+                # Apply same categorical preprocessing as during SHAP calculation
+                X_test_processed_for_plot = X_test.copy()
+
+                # Handle categorical columns the same way as in preprocess_features
+                from configs.data import CATEGORICAL_COLUMNS
+                categorical_cols_in_features = [col for col in CATEGORICAL_COLUMNS if col in X_test_processed_for_plot.columns]
+
+                for col in categorical_cols_in_features:
+                    X_test_processed_for_plot[col] = X_test_processed_for_plot[col].astype('category').cat.codes
+
+                # Convert to numeric array for SHAP plotting
+                X_test_values = X_test_processed_for_plot.values.astype(np.float64)
+
                 shap.summary_plot(
                     shap_values[:, :, i],
-                    X_test,
+                    X_test_values,
                     feature_names=display_names,
                     max_display=n,
                     plot_type="violin",
@@ -288,14 +327,16 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=F
             ax.imshow(img)
             ax.axis('off')
             title_suffix = " (excluding top feature)" if exclude_top else ""
-            ax.set_title("Impact on " + targets[i] + " (" + units[i] + ")" + title_suffix)
+            # Use centralized units aligned with OUTPUT_VARIABLES ordering
+            ax.set_title("Impact on " + targets[i] + " (" + OUTPUT_UNITS[i] + ")" + title_suffix)
             os.remove(temp_filename)
         else:
             ax.axis('off')
 
     plt.tight_layout()
     os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots"), exist_ok=True)
-    filename = "shap_plot_no_first.png" if exclude_top else "shap_plot.png"
+    prefix = f"{model_prefix}_" if model_prefix else ""
+    filename = f"{prefix}shap_plot_no_first.png" if exclude_top else f"{prefix}shap_plot.png"
     plt.savefig(os.path.join(RESULTS_PATH, run_id, "plots", filename))
     plt.close()
 
@@ -324,3 +365,423 @@ def plot_shap(run_id, X_test_with_index, features, targets, feature_name_map: Op
     draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, feature_name_map=feature_name_map)
     logging.info("Drawing SHAP plots excluding top feature...")
     draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=True, feature_name_map=feature_name_map)
+
+
+def get_lstm_shap_values(run_id, X_test, sequence_length=1):
+    """
+    Create SHAP values for the LSTM model using DeepExplainer.
+    Args:
+        run_id: Run ID to locate model checkpoint
+        X_test: Test data features
+        sequence_length: Sequence length used in LSTM training
+    """
+    from src.trainers.lstm_trainer import LSTMModel, LSTMDataset
+
+    logging.info("Loading LSTM model...")
+    model_path = os.path.join(RESULTS_PATH, run_id, "final", "best.ckpt")
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"LSTM model checkpoint not found: {model_path}")
+
+    model = LSTMModel.load_from_checkpoint(model_path)
+    model.eval()
+
+    # Get session state to retrieve scalers and config
+    from src.utils.utils import load_session_state
+    session_state = load_session_state(run_id)
+    scaler_X = session_state.get("lstm_scaler_X")
+    scaler_y = session_state.get("lstm_scaler_y")
+    features = session_state.get("features")
+    targets = session_state.get("targets")
+
+    if scaler_X is None or scaler_y is None:
+        raise ValueError("LSTM scalers not found in session state")
+
+    # Preprocess data directly without dummy datasets
+    def preprocess_features(data, features, scaler_X, mask_value=-1.0):
+        """Preprocess features the same way LSTMDataset does."""
+        X = data[features].copy()
+
+        # Handle categorical columns
+        from configs.data import CATEGORICAL_COLUMNS
+        categorical_cols_in_features = [col for col in CATEGORICAL_COLUMNS if col in X.columns]
+
+        for col in categorical_cols_in_features:
+            X[col] = X[col].astype('category').cat.codes
+
+        # Handle NaN values
+        X_filled = X.fillna(mask_value).astype(np.float32)
+
+        # Scale features
+        X_scaled = scaler_X.transform(X_filled)
+
+        return X_scaled
+
+    def create_sequences_from_scaled_data(X_scaled, sequence_length):
+        """Create sequences from scaled data without grouping (for SHAP)."""
+        sequences = []
+        n_samples = len(X_scaled)
+
+        # Create overlapping sequences
+        for i in range(n_samples - sequence_length + 1):
+            seq = X_scaled[i:i + sequence_length]
+            sequences.append(torch.FloatTensor(seq))
+
+        return torch.stack(sequences) if sequences else torch.empty(0, sequence_length, X_scaled.shape[1])
+
+    # Background data processing
+    background_size = min(200, len(X_test))  # Larger background for better baselines
+    background_data_raw = X_test.iloc[:background_size]
+    background_scaled = preprocess_features(background_data_raw, features, scaler_X)
+    background_sequences = create_sequences_from_scaled_data(background_scaled, sequence_length)
+
+    # Take subset of background sequences for DeepExplainer
+    if len(background_sequences) > 50:
+        background_indices = np.random.choice(len(background_sequences), 50, replace=False)
+        background_data = background_sequences[background_indices]
+    else:
+        background_data = background_sequences
+
+    # Test data processing
+    test_size = min(100, len(X_test))
+    test_data_subset = X_test.iloc[:test_size]
+    test_scaled = preprocess_features(test_data_subset, features, scaler_X)
+    test_inputs = create_sequences_from_scaled_data(test_scaled, sequence_length)
+
+    logging.info("Creating DeepSHAP explainer...")
+
+    # Create a simplified model wrapper that DeepExplainer can handle
+    class LSTMWrapperForSHAP(torch.nn.Module):
+        def __init__(self, lstm_model, sequence_length):
+            super().__init__()
+            self.lstm_model = lstm_model
+            self.sequence_length = sequence_length
+
+        def forward(self, x):
+            # x shape: [batch_size, seq_len, features]
+            # Don't use torch.no_grad() here - SHAP needs gradients!
+
+            # Create dummy masks
+            batch_size = x.shape[0]
+            mask = torch.ones(batch_size, self.sequence_length, dtype=torch.float32, device=x.device)
+
+            # Use autoregressive mode (no teacher forcing for inference)
+            outputs = self.lstm_model(x, mask=mask, teacher_forcing=False)
+            return outputs
+
+    # Create wrapper model
+    wrapper_model = LSTMWrapperForSHAP(model, sequence_length)
+    wrapper_model.eval()
+
+    # Ensure tensors require gradients for SHAP
+    background_data.requires_grad_(True)
+    test_inputs.requires_grad_(True)
+
+    # Create DeepExplainer with the wrapper model
+    explainer = shap.DeepExplainer(wrapper_model, background_data)
+
+    logging.info("Calculating SHAP values...")
+    # Disable additivity check for complex LSTM models
+    shap_values = explainer.shap_values(test_inputs, check_additivity=False)
+
+    # Convert to numpy if needed and handle temporal dimensions properly
+    if isinstance(shap_values, list):
+        # Multi-output case
+        shap_values = [sv.detach().cpu().numpy() if hasattr(sv, 'detach') else sv for sv in shap_values]
+        shap_values = np.array(shap_values, dtype=np.float64)  # Shape: [n_outputs, n_samples, seq_len, n_features]
+        shap_values = np.transpose(shap_values, (1, 2, 3, 0))  # [n_samples, seq_len, n_features, n_outputs]
+    else:
+        # Single output case
+        if hasattr(shap_values, 'detach'):
+            shap_values = shap_values.detach().cpu().numpy()
+        shap_values = np.array(shap_values, dtype=np.float64)  # Ensure proper numpy dtype
+        if shap_values.ndim == 3:  # [n_samples, seq_len, n_features]
+            shap_values = np.expand_dims(shap_values, axis=-1)  # [n_samples, seq_len, n_features, 1]
+
+    # DON'T average over sequence - preserve temporal information
+    # Shape should be [n_samples, seq_len, n_features, n_outputs]
+    original_temporal_shap = shap_values.copy()
+
+    # For compatibility with existing plotting functions, also create averaged version
+    averaged_shap_values = np.mean(shap_values, axis=1)  # [n_samples, n_features, n_outputs]
+
+
+    # Save SHAP values (both temporal and averaged versions)
+    os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots"), exist_ok=True)
+    np.save(os.path.join(RESULTS_PATH, run_id, "plots", "lstm_shap_values_temporal.npy"), original_temporal_shap)
+    np.save(os.path.join(RESULTS_PATH, run_id, "plots", "lstm_shap_values.npy"), averaged_shap_values)
+    logging.info("LSTM SHAP values saved (temporal and averaged versions)")
+
+    # Return X_test_processed that matches the number of SHAP samples
+    # Since sequences reduce the number of samples, we need to align X_test accordingly
+    n_shap_samples = averaged_shap_values.shape[0]
+    X_test_processed = test_data_subset[features].iloc[:n_shap_samples]
+
+    # Return also the exact test sequences used for SHAP (numpy)
+    test_sequences_np = test_inputs.detach().cpu().numpy() if hasattr(test_inputs, 'detach') else np.array(test_inputs)
+
+    return original_temporal_shap, averaged_shap_values, X_test_processed, test_sequences_np
+
+
+def plot_lstm_shap(run_id, X_test_with_index, features, targets, sequence_length=1, feature_name_map: Optional[Dict[str, str]] = None):
+    """
+    Create SHAP plots for the LSTM model similar to XGBoost plots.
+    Args:
+        run_id: Run ID to locate model checkpoint
+        X_test_with_index: Test data with index columns
+        features: List of feature names
+        targets: List of target names
+        sequence_length: Sequence length used in LSTM training
+        feature_name_map: Optional mapping for feature display names
+    """
+    logging.info("Creating LSTM SHAP plots...")
+
+    # Check if model checkpoint exists
+    model_path = os.path.join(RESULTS_PATH, run_id, "final", "best.ckpt")
+    if not os.path.exists(model_path):
+        logging.warning("Skipping LSTM SHAP plots: model checkpoint not found at %s", model_path)
+        return
+
+    # Remove non-feature columns from X_test if they exist
+    X_test = X_test_with_index.drop(columns=NON_FEATURE_COLUMNS, errors="ignore")
+    X_test = X_test.reset_index(drop=True)
+
+    # Subsample if needed (DeepSHAP is computationally expensive)
+    if X_test.shape[0] > 100:
+        indices = np.random.choice(X_test.shape[0], 100, replace=False)
+        X_test = X_test.iloc[indices]
+
+    try:
+        # Get SHAP values (both temporal and averaged) and test sequences
+        temporal_shap_values, averaged_shap_values, X_test_processed, test_sequences_np = get_lstm_shap_values(run_id, X_test, sequence_length)
+
+        # Draw the all-timesteps SHAP plot (flatten all timesteps as separate features)
+        logging.info("Drawing LSTM SHAP plots with all timesteps flattened...")
+        draw_lstm_all_timesteps_shap_plot(
+            run_id,
+            temporal_shap_values,
+            test_sequences_np,
+            features,
+            targets,
+            sequence_length,
+            feature_name_map=feature_name_map,
+        )
+
+        # Optional: temporal heatmaps and CSVs remain for diagnostics
+        logging.info("Drawing temporal LSTM SHAP heatmaps and timestep bars...")
+        draw_temporal_shap_plot(
+            run_id,
+            temporal_shap_values,
+            X_test_processed,
+            features,
+            targets,
+            sequence_length,
+            feature_name_map=feature_name_map,
+        )
+
+    except Exception as e:
+        logging.error("Failed to create LSTM SHAP plots: %s", str(e))
+        logging.exception("Full error traceback:")
+
+
+
+def draw_lstm_all_timesteps_shap_plot(
+    run_id: str,
+    temporal_shap_values: np.ndarray,
+    test_sequences_np: np.ndarray,
+    features: List[str],
+    targets: List[str],
+    sequence_length: int,
+    feature_name_map: Optional[Dict[str, str]] = None,
+) -> None:
+    """
+    Draw SHAP plots that include ALL timesteps equally by flattening
+    every timestep in the sequence into separate feature copies.
+
+    Saves combined grid as plots/lstm_shap_plot.png
+    """
+    if sequence_length <= 0:
+        logging.warning("Invalid sequence_length=%d; skipping all-timesteps SHAP plot", sequence_length)
+        return
+
+    # Build flattened inputs across all timesteps: [N, seq_len * n_features]
+    x_flat_parts = [test_sequences_np[:, t, :] for t in range(sequence_length)]
+    X_flat = np.concatenate(x_flat_parts, axis=1)
+
+    # Build display names per timestep using current/last 5y semantics
+    time_labels = []
+    for t in range(sequence_length):
+        lag = sequence_length - 1 - t
+        label = "current" if lag == 0 else f"last {lag*5}y"
+        time_labels.append(label)
+    feature_name_map = feature_name_map or {}
+    base_names = [feature_name_map.get(f, f) for f in features]
+    display_names: List[str] = []
+    for t in range(sequence_length):
+        label = time_labels[t]
+        for bn in base_names:
+            display_names.append(f"{bn} ({label})")
+
+    # Plot per target in a 3x3 grid
+    plt.rcParams.update({'font.size': 12})
+    rows, cols = 3, 3
+    fig, axes = plt.subplots(rows, cols, figsize=(20, 20))
+    num_targets = len(targets)
+
+    for i, ax in enumerate(axes.flatten()):
+        if i < num_targets:
+            fig_shap = plt.figure()
+            # Flatten SHAP values per target: concat across timesteps along feature axis
+            shap_flat_parts = [temporal_shap_values[:, t, :, i] for t in range(sequence_length)]
+            shap_flat = np.concatenate(shap_flat_parts, axis=1)
+
+            shap.summary_plot(
+                shap_flat,
+                X_flat,
+                feature_names=display_names,
+                max_display=8,
+                plot_type="violin",
+                show=False,
+            )
+            fig_shap.tight_layout()
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmpf:
+                temp_filename = tmpf.name
+            fig_shap.savefig(temp_filename, format='png', bbox_inches='tight')
+            plt.close(fig_shap)
+            img = Image.open(temp_filename)
+            ax.imshow(img)
+            ax.axis('off')
+            ax.set_title(f"SHAP across all timesteps: {targets[i]} ({OUTPUT_UNITS[i]})")
+            os.remove(temp_filename)
+        else:
+            ax.axis('off')
+
+    plt.tight_layout()
+    os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots"), exist_ok=True)
+    plt.savefig(os.path.join(RESULTS_PATH, run_id, "plots", "lstm_shap_plot.png"))
+    plt.close()
+
+
+
+def draw_temporal_shap_plot(
+    run_id: str,
+    temporal_shap_values: np.ndarray,
+    X_test: pd.DataFrame,
+    features: List[str],
+    targets: List[str],
+    sequence_length: int,
+    feature_name_map: Optional[Dict[str, str]] = None
+) -> None:
+    """
+    Draw SHAP plots that show feature importance across time steps for LSTM.
+    This is unique to sequential models and shows how feature importance varies across the sequence.
+
+    Args:
+        temporal_shap_values: Shape [n_samples, seq_len, n_features, n_outputs]
+        X_test: Test data features
+        features: List of feature names
+        targets: List of target names
+        sequence_length: Length of input sequences
+        feature_name_map: Optional mapping for feature display names
+    """
+    # Units derived from configs
+
+    # Create temporal feature importance plots
+    plt.rcParams.update({'font.size': 12})
+    rows, cols = 3, 3
+    fig, axes = plt.subplots(rows, cols, figsize=(20, 20))
+    num_targets = len(targets)
+
+    for i, ax in tqdm(enumerate(axes.flatten()), total=num_targets, desc="Creating temporal SHAP plots"):
+        if i < num_targets:
+            # Calculate feature importance at each time step
+            target_shap = temporal_shap_values[:, :, :, i]  # [n_samples, seq_len, n_features]
+
+            # Get top features (averaged across time for selection)
+            avg_feature_importance = np.mean(np.abs(target_shap), axis=(0, 1))  # [n_features]
+            top_feature_indices = np.argsort(avg_feature_importance)[-8:][::-1]  # Top 8 features
+
+            # Create heatmap showing feature importance over time
+            time_importance = np.mean(np.abs(target_shap[:, :, top_feature_indices]), axis=0)  # [seq_len, 8]
+
+            # Create heatmap
+            im = ax.imshow(time_importance.T, aspect='auto', cmap='viridis', interpolation='nearest')
+
+            # Set labels
+            time_labels = ["current" if (sequence_length - 1 - j) == 0 else f"last {(sequence_length - 1 - j)*5}y" for j in range(sequence_length)]
+            ax.set_xticks(range(sequence_length))
+            ax.set_xticklabels(time_labels)
+
+            # Feature labels
+            display_names = _build_display_names([features[idx] for idx in top_feature_indices], feature_name_map)
+            ax.set_yticks(range(len(top_feature_indices)))
+            ax.set_yticklabels([name[:30] + "..." if len(name) > 30 else name for name in display_names], fontsize=10)
+
+            ax.set_title(f"Temporal SHAP: {targets[i]} ({OUTPUT_UNITS[i]})", fontsize=14)
+            ax.set_xlabel("Time Step in Sequence", fontsize=12)
+            ax.set_ylabel("Features", fontsize=12)
+
+            # Add colorbar
+            plt.colorbar(im, ax=ax, shrink=0.6)
+
+        else:
+            ax.axis('off')
+
+    plt.tight_layout()
+    os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots"), exist_ok=True)
+    plt.savefig(os.path.join(RESULTS_PATH, run_id, "plots", "lstm_temporal_shap_heatmap.png"), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    # Also create time-step comparison plots
+    create_timestep_comparison_plots(run_id, temporal_shap_values, features, targets, sequence_length, feature_name_map)
+
+
+def create_timestep_comparison_plots(
+    run_id: str,
+    temporal_shap_values: np.ndarray,
+    features: List[str],
+    targets: List[str],
+    sequence_length: int,
+    feature_name_map: Optional[Dict[str, str]] = None
+) -> None:
+    """
+    Create bar plots comparing feature importance at different time steps.
+    Shows how LSTM weighs recent vs older information.
+    """
+    # Units derived from configs
+
+    rows, cols = 3, 3
+    fig, axes = plt.subplots(rows, cols, figsize=(20, 20))
+
+    for i, ax in enumerate(axes.flatten()):
+        if i < len(targets):
+            # Get SHAP values for this target
+            target_shap = temporal_shap_values[:, :, :, i]  # [n_samples, seq_len, n_features]
+
+            # Calculate mean absolute importance at each time step
+            timestep_importance = np.mean(np.abs(target_shap), axis=(0, 2))  # [seq_len]
+
+            # Create bar plot
+            time_labels = ["current" if (sequence_length - 1 - j) == 0 else f"last {(sequence_length - 1 - j)*5}y" for j in range(sequence_length)]
+            colors = cm.get_cmap('viridis')(np.linspace(0, 1, sequence_length))
+
+            bars = ax.bar(range(sequence_length), timestep_importance, color=colors, alpha=0.8)
+
+            ax.set_title(f"Time Step Importance: {targets[i]} ({OUTPUT_UNITS[i]})", fontsize=14)
+            ax.set_xlabel("Time Step in Sequence", fontsize=12)
+            ax.set_ylabel("Average |SHAP| Value", fontsize=12)
+            ax.set_xticks(range(sequence_length))
+            ax.set_xticklabels(time_labels)
+
+            # Add value labels on bars
+            for j, bar in enumerate(bars):
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
+                       f'{height:.3f}', ha='center', va='bottom', fontsize=10)
+
+        else:
+            ax.axis('off')
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(RESULTS_PATH, run_id, "plots", "lstm_timestep_importance.png"), dpi=300, bbox_inches='tight')
+    plt.close()
+    logging.info("Temporal SHAP plots saved")

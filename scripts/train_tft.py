@@ -40,7 +40,7 @@ def process_data():
     train_data, val_data, test_data = impute_with_train_medians(
         train_data, val_data, test_data, features
     )
-    
+
     return {
         "features": features,
         "targets": targets,
@@ -53,6 +53,12 @@ def process_data():
 def search_tft(session_state, run_id):
     """Run hyperparameter search and store best_params in session_state."""
     logging.info("Starting hyperparameter search for TFT...")
+    # Ensure data is available (unlike LSTM script, original TFT search assumed prior processing)
+    if "train_data" not in session_state or "val_data" not in session_state:
+        logging.info("No processed data found in session state. Processing data before search...")
+        data_state = process_data()
+        session_state.update(data_state)
+        save_session_state(session_state, run_id)
     train_dataset, val_dataset = build_datasets(session_state)
     targets = session_state["targets"]
     best_params = hyperparameter_search_tft(
@@ -65,8 +71,17 @@ def search_tft(session_state, run_id):
 
 def train_tft(session_state, run_id):
     """Final training using best_params already present in session_state."""
+    # If session state is empty, process data
+    if not session_state or "train_data" not in session_state:
+        logging.info("Session state incomplete. Processing data for training...")
+        data_state = process_data()
+        session_state.update(data_state)
+
     if "best_params" not in session_state:
-        raise ValueError("best_params not found in session state. Run the 'search' step first or inject best_params manually.")
+        from configs.models.tft_search import TFTDefaultParams
+        default_config = TFTDefaultParams()
+        session_state["best_params"] = default_config.to_dict()
+        logging.info("best_params not found in session state. Using default TFT parameters: %s", session_state["best_params"])
     best_params = session_state["best_params"]
     logging.info("Starting final TFT training with best params: %s", best_params)
     train_dataset, val_dataset = build_datasets(session_state)
@@ -93,10 +108,10 @@ def plot_tft(session_state, run_id):
 
     horizon_df = session_state.get('horizon_df')
     horizon_y_true = session_state.get('horizon_y_true')
-    
+
     if horizon_df is not None and horizon_y_true is not None:
         logging.info("Using forecast horizon subset (%d rows) for plotting.", len(horizon_df))
-    plot_scatter(run_id, horizon_df, horizon_y_true, preds, targets, model_name="TFT")
+        plot_scatter(run_id, horizon_df, horizon_y_true, preds, targets, model_name="TFT")
     else:
         raise ValueError("No forecast horizon data found in session state. Please run the test step with predict=True.")
 
@@ -112,15 +127,15 @@ def parse_arguments():
         required=False,
     )
     args = parser.parse_args()
-    
+
     # Validation: if resume is specified, run_id must be provided
     if args.resume and not args.run_id:
         parser.error("--run_id is required when --resume is specified")
-    
+
     # Validation: if resume is not specified, run_id should not be provided
     if not args.resume and args.run_id:
         parser.error("--run_id should only be specified when using --resume")
-    
+
     return args.run_id, args.resume
 
 
@@ -145,17 +160,17 @@ def main():
         setup_logging(run_id)
         session_state = load_session_state(run_id)
 
-    # Step-wise execution when resuming
+    # Step-wise execution when resuming - each phase runs independently
     if resume == "search":
         search_tft(session_state, run_id)
         save_session_state(session_state, run_id)
-    if resume in ["search", "train"]:
+    elif resume == "train":
         train_tft(session_state, run_id)
         save_session_state(session_state, run_id)
-    if resume in ["search", "train", "test"]:
+    elif resume == "test":
         test_tft(session_state, run_id)
         save_session_state(session_state, run_id)
-    if resume in ["search", "train", "test", "plot"]:
+    elif resume == "plot":
         plot_tft(session_state, run_id)
 
 

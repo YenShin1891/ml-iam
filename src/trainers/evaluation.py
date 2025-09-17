@@ -1,3 +1,11 @@
+"""Evaluation utilities.
+
+Note: pytorch-forecasting 1.4.x returns normalized outputs in Prediction.output; original-scale values
+may not be present unless Prediction.prediction is populated. The TFT prediction path enforces original-scale
+predictions to avoid computing metrics on mixed scales. See scripts/check_pf_prediction.py and requirements.txt
+for the version-specific note.
+"""
+
 from sklearn.metrics import mean_squared_error
 import os
 import logging
@@ -251,7 +259,16 @@ def save_metrics(run_id, y_true, y_pred):
     mae = np.mean(np.abs(y_true - y_pred))
     rmse = np.sqrt(mse)
     r2 = 1 - (np.sum((y_true - y_pred) ** 2) / np.sum((y_true - np.mean(y_true)) ** 2))
-    pearson_corr = np.corrcoef(y_true.flatten(), y_pred.flatten())[0, 1]
+    try:
+        y_true_flat = y_true.flatten()
+        y_pred_flat = y_pred.flatten()
+        if len(y_true_flat) == len(y_pred_flat) and len(y_true_flat) > 1:
+            pearson_corr = np.corrcoef(y_true_flat, y_pred_flat)[0, 1]
+        else:
+            pearson_corr = np.nan
+    except Exception as e:
+        logging.warning("Failed to compute Pearson correlation: %s", e)
+        pearson_corr = np.nan
 
     # Store the metrics
     metrics = pd.DataFrame({
@@ -267,4 +284,13 @@ def save_metrics(run_id, y_true, y_pred):
     os.makedirs(metrics_dir, exist_ok=True)
     metrics_file = os.path.join(metrics_dir, "performance.csv")
     metrics.to_csv(metrics_file, index=False)
-    logging.info("Metrics saved to %s.", metrics_file)
+    logging.info(
+        "Metrics saved to %s.", metrics_file
+    )
+    try:
+        logging.info(
+            "Run %s metrics -> MSE=%.4f RMSE=%.4f MAE=%.4f R2=%.4f Pearson=%.4f",
+            run_id, float(mse), float(rmse), float(mae), float(r2), float(pearson_corr) if not np.isnan(pearson_corr) else float('nan')
+        )
+    except Exception:
+        pass
