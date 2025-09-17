@@ -85,11 +85,17 @@ def from_train_template(
     mode: str = "eval"
 ) -> TimeSeriesDataSet:
     """Create dataset from training template."""
+    # Legacy behavior (pre-refactor) used stop_randomization=True for both eval and predict
+    # to guarantee deterministic ordering/alignment of samples. The refactor inadvertently
+    # enabled randomization for predict mode causing misalignment between returned index
+    # rows and original test_data, severely degrading metric calculations. We restore the
+    # original semantics here.
+    stop_randomization = mode in ("eval", "predict")
     return TimeSeriesDataSet.from_dataset(
-        train_dataset, 
-        data, 
-        stop_randomization=(mode == "eval"),
-        predict=(mode == "predict")
+        train_dataset,
+        data,
+        stop_randomization=stop_randomization,
+        predict=(mode == "predict"),
     )
 
 

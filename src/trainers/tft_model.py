@@ -6,8 +6,10 @@ from typing import Dict, List, Optional
 
 import torch
 from lightning.pytorch import Trainer
+from lightning.pytorch.loggers import CSVLogger
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_forecasting import TemporalFusionTransformer, RMSE, TimeSeriesDataSet
+from lightning.pytorch.core.module import LightningModule
 from pytorch_forecasting.metrics import MultiLoss
 
 from configs.paths import RESULTS_PATH
@@ -19,7 +21,7 @@ def create_tft_model(
     train_dataset: TimeSeriesDataSet,
     params: Dict,
     n_targets: int
-) -> TemporalFusionTransformer:
+) -> LightningModule:
     """Create TFT model with given parameters."""
     if n_targets > 1:
         output_size = [1] * n_targets
@@ -96,23 +98,27 @@ def create_search_trainer(
 
 
 def create_final_trainer(trainer_cfg: TFTTrainerConfig) -> Trainer:
-    """Create trainer for final model training."""
-    # Mirror LSTM final trainer behavior: use a single device to avoid Lightning
-    # spawning multiple processes when devices is set to 'auto' (which can lead
-    # to distributed setup logs like GLOBAL_RANK, MEMBER, etc.). If the caller
-    # explicitly passes an int > 1 or a list, respect it; otherwise force 1.
+    """Create trainer for final model training (legacy behavior).
+
+    Restores original implementation: honor `trainer_cfg.devices` (default "auto") so
+    Lightning can utilize multiple GPUs if available. Optional override:
+      Set env FORCE_SINGLE_TFT_FINAL=1 to coerce a single device.
+    """
     devices = trainer_cfg.devices
-    if devices == "auto" or (isinstance(devices, int) and devices < 1):
-        devices = 1
+    import os as _os
+    if _os.getenv("FORCE_SINGLE_TFT_FINAL"):
+        if devices == "auto" or (isinstance(devices, int) and devices < 1):
+            devices = 1
+    logger = CSVLogger(save_dir=RESULTS_PATH, name="lightning_logs", version=None)
     return Trainer(
         max_epochs=trainer_cfg.max_epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=devices,
         strategy="auto",
         gradient_clip_val=trainer_cfg.gradient_clip_val,
-        logger=False,
+        logger=logger,
         enable_progress_bar=False,
-        enable_checkpointing=False,  # Manual saving
+        enable_checkpointing=False,
     )
 
 

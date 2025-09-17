@@ -6,11 +6,11 @@
 run_id=$(python ./scripts/get_run_id.py)
 echo "Starting TFT training with run_id: $run_id"
 
-# Phase 1: Hyperparameter search (multi-device, 8 processes per GPU)
+# Phase 1: Hyperparameter search (multi-device)
 echo "Phase 1: Running hyperparameter search..."
 python ./scripts/train_tft.py --resume=search --run_id=$run_id
 
-# Phase 2: Final training (single device, clean environment)
+# Phase 2: Final training (multi-device)
 echo "Phase 2: Running final training..."
 python ./scripts/train_tft.py --resume=train --run_id=$run_id
 

@@ -30,4 +30,8 @@ cupy-cuda11x==12.3.0  # Compatible with numpy 1.24.4
 # Deep Learning - PyTorch Lightning stack (replaces TensorFlow for LSTM)
 torch>=2.0.0
 lightning>=2.0.0
+# pytorch-forecasting prediction semantics changed after 1.0:
+# - 1.4.0: Prediction.output is normalized; Prediction.prediction may be None unless scales are present
+# Our pipeline requires original-scale predictions. If using 1.4.x, explicitly denormalize or pin to a version
+# that populates Prediction.prediction when calling predict(..., mode="prediction"). See scripts/check_pf_prediction.py
 pytorch-forecasting>=0.10.0  # For TFT implementation
