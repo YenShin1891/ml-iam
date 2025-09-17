@@ -496,7 +496,7 @@ def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
         # Valid mask: both sides finite & non-NaN
         valid_mask = (~np.isnan(y_true).any(axis=1)) & (~np.isnan(y_pred).any(axis=1))
         if valid_mask.any():
-            save_metrics(run_id, y_true[valid_mask], y_pred[valid_mask])
+            save_metrics(run_id, y_true[valid_mask], y_pred[valid_mask], targets)
         else:
             logging.warning("No valid rows for metric computation (all rows have NaNs).")
 

@@ -16,7 +16,7 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset, DataLoader
 
 from configs.paths import RESULTS_PATH
-from configs.models import LSTMTrainerConfig, LSTMSearchSpace
+from configs.models import LSTMTrainerConfig, LSTMSearchSpace, LSTMDatasetConfig
 
 
 class LSTMDataset(Dataset):
@@ -438,7 +438,6 @@ def create_lstm_model(
     """Create LSTM model with given configuration."""
 
     # ALL features are exogenous (u_t)
-    from configs.models.lstm import LSTMDatasetConfig
     dataset_config = LSTMDatasetConfig()
     feature_groups = dataset_config.build_feature_groups(features)
 

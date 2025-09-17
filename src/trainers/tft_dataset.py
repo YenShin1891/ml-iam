@@ -13,9 +13,6 @@ from configs.models.tft import TFTDatasetConfig
 from configs.data import CATEGORICAL_COLUMNS, INDEX_COLUMNS
 
 
-SENTINEL_CATEGORY = "MISSING"  # retained in case future logic needs it
-
-
 # --- Categorical encoder construction (restored from working logic) ---
 try:
     from pytorch_forecasting.data.encoders import NaNLabelEncoder  # type: ignore
