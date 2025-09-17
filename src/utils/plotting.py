@@ -63,7 +63,7 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[s
     for i, ax in enumerate(axes.flatten()):
         test_data_valid, y_test_valid, preds_valid = preprocess_data(test_data, y_test, preds, i)
         unique_years = sorted(test_data_valid['Year'].unique())
-        colors = cm.get_cmap('viridis')(np.linspace(0, 1, len(unique_years)))
+        colors = cm.viridis(np.linspace(0, 1, len(unique_years)))
 
         for year, color in zip(unique_years, colors):
             group_df = test_data_valid[test_data_valid['Year'] == year]
