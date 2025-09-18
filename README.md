@@ -1,48 +1,210 @@
-# IAM Emulation with ML
+## IAM Emulation with Machine Learning
 
-This repository contains a machine learning pipeline for Integrated Assessment Model (IAM) emulation. 
+This repository provides a reproducible pipeline for emulating Integrated Assessment Model (IAM) scenario time‑series using multiple ML approaches:
 
-## Installation
-### Prerequisites
-- Python 3.9
-- CUDA 11.6
-- Streamlit port 8501-8509
+* Gradient Boosted Trees (XGBoost)
+* Temporal Fusion Transformer (TFT, PyTorch Lightning)
+* Long Short-Term Memory (LSTM, PyTorch Lightning)
 
-### Install Dependencies
-Using `pip`:
+It standardizes data ingestion from the IPCC AR6 Scenario Explorer, feature engineering, model search / training, evaluation, and exploratory visualization via a Streamlit dashboard.
+
+---
+## Contents
+1. Features
+2. Quick Start
+3. Environment & Installation
+4. Data & Licensing (AR6)
+5. Configuration
+6. Data Processing
+7. Training Pipelines (XGB / TFT / LSTM)
+8. Dashboard
+9. Project Layout
+10. Recommended Citation
+11. License
+12. FAQ
+
+---
+## 1. Features
+* Unified AR6 scenario preprocessing & feature engineering.
+* Modular model families: XGBoost / TFT / LSTM.
+* Resumable pipelines with per‑`run_id` persisted state.
+* Autoregressive evaluation + SHAP & visualization utilities.
+* Streamlit dashboard (exploratory, WIP).
+
+---
+## 2. Quick Start
+```bash
+git clone <this-repo-url>
+cd ml-iam
+python -m venv .venv && source .venv/bin/activate  # or use conda
+pip install -r requirements.txt
+
+# (Optional) Export environment variables to override defaults
+export RAW_DATA_PATH="/path/to/raw" \
+	DATA_PATH="/path/to/processed" \
+	RESULTS_PATH="/path/to/results"
+
+# Process data (writes processed & intermediate artifacts)
+make process-data
+
+# Train XGBoost full pipeline (search -> train -> test -> plot)
+python scripts/train_xgb.py
+
+# Train TFT full pipeline
+python scripts/train_tft.py
+
+# Train LSTM full pipeline
+python scripts/train_lstm.py
+
+# Launch dashboard (foreground)
+streamlit run scripts/dashboard.py
+```
+
+---
+## 3. Environment & Installation
+Prerequisites:
+* Python 3.9
+* (Optional GPU) CUDA 11.6 compatible stack for TFT acceleration
+* Open ports (default Streamlit 8501)
+
+Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-## Usage
-**Configuration**
+If using GPUs, confirm PyTorch + CUDA alignment (adjust `pip`/`pip3` index URL if needed).
 
-Update paths and constants in configs/config.py to match your environment.
+---
+## 4. Data & Licensing (AR6)
+The pipeline expects AR6 Scenario Explorer CSVs (v1.1) referenced in `configs/data.py` (`RAW_FILENAMES`). Obtain them from the IPCC / IIASA AR6 Scenario Explorer.
 
-**Training and Testing on Background**
+License & Terms of Use: The AR6 data are subject to the license described at:
+https://data.ene.iiasa.ac.at/ar6/#/license
 
-Run the training and testing pipeline:
+Before using or distributing processed outputs, review the above license and attribution guidance. Include appropriate citation(s) in any derivative work. This repository does not redistribute the raw AR6 CSVs.
+
+Place raw files under a directory you configure (see `configs/paths.py` or environment overrides below). Example:
 ```
-nohup python scripts/train_xgb.py &
-```
-**Running the Dashboard**
-
-To start the Streamlit dashboard in the background with logging enabled, run:
-```
-nohup streamlit run scripts/dashboard.py --logger.level=info --server.runOnSave=false &
+/path/to/raw/AR6_Scenarios_Database_ISO3_v1.1.csv
+... other region variants ...
 ```
 
-## Project Structure
+---
+## 5. Configuration
+Central configuration modules:
+* `configs/data.py` – variable selection (`OUTPUT_VARIABLES`), filtering thresholds, naming/version knobs.
+* `configs/paths.py` – path constants (generic placeholders recommended). Replace hard‑coded defaults or export environment variables.
+* `configs/models/*.py` – model‑specific hyperparameter search spaces (TFT / XGB).
+
+Override paths without editing code by exporting (evaluated early through Python in the Makefile):
+```bash
+export RAW_DATA_PATH="/path/to/raw"
+export DATA_PATH="/path/to/processed"
+export RESULTS_PATH="/path/to/results"
+```
+
+Key data knobs (from `configs/data.py`):
+* `OUTPUT_VARIABLES` – target columns (energy & emissions series).
+* `MIN_COUNT`, `COMPLETENESS_RATIO` – filtering heuristics.
+* `MAX_SERIES_LENGTH`, `N_LAG_FEATURES`, `YEAR_RANGE` – feature engineering scope.
+
+---
+## 6. Data Processing
+Data ingestion & processing is orchestrated via the Makefile target:
+```bash
+make process-data
+```
+This runs `python -m src.data.process_data` with directories resolved from `configs.paths` (or environment overrides). Outputs include processed wide/long series and optional analysis artifacts (if `SAVE_ANALYSIS=True`).
+
+---
+## 7. Training Pipelines
+Each model family has a dedicated driver script in `scripts/`.
+
+### XGBoost (`scripts/train_xgb.py`)
+Full pipeline (preprocess -> search -> train -> test -> plot):
+```bash
+python scripts/train_xgb.py
+```
+Options:
+* `--skip_search` – skip hyperparameter search and directly train using stored/previous best params.
+* `--resume {search|train|test|plot} --run_id <id>` – resume from a saved session.
+* `--dataset <name>` – specify a processed dataset version.
+* `--note "description"` – attach a note stored in session state.
+
+Example background run:
+```bash
+nohup python scripts/train_xgb.py --note "baseline xgb" > xgb.out 2>&1 &
+```
+
+### Temporal Fusion Transformer (`scripts/train_tft.py`)
+Runs sequential phases automatically when invoked without arguments:
+```bash
+python scripts/train_tft.py
+```
+Resume at a later step:
+```bash
+python scripts/train_tft.py --resume train --run_id 2024_09_15_001
+```
+
+### LSTM (`scripts/train_lstm.py`)
+PyTorch Lightning implementation with sequence modeling capabilities:
+```bash
+python scripts/train_lstm.py
+```
+Resume at a later step:
+```bash
+python scripts/train_lstm.py --resume train --run_id 2024_09_15_001
+```
+
+---
+## 8. Dashboard
+The Streamlit dashboard (`scripts/dashboard.py`) provides exploratory visualization (WIP). Launch in foreground:
+```bash
+streamlit run scripts/dashboard.py
+```
+Background with basic logging:
+```bash
+nohup streamlit run scripts/dashboard.py --logger.level=info --server.runOnSave=false > dashboard.out 2>&1 &
+```
+
+---
+## 9. Project Layout
 ```
 ├── configs/
-│   ├── config.py          # Configuration file
+│   ├── data.py            # Data selection & feature engineering knobs
+│   ├── paths.py           # Centralized path placeholders
+│   └── models/            # Model-specific search configs (tft/xgb)
 ├── scripts/
-│   ├── train_xgb.py     # Training and testing script
-│   ├── dashboard.py       # Streamlit dashboard
+│   ├── train_xgb.py       # XGBoost pipeline driver
+│   ├── train_tft.py       # TFT pipeline driver
+│   ├── train_lstm.py      # LSTM pipeline driver
+│   └── dashboard.py       # Streamlit dashboard (exploration)
 ├── src/
-│   ├── data/              # Data preprocessing
-│   ├── trainers/          # Model training and evaluation
-│   ├── utils/             # Utility functions and plotting
-├── requirements.txt     # Dependencies for pip
-├── README.md              # Project documentation
+│   ├── data/              # Preprocessing, feature engineering, dataset builders
+│   ├── trainers/          # Training loops, search routines, evaluation helpers
+│   ├── utils/             # Logging, persistence, plotting utilities
+├── lightning_logs/        # PyTorch Lightning run artifacts (TFT)
+├── metadata/              # Auxiliary classification / scenario metadata
+├── requirements.txt       # Python dependencies
+├── Makefile               # Data processing convenience target
+└── README.md
 ```
+
+---
+## 10. Recommended Citation
+If you use this pipeline or derivative artifacts in academic or policy work, cite:
+* The IPCC AR6 Scenario Explorer per its official citation guidance.
+* (Placeholder for forthcoming paper)
+
+---
+## 11. License
+This repository's code is released under the existing LICENSE file. AR6 data are subject to their own license; you must obtain and use them in compliance with: https://data.ene.iiasa.ac.at/ar6/#/license
+
+---
+## 12. FAQ
+**Q:** How do I add a new target variable?  
+**A:** Append it to `OUTPUT_VARIABLES` in `configs/data.py`, re-run `make process-data`, then retrain models.
+
+---
+Feel free to open issues for clarifications or enhancements.
+

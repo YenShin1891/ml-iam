@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Union
 
-from configs.config import INDEX_COLUMNS, MAX_SERIES_LENGTH, CATEGORICAL_COLUMNS
+from configs.data import CATEGORICAL_COLUMNS, INDEX_COLUMNS, MAX_SERIES_LENGTH
 
 
 @dataclass
@@ -9,14 +9,14 @@ class TFTDatasetConfig:
     """Builder for TimeSeriesDataSet parameters used by TFT.
 
     Usage:
-      params = TFTDatasetConfig().build(features, targets, mode="train"|"eval")
+        params = TFTDatasetConfig().build(features, targets, mode="train"|"eval")
     """
 
     time_idx: str = "Step"
     group_ids: List[str] = field(default_factory=lambda: INDEX_COLUMNS)
     max_encoder_length: int = 2
     min_encoder_length: int = 2
-    max_prediction_length: int = MAX_SERIES_LENGTH - 2
+    max_prediction_length: int = MAX_SERIES_LENGTH
     min_prediction_length: int = 1
     add_relative_time_idx: bool = True
     add_target_scales: bool = True
@@ -37,14 +37,14 @@ class TFTDatasetConfig:
         time_known = ["Year", "DeltaYears"]
         indicator_cols = [f for f in features if f.endswith("_is_missing")]
 
-        # unknown real-valued features exclude categoricals, known time columns, and indicator categoricals
+        # Unknown real-valued features exclude categoricals, known time columns, and indicator categoricals
         unknown_reals = [
             f for f in features
             if f not in (CATEGORICAL_COLUMNS + time_known + indicator_cols)
         ]
 
-        # shared normalizer across targets, grouped by group_ids
-        # IMPORTANT: create a distinct GroupNormalizer per target.
+        # Shared normalizer across targets, grouped by group_ids
+        # IMPORTANT: create a distinct GroupNormalizer per target
         target_normalizer = MultiNormalizer([
             GroupNormalizer(groups=self.group_ids) for _ in targets
         ])
