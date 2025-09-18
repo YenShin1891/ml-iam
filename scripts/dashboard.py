@@ -1,6 +1,12 @@
 import streamlit as st
 import numpy as np
+import pandas as pd
 import logging
+import json
+import ast
+import os
+import sys
+import argparse
 
 from src.utils.plotting import plot_time_series, get_saved_plots_metadata
 from src.utils.utils import setup_logging, load_session_state
@@ -168,13 +174,33 @@ def filter_and_plot(run_id):
     
     if save_individual:
         individual_indices_str = os.getenv('INDIVIDUAL_PLOT_INDICES', '[0]')
+        # Safely parse indices from env var, preferring JSON then literal_eval
         try:
-            individual_indices = eval(individual_indices_str)
-            if not isinstance(individual_indices, list):
+            individual_indices = json.loads(individual_indices_str)
+        except json.JSONDecodeError:
+            try:
+                individual_indices = ast.literal_eval(individual_indices_str)
+            except (ValueError, SyntaxError):
                 individual_indices = [0]
-        except:
+
+        # Normalize to list of ints
+        if isinstance(individual_indices, (int, float, str)):
+            try:
+                individual_indices = [int(individual_indices)]
+            except Exception:
+                individual_indices = [0]
+        elif isinstance(individual_indices, (tuple, set)):
+            individual_indices = list(individual_indices)
+
+        if not isinstance(individual_indices, list):
             individual_indices = [0]
-        logging.info(f"DEBUG: individual_indices = {individual_indices}")
+
+        try:
+            individual_indices = [int(x) for x in individual_indices]
+        except Exception:
+            individual_indices = [0]
+
+        logging.info(f"DEBUG: individual_indices (safe parsed) = {individual_indices}")
     else:
         individual_indices = []
     
@@ -307,8 +333,33 @@ def handle_filtering_and_plotting(run_id):
             filter_and_plot(run_id)
         st.session_state.apply_filters_clicked = False
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="ML IAM Dashboard", add_help=False)
+    parser.add_argument("--run_id", "-r", dest="run_id", help="Default run_id to load results from", required=True)
+    # Parse known args to ignore Streamlit's own args
+    args, _ = parser.parse_known_args(sys.argv[1:])
+    return args
+
+def resolve_run_id() -> str:
+    # Require CLI run_id; allow URL ?run_id= to override; reflect final value
+    args = parse_args()
+    run_id = args.run_id
+    try:
+        params = st.experimental_get_query_params()
+        if vals := params.get("run_id"):
+            run_id = vals[0]
+    except Exception:
+        pass
+
+    # Reflect chosen run_id in URL for bookmarking
+    try:
+        st.experimental_set_query_params(run_id=run_id)
+    except Exception:
+        pass
+    return run_id
+
 def main():
-    run_id = "run_39"
+    run_id = resolve_run_id()
     
     # Initialize session and logging
     session_state = setup_session_and_logging(run_id)

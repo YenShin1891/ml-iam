@@ -1,4 +1,5 @@
 import json
+import datetime
 import logging
 import os
 import tempfile
@@ -181,7 +182,6 @@ def plot_time_series(test_data, y_test, preds, targets, alpha=0.5, linewidth=0.5
     
     # Save the full plot with filter metadata if run_id is provided
     if run_id and filter_metadata:
-        import datetime
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         plot_filename = f"timeseries_{timestamp}.png"
         metadata_filename = f"timeseries_{timestamp}_metadata.json"
@@ -193,13 +193,11 @@ def plot_time_series(test_data, y_test, preds, targets, alpha=0.5, linewidth=0.5
         plt.savefig(os.path.join(plots_dir, plot_filename), bbox_inches='tight')
         
         # Save metadata
-        import json
         with open(os.path.join(plots_dir, metadata_filename), 'w') as f:
             json.dump(filter_metadata, f, indent=2)
     
     # Save individual plots if requested
     if save_individual and run_id and filter_metadata:
-        import datetime
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         plots_dir = os.path.join(RESULTS_PATH, run_id, "saved_dashboard_plots")
         
