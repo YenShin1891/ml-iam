@@ -1,4 +1,5 @@
 import json
+import datetime
 import logging
 import os
 import tempfile
@@ -7,6 +8,7 @@ import re
 
 import matplotlib.pyplot as plt
 from matplotlib import cm
+from matplotlib.ticker import FuncFormatter, MaxNLocator
 import numpy as np
 import pandas as pd
 import shap
@@ -14,9 +16,24 @@ import xgboost as xgb
 import torch
 from PIL import Image
 from tqdm import tqdm
+import glob
+import streamlit as st
 
 from configs.paths import RESULTS_PATH
 from configs.data import INDEX_COLUMNS, NON_FEATURE_COLUMNS, OUTPUT_UNITS
+
+
+def _to_numpy(x):
+    try:
+        if hasattr(x, 'detach') and callable(getattr(x, 'detach')):
+            return x.detach().cpu().numpy()
+        if hasattr(x, 'cpu') and callable(getattr(x, 'cpu')) and hasattr(x, 'numpy'):
+            return x.cpu().numpy()
+        if hasattr(x, 'numpy') and callable(getattr(x, 'numpy')):
+            return x.numpy()
+    except Exception:
+        pass
+    return np.array(x)
 
 def preprocess_data(
     test_data: pd.DataFrame, 
@@ -47,23 +64,64 @@ def preprocess_data(
     return test_data_valid, y_test_valid, preds_valid
 
 
+def format_large_numbers(x, pos):
+    if abs(x) >= 1e6:
+        val = x/1e6
+        return f'{val:.0f}M' if val == int(val) else f'{val:.1f}M'
+    elif abs(x) >= 1e3:
+        val = x/1e3
+        return f'{val:.0f}k' if val == int(val) else f'{val:.1f}k'
+    elif x == 0:
+        return '0'
+    else:
+        return f'{x:.0f}' if x == int(x) else f'{x:.1f}'
+
+
+def create_single_timeseries_plot(ax, test_data, y_test, preds, target_index, targets, alpha=0.5, linewidth=0.5):
+    test_data_valid, y_test_valid, preds_valid = preprocess_data(test_data, y_test, preds, target_index)
+    for _, group_df in test_data_valid.groupby(INDEX_COLUMNS):
+        group_years = group_df['Year']
+        group_indices = group_df.index
+        group_y_test = y_test_valid[group_indices]
+        group_preds = preds_valid[group_indices]
+        ax.plot(group_years, group_y_test, label='IAM', alpha=alpha, linewidth=linewidth)
+        ax.plot(group_years, group_preds, label='XGBoost', alpha=alpha, linewidth=linewidth)
+        ax.fill_between(group_years, group_y_test, group_preds, alpha=0.1)
+    ylabel_with_unit = f"{targets[target_index]} ({OUTPUT_UNITS[target_index]})"
+    ax.set_xlabel("Year", fontsize=16)
+    ax.set_ylabel(ylabel_with_unit, fontsize=16)
+    ax.tick_params(axis='both', which='major', labelsize=14)
+    formatter = FuncFormatter(format_large_numbers)
+    ax.yaxis.set_major_formatter(formatter)
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+
+
 def configure_axes(ax, min_val: float, max_val: float, xlabel: str, ylabel: str) -> None:
     ax.set_xlim(min_val, max_val)
     ax.set_ylim(min_val, max_val)
     ax.set_aspect('equal', adjustable='box')
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
+    ax.set_xlabel(xlabel, fontsize=16)
+    ax.set_ylabel(ylabel, fontsize=16)
+    ax.tick_params(axis='both', which='major', labelsize=14)
+    ax.tick_params(axis='both', which='minor', labelsize=12)
+    formatter = FuncFormatter(format_large_numbers)
+    ax.xaxis.set_major_formatter(formatter)
+    ax.yaxis.set_major_formatter(formatter)
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=5))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
 
 
 def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[str] = None, model_name: str = "Model"):
     logging.info("Creating scatter plot...")
     rows, cols = 3, 3
     fig, axes = plt.subplots(rows, cols, figsize=(20, 20))
+    plt.rcParams.update({'font.size': 14})
 
     for i, ax in enumerate(axes.flatten()):
         test_data_valid, y_test_valid, preds_valid = preprocess_data(test_data, y_test, preds, i)
         unique_years = sorted(test_data_valid['Year'].unique())
-        colors = cm.viridis(np.linspace(0, 1, len(unique_years)))
+        cmap = cm.get_cmap('viridis')
+        colors = cmap(np.linspace(0, 1, len(unique_years)))
 
         for year, color in zip(unique_years, colors):
             group_df = test_data_valid[test_data_valid['Year'] == year]
@@ -93,44 +151,100 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[s
     plt.close()
 
 
-def plot_time_series(
-    test_data: pd.DataFrame,
-    y_test: Optional[np.ndarray],
-    preds: np.ndarray,
-    targets: List[str],
-    alpha: float = 0.5,
-    linewidth: float = 0.5
-) -> None:
+def plot_time_series(test_data, y_test, preds, targets, alpha=0.5, linewidth=0.5, run_id=None, filter_metadata=None, save_individual=False, individual_indices=[]):
     rows, cols = 3, 3
     fig, axes = plt.subplots(rows, cols, figsize=(15, 15))
+    plt.rcParams.update({'font.size': 14})
 
-    if y_test is None or y_test.size == 0:
+    # Filter years to 2015-2100 before checking if data is empty
+    if test_data is not None and 'Year' in test_data.columns:
+        year_mask = (test_data['Year'] >= 2015) & (test_data['Year'] <= 2100)
+        test_data = test_data[year_mask].reset_index(drop=True)
+        if y_test is not None:
+            y_test = y_test[year_mask.values]
+        if preds is not None:
+            preds = preds[year_mask.values]
+
+    if y_test is None or (hasattr(y_test, 'size') and y_test.size == 0):
         st.warning("y_test is empty. Displaying blank plots.")
         for i, ax in enumerate(axes.flatten()):
             ax.set_title(targets[i])
             ax.set_xlabel("Year")
         plt.tight_layout()
-        st.pyplot(plt)
+        st.pyplot(plt.gcf())
         return
 
     for i, ax in enumerate(axes.flatten()):
-        test_data_valid, y_test_valid, preds_valid = preprocess_data(test_data, y_test, preds, i)
-
-        for group_key, group_df in test_data_valid.groupby(INDEX_COLUMNS):
-            group_years = group_df['Year']
-            group_indices = group_df.index
-            group_y_test = y_test_valid[group_indices]
-            group_preds = preds_valid[group_indices]
-
-            ax.plot(group_years, group_y_test, label='IAM', alpha=alpha, linewidth=linewidth)
-            ax.plot(group_years, group_preds, label='XGBoost', alpha=alpha, linewidth=linewidth)
-            ax.fill_between(group_years, group_y_test, group_preds, alpha=0.1)
-
-        ax.set_title(targets[i])
-        ax.set_xlabel("Year")
+        create_single_timeseries_plot(ax, test_data, y_test, preds, i, targets, alpha, linewidth)
 
     plt.tight_layout()
-    st.pyplot(plt)
+    st.pyplot(plt.gcf())
+    
+    # Save the full plot with filter metadata if run_id is provided
+    if run_id and filter_metadata:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        plot_filename = f"timeseries_{timestamp}.png"
+        metadata_filename = f"timeseries_{timestamp}_metadata.json"
+        
+        plots_dir = os.path.join(RESULTS_PATH, run_id, "saved_dashboard_plots")
+        os.makedirs(plots_dir, exist_ok=True)
+        
+        # Save the full plot
+        plt.savefig(os.path.join(plots_dir, plot_filename), bbox_inches='tight')
+        
+        # Save metadata
+        with open(os.path.join(plots_dir, metadata_filename), 'w') as f:
+            json.dump(filter_metadata, f, indent=2)
+    
+    # Save individual plots if requested
+    if save_individual and run_id and filter_metadata:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        plots_dir = os.path.join(RESULTS_PATH, run_id, "saved_dashboard_plots")
+        
+        for i in individual_indices:
+            if 0 <= i < len(targets):
+                individual_fig = plt.figure(figsize=(6, 6))
+                individual_ax = individual_fig.add_subplot(111)
+                create_single_timeseries_plot(individual_ax, test_data, y_test, preds, i, targets, alpha, linewidth)
+                
+                individual_filename = f"timeseries_{timestamp}_individual_{i}.png"
+                plt.savefig(os.path.join(plots_dir, individual_filename), bbox_inches='tight')
+                plt.close(individual_fig)
+
+
+def get_saved_plots_metadata(run_id):
+    """Get metadata for all saved time series plots."""
+    plots_dir = os.path.join(RESULTS_PATH, run_id, "saved_dashboard_plots")
+    if not os.path.exists(plots_dir):
+        return []
+    
+    metadata_files = glob.glob(os.path.join(plots_dir, "*_metadata.json"))
+    saved_plots = []
+    
+    for metadata_file in metadata_files:
+        try:
+            with open(metadata_file, 'r') as f:
+                metadata = json.load(f)
+            
+            # Extract timestamp from filename
+            filename = os.path.basename(metadata_file)
+            timestamp_str = filename.replace('timeseries_', '').replace('_metadata.json', '')
+            
+            # Get corresponding plot file
+            plot_file = metadata_file.replace('_metadata.json', '.png')
+            if os.path.exists(plot_file):
+                saved_plots.append({
+                    'timestamp': timestamp_str,
+                    'metadata': metadata,
+                    'plot_path': plot_file,
+                    'filename': os.path.basename(plot_file)
+                })
+        except (json.JSONDecodeError, FileNotFoundError):
+            continue
+    
+    # Sort by timestamp (newest first)
+    saved_plots.sort(key=lambda x: x['timestamp'], reverse=True)
+    return saved_plots
 
 
 def get_shap_values(run_id, X_test):
@@ -225,7 +339,6 @@ def transform_outputs_to_former_inputs(
         json.dump(feature_renaming, json_file, indent=4)
 
     return input_only
-
 
 def _make_display_name(feature: str) -> str:
     """Return a display name based on prev/prevN_ convention.
@@ -485,15 +598,13 @@ def get_lstm_shap_values(run_id, X_test, sequence_length=1):
 
     # Convert to numpy if needed and handle temporal dimensions properly
     if isinstance(shap_values, list):
-        # Multi-output case
-        shap_values = [sv.detach().cpu().numpy() if hasattr(sv, 'detach') else sv for sv in shap_values]
+        shap_values = [_to_numpy(sv) for sv in shap_values]
         shap_values = np.array(shap_values, dtype=np.float64)  # Shape: [n_outputs, n_samples, seq_len, n_features]
         shap_values = np.transpose(shap_values, (1, 2, 3, 0))  # [n_samples, seq_len, n_features, n_outputs]
     else:
         # Single output case
-        if hasattr(shap_values, 'detach'):
-            shap_values = shap_values.detach().cpu().numpy()
-        shap_values = np.array(shap_values, dtype=np.float64)  # Ensure proper numpy dtype
+        shap_values = _to_numpy(shap_values)
+        shap_values = np.array(shap_values, dtype=np.float64)
         if shap_values.ndim == 3:  # [n_samples, seq_len, n_features]
             shap_values = np.expand_dims(shap_values, axis=-1)  # [n_samples, seq_len, n_features, 1]
 
@@ -517,7 +628,7 @@ def get_lstm_shap_values(run_id, X_test, sequence_length=1):
     X_test_processed = test_data_subset[features].iloc[:n_shap_samples]
 
     # Return also the exact test sequences used for SHAP (numpy)
-    test_sequences_np = test_inputs.detach().cpu().numpy() if hasattr(test_inputs, 'detach') else np.array(test_inputs)
+    test_sequences_np = _to_numpy(test_inputs)
 
     return original_temporal_shap, averaged_shap_values, X_test_processed, test_sequences_np
 
