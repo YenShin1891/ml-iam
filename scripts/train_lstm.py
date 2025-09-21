@@ -25,7 +25,7 @@ from src.utils.utils import (
     save_session_state,
     setup_logging,
 )
-from src.utils.plotting import plot_scatter, plot_lstm_shap
+from src.visualization import plot_scatter, plot_lstm_shap
 
 np.random.seed(0)
 seed_everything(42, workers=True)
