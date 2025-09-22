@@ -8,7 +8,7 @@ import os
 import sys
 import argparse
 
-from src.utils.plotting import plot_time_series, get_saved_plots_metadata
+from src.visualization import plot_trajectories, get_saved_plots_metadata
 from src.utils.utils import setup_logging, load_session_state
 import datetime
 
@@ -204,7 +204,7 @@ def filter_and_plot(run_id):
     else:
         individual_indices = []
     
-    plot_time_series(
+    plot_trajectories(
         filtered_test_data,
         filtered_y_test,
         filtered_preds,
@@ -307,7 +307,7 @@ def display_selected_plot():
             
             # Display the plot using cached loading
             img = load_plot_image(plot_info['plot_path'])
-            st.image(img, caption="Time Series Plot", use_container_width=True)
+            st.image(img, caption="Temporal trajectories", use_container_width=True)
 
 def setup_session_and_logging(run_id):
     """Initialize logging and load session state."""
@@ -345,15 +345,19 @@ def resolve_run_id() -> str:
     args = parse_args()
     run_id = args.run_id
     try:
-        params = st.experimental_get_query_params()
-        if vals := params.get("run_id"):
+        params = st.query_params  # New stable API replacing experimental_get_query_params
+        vals = params.get("run_id")
+        if isinstance(vals, list) and vals:
             run_id = vals[0]
+        elif isinstance(vals, str) and vals:
+            run_id = vals
     except Exception:
         pass
 
     # Reflect chosen run_id in URL for bookmarking
     try:
-        st.experimental_set_query_params(run_id=run_id)
+        # Update query param using new API (assignment updates the URL)
+        st.query_params["run_id"] = run_id
     except Exception:
         pass
     return run_id

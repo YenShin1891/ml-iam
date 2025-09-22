@@ -7,7 +7,7 @@ from src.data.preprocess import prepare_data, load_and_process_data, prepare_fea
 from src.trainers.xgb_trainer import hyperparameter_search, train_and_save_model
 from src.trainers.evaluation import test_xgb_autoregressively, save_metrics
 from src.utils.utils import setup_logging, save_session_state, load_session_state, load_model, get_next_run_id, load_best_params
-from src.utils.plotting import plot_scatter, plot_shap
+from src.visualization import plot_scatter, plot_shap
 
 np.random.seed(0)
 
