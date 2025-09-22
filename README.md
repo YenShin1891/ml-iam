@@ -106,7 +106,7 @@ export RESULTS_PATH="/path/to/results"
 Key data knobs (from `configs/data.py`):
 * `OUTPUT_VARIABLES` – target columns (energy & emissions series).
 * `MIN_COUNT`, `COMPLETENESS_RATIO` – filtering heuristics.
-* `MAX_SERIES_LENGTH`, `N_LAG_FEATURES`, `YEAR_RANGE` – feature engineering scope.
+* `MAX_SERIES_LENGTH`, `N_LAG_FEATURES` – feature engineering scope.
 
 ---
 ## 6. Data Processing

@@ -36,9 +36,9 @@ def get_unique_values(test_data):
     R6 = [region for region in regions if region.startswith('R6')]
     R5 = [region for region in regions if region.startswith('R5')]
     World = [region for region in regions if region.startswith('World')]
-    other_columns = [region for region in regions if not (region.startswith('R10') or region.startswith('R6') or region.startswith('R5') or region.startswith('World'))]
-    new_region_order = other_columns + R10 + R6 + R5 + World
-    
+    ISO = [region for region in regions if not (region.startswith('R10') or region.startswith('R6') or region.startswith('R5') or region.startswith('World'))]
+    new_region_order = ISO + R10 + R6 + R5 + World
+
     model_families = test_data['Model_Family'].unique()
     return scenario_categories, new_region_order, model_families
 

@@ -102,10 +102,11 @@ def train_xgb(session_state, run_id):
 def test_xgb(session_state, run_id):
     X_test_with_index = session_state["X_test_with_index"]
     y_test = session_state["y_test"]
+    test_data = session_state["test_data"]
     logging.info("Testing the model...")
     preds = test_xgb_autoregressively(X_test_with_index, y_test, run_id)
     session_state["preds"] = preds
-    save_metrics(run_id, y_test, preds)
+    save_metrics(run_id, y_test, preds, test_data)
 
     return preds
 

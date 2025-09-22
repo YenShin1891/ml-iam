@@ -156,14 +156,14 @@ def plot_time_series(test_data, y_test, preds, targets, alpha=0.5, linewidth=0.5
     fig, axes = plt.subplots(rows, cols, figsize=(15, 15))
     plt.rcParams.update({'font.size': 14})
 
-    # Filter years to 2015-2100 before checking if data is empty
-    if test_data is not None and 'Year' in test_data.columns:
-        year_mask = (test_data['Year'] >= 2015) & (test_data['Year'] <= 2100)
-        test_data = test_data[year_mask].reset_index(drop=True)
-        if y_test is not None:
-            y_test = y_test[year_mask.values]
-        if preds is not None:
-            preds = preds[year_mask.values]
+    # NOTE: Previously filtered years to 2015-2100. Commented out to retain full historical range.
+    # if test_data is not None and 'Year' in test_data.columns:
+    #     year_mask = (test_data['Year'] >= 2015) & (test_data['Year'] <= 2100)
+    #     test_data = test_data[year_mask].reset_index(drop=True)
+    #     if y_test is not None:
+    #         y_test = y_test[year_mask.values]
+    #     if preds is not None:
+    #         preds = preds[year_mask.values]
 
     if y_test is None or (hasattr(y_test, 'size') and y_test.size == 0):
         st.warning("y_test is empty. Displaying blank plots.")

@@ -35,6 +35,7 @@ METADATA_DIR = REPO_ROOT / "metadata"
 
 VAR_CLASSIFICATION_CSV = METADATA_DIR / "variable_classification_0327.csv"
 SCENARIO_CATEGORY_CSV = METADATA_DIR / "scenario_category.csv"
+MODEL_BASE_YEAR_CSV = METADATA_DIR / "unique_models_all_with_base_year.csv"
 
 
 # ---------- Utilities ----------
@@ -179,6 +180,78 @@ def compute_missing_stats(df: pd.DataFrame, original_stat_table: pd.DataFrame) -
     return stat_table
 
 
+# ---------- Base year filtering ----------
+def load_model_base_years(csv_path: Path) -> pd.DataFrame:
+    if not csv_path.exists():
+        raise FileNotFoundError(
+            f"Model base year CSV not found: {csv_path}; add tag 'apply-base-year' only when the metadata CSV is available, or omit the tag to skip filtering."
+        )
+    df = pd.read_csv(csv_path, dtype=str)
+    assert not df.empty, "Base year metadata is empty"
+    # Normalize column names by stripping whitespace
+    df.columns = [c.strip() for c in df.columns]
+    return df
+
+
+def resolve_effective_base_year(model: str, meta: pd.DataFrame, available_years: list[int], default_year: int = 2020) -> int:
+    """Determine effective base year selecting the ceiling (>=) if exact not present.
+
+    Rules:
+      1. Use declared base year if present; else fallback to default_year.
+      2. If exact base year exists in available_years, use it.
+      3. Otherwise choose the smallest available year that is GREATER than the candidate (ceiling).
+      4. If all available years are below the candidate, return 10000 (no valid year).
+    """
+    years_sorted = sorted(available_years)
+    row = meta.loc[meta['Model'] == model]
+    base_candidate: int | None = None
+    if not row.empty:
+        val = row.iloc[0].get('Base year')
+        try:
+            if val and pd.notna(val):
+                base_candidate = int(val)
+        except Exception:
+            base_candidate = None
+    if base_candidate is None:
+        base_candidate = default_year
+    if not years_sorted:
+        return base_candidate
+    if base_candidate in years_sorted:
+        return base_candidate
+    ge_years = [y for y in years_sorted if y > base_candidate]
+    if ge_years:
+        return ge_years[0]
+    else:
+        return 10000
+
+
+def apply_base_year_filter(processed_df_year: pd.DataFrame, base_year_meta: pd.DataFrame) -> pd.DataFrame:
+    """Apply per-model base year filtering. Rows earlier than that year are dropped. 
+    Returns a new filtered DataFrame.
+    """
+    model_base_map: dict[str, int] = {}
+    for m, g in processed_df_year.groupby('Model'):
+        m_str = str(m)
+        model_years = sorted(g['Year'].dropna().astype(int).unique())
+        model_base_map[m_str] = resolve_effective_base_year(m_str, base_year_meta, model_years)
+
+    df = processed_df_year.copy()
+    # Build temporary numeric representations for safe comparison without altering original Year dtype
+    year_num = pd.to_numeric(df['Year'], errors='coerce')
+    effective = pd.Series(df['Model'].map(model_base_map), index=df.index)
+    effective_num = pd.to_numeric(effective, errors='coerce')
+    before_rows = len(df)
+    mask = year_num.notna() & effective_num.notna() & (year_num >= effective_num)
+    dropped = before_rows - mask.sum()
+    df = df.loc[mask].copy()
+    logging.info(
+        "Base-year filter (per-model) removed %d pre-base-year rows (remaining %d)",
+        dropped,
+        len(df)
+    )
+    return df
+
+
 def to_series_wide(processed_df_year: pd.DataFrame) -> pd.DataFrame:
     var_melted = processed_df_year.melt(
         id_vars=["Model", "Scenario", "Scenario_Category", "Region", "Year"],
@@ -228,8 +301,10 @@ def run_pipeline(
     stat_table_raw = build_stat_table(df_list)
     stat_table = merge_variable_classification(stat_table_raw, var_class)
     
-    # Check if 'include-intermediate' tag is present
-    include_intermediate = "include-intermediate" in getattr(dp, "TAGS", [])
+    # Tag checks
+    tags = list(getattr(dp, "TAGS", []))
+    include_intermediate = "include-intermediate" in tags
+    apply_base_year = "apply-base-year" in tags
     
     selected_vars = select_variables(stat_table, output_variables, min_count=min_count or dp.MIN_COUNT, include_intermediate=include_intermediate)
     if include_intermediate:
@@ -259,6 +334,13 @@ def run_pipeline(
     processed_year_frames = [melt_and_pivot_year(d, YEAR_STARTS_AT) for d in processed_list]
     processed_df_year = pd.concat(processed_year_frames, axis=0, ignore_index=True)
     logging.info(f"Year-wise concatenated shape: {processed_df_year.shape}")
+
+    # Apply model base-year filtering BEFORE completeness threshold so early padded years don't dilute counts
+    if apply_base_year:
+        base_year_meta = load_model_base_years(MODEL_BASE_YEAR_CSV)
+        processed_df_year = apply_base_year_filter(processed_df_year, base_year_meta)
+    else:
+        logging.info("Base-year filtering disabled (no 'apply-base-year' tag present).")
 
     # Completeness filtering
     before_rows = len(processed_df_year)
@@ -315,7 +397,6 @@ def run_pipeline(
             "year_starts_at": int(YEAR_STARTS_AT),
             "output_variables": list(output_variables),
             "tags": list(getattr(dp, "TAGS", [])),
-            "include_intermediate": include_intermediate,
         }
         # Write manifest alongside the dataset using the version label in the filename
         (version_dir / f"{version_label}-manifest.json").write_text(json.dumps(manifest, indent=2))
@@ -394,7 +475,7 @@ def main() -> None:
         output_variables=output_vars,
         min_count=args.min_count,
         completeness_ratio=args.completeness,
-    filenames=args.filenames,
+        filenames=args.filenames,
     )
 
 if __name__ == "__main__":
