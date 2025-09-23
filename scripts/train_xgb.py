@@ -7,7 +7,7 @@ from src.data.preprocess import prepare_data, load_and_process_data, prepare_fea
 from src.trainers.xgb_trainer import hyperparameter_search, train_and_save_model
 from src.trainers.evaluation import test_xgb_autoregressively, save_metrics
 from src.utils.utils import setup_logging, save_session_state, load_session_state, load_model, get_next_run_id, load_best_params
-from src.utils.plotting import plot_scatter, plot_shap
+from src.visualization import plot_scatter, plot_shap
 
 np.random.seed(0)
 
@@ -102,10 +102,11 @@ def train_xgb(session_state, run_id):
 def test_xgb(session_state, run_id):
     X_test_with_index = session_state["X_test_with_index"]
     y_test = session_state["y_test"]
+    test_data = session_state["test_data"]
     logging.info("Testing the model...")
     preds = test_xgb_autoregressively(X_test_with_index, y_test, run_id)
     session_state["preds"] = preds
-    save_metrics(run_id, y_test, preds)
+    save_metrics(run_id, y_test, preds, test_data)
 
     return preds
 

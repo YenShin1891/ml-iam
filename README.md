@@ -17,11 +17,12 @@ It standardizes data ingestion from the IPCC AR6 Scenario Explorer, feature engi
 5. Configuration
 6. Data Processing
 7. Training Pipelines (XGB / TFT / LSTM)
-8. Dashboard
-9. Project Layout
-10. Recommended Citation
-11. License
-12. FAQ
+8. Visualization & Explainability
+9. Dashboard
+10. Project Layout
+11. Recommended Citation
+12. License
+13. FAQ
 
 ---
 ## 1. Features
@@ -106,7 +107,7 @@ export RESULTS_PATH="/path/to/results"
 Key data knobs (from `configs/data.py`):
 * `OUTPUT_VARIABLES` – target columns (energy & emissions series).
 * `MIN_COUNT`, `COMPLETENESS_RATIO` – filtering heuristics.
-* `MAX_SERIES_LENGTH`, `N_LAG_FEATURES`, `YEAR_RANGE` – feature engineering scope.
+* `MAX_SERIES_LENGTH`, `N_LAG_FEATURES` – feature engineering scope.
 
 ---
 ## 6. Data Processing
@@ -157,7 +158,22 @@ python scripts/train_lstm.py --resume train --run_id 2024_09_15_001
 ```
 
 ---
-## 8. Dashboard
+## 8. Visualization & Explainability
+The visualization layer covers three categories:
+1. Diagnostic scatter (predicted vs actual across targets)
+2. Trajectory comparison (model vs historical / IAM reference)
+3. SHAP explainability (For both trees & neural networks)
+
+Directory structure (`src/visualization/`):
+```
+trajectories.py  # 1 & 2: trajectory panels, scatter diagnostics, metadata helpers
+shap_xgb.py      # 3: XGBoost SHAP value computation + summary plots
+shap_nn.py       # 3: LSTM, TFT temporal SHAP, heatmap, timestep importance
+helpers.py       # Shared: subplot grids, feature name formatting, render helpers
+__init__.py      # Public re-exports
+```
+
+## 9. Dashboard
 The Streamlit dashboard (`scripts/dashboard.py`) provides exploratory visualization (WIP). Launch in foreground:
 ```bash
 streamlit run scripts/dashboard.py
@@ -168,7 +184,7 @@ nohup streamlit run scripts/dashboard.py --logger.level=info --server.runOnSave=
 ```
 
 ---
-## 9. Project Layout
+## 10. Project Layout
 ```
 ├── configs/
 │   ├── data.py            # Data selection & feature engineering knobs
@@ -182,7 +198,8 @@ nohup streamlit run scripts/dashboard.py --logger.level=info --server.runOnSave=
 ├── src/
 │   ├── data/              # Preprocessing, feature engineering, dataset builders
 │   ├── trainers/          # Training loops, search routines, evaluation helpers
-│   ├── utils/             # Logging, persistence, plotting utilities
+│   ├── visualization/     # Plotting & SHAP (trajectories, xgb shap, nn shap, helpers)
+│   ├── utils/             # General utilities
 ├── lightning_logs/        # PyTorch Lightning run artifacts (TFT)
 ├── metadata/              # Auxiliary classification / scenario metadata
 ├── requirements.txt       # Python dependencies
@@ -191,17 +208,17 @@ nohup streamlit run scripts/dashboard.py --logger.level=info --server.runOnSave=
 ```
 
 ---
-## 10. Recommended Citation
+## 11. Recommended Citation
 If you use this pipeline or derivative artifacts in academic or policy work, cite:
 * The IPCC AR6 Scenario Explorer per its official citation guidance.
 * (Placeholder for forthcoming paper)
 
 ---
-## 11. License
+## 12. License
 This repository's code is released under the existing LICENSE file. AR6 data are subject to their own license; you must obtain and use them in compliance with: https://data.ene.iiasa.ac.at/ar6/#/license
 
 ---
-## 12. FAQ
+## 13. FAQ
 **Q:** How do I add a new target variable?  
 **A:** Append it to `OUTPUT_VARIABLES` in `configs/data.py`, re-run `make process-data`, then retrain models.
 

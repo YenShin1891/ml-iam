@@ -251,46 +251,110 @@ def test_xgb_autoregressively(X_test_with_index, y_test, run_id=None, model=None
     return full_preds
 
 
-def save_metrics(run_id, y_true, y_pred):
+def save_metrics(run_id, y_true, y_pred, test_data=None):
     """
     Save performance metrics to a CSV file under the specified run directory.
+    If test_data is provided, also compute metrics by region type.
     """
-    mse = mean_squared_error(y_true, y_pred)
-    mae = np.mean(np.abs(y_true - y_pred))
-    rmse = np.sqrt(mse)
-    r2 = 1 - (np.sum((y_true - y_pred) ** 2) / np.sum((y_true - np.mean(y_true)) ** 2))
-    try:
-        y_true_flat = y_true.flatten()
-        y_pred_flat = y_pred.flatten()
-        if len(y_true_flat) == len(y_pred_flat) and len(y_true_flat) > 1:
-            pearson_corr = np.corrcoef(y_true_flat, y_pred_flat)[0, 1]
-        else:
+    def compute_metrics(y_true_subset, y_pred_subset, subset_name="Overall"):
+        """Helper function to compute all metrics for a subset of data."""
+        mse = mean_squared_error(y_true_subset, y_pred_subset)
+        mae = np.mean(np.abs(y_true_subset - y_pred_subset))
+        rmse = np.sqrt(mse)
+        r2 = 1 - (np.sum((y_true_subset - y_pred_subset) ** 2) / np.sum((y_true_subset - np.mean(y_true_subset)) ** 2))
+        try:
+            y_true_flat = y_true_subset.flatten()
+            y_pred_flat = y_pred_subset.flatten()
+            if len(y_true_flat) == len(y_pred_flat) and len(y_true_flat) > 1:
+                pearson_corr = np.corrcoef(y_true_flat, y_pred_flat)[0, 1]
+            else:
+                pearson_corr = np.nan
+        except Exception as e:
+            logging.warning("Failed to compute Pearson correlation for %s: %s", subset_name, e)
             pearson_corr = np.nan
-    except Exception as e:
-        logging.warning("Failed to compute Pearson correlation: %s", e)
-        pearson_corr = np.nan
+        
+        return {
+            "Run ID": run_id,
+            "Region Type": subset_name,
+            "Mean Squared Error": mse,
+            "Pearson Correlation": pearson_corr,
+            "R2 Score": r2,
+            "MAE": mae,
+            "RMSE": rmse,
+            "Sample Size": len(y_true_subset)
+        }
 
-    # Store the metrics
-    metrics = pd.DataFrame({
-        "Run ID": [run_id],
-        "Mean Squared Error": [mse],
-        "Pearson Correlation": [pearson_corr],
-        "R2 Score": [r2],
-        "MAE": [mae],
-        "RMSE": [rmse],
-    })
+    # Compute overall metrics
+    overall_metrics = compute_metrics(y_true, y_pred, "Overall")
+    
+    # Store metrics in a list to collect all results
+    all_metrics = [overall_metrics]
+    
+    # If test_data is provided, compute metrics by region type
+    if test_data is not None and 'Region' in test_data.columns:
+        regions = test_data['Region'].unique()
+        R10 = [region for region in regions if region.startswith('R10')]
+        R6 = [region for region in regions if region.startswith('R6')]
+        R5 = [region for region in regions if region.startswith('R5')]
+        World = [region for region in regions if region.startswith('World')]
+        ISO = [region for region in regions if not (region.startswith('R10') or region.startswith('R6') or region.startswith('R5') or region.startswith('World'))]
+        
+        # Create region type mappings
+        region_groups = {
+            'R10': R10,
+            'R6': R6,
+            'R5': R5,
+            'World': World,
+            'ISO': ISO
+        }
+        
+        # Compute metrics for each region type
+        for region_type, region_list in region_groups.items():
+            if len(region_list) > 0:
+                # Get indices for this region type
+                region_mask = test_data['Region'].isin(region_list)
+                region_indices = test_data[region_mask].index
+                
+                # Extract corresponding predictions and true values
+                y_true_region = y_true[region_indices]
+                y_pred_region = y_pred[region_indices]
+                
+                if len(y_true_region) > 0:
+                    region_metrics = compute_metrics(y_true_region, y_pred_region, region_type)
+                    all_metrics.append(region_metrics)
+                    
+                    # Log region-specific metrics
+                    try:
+                        logging.info(
+                            "Run %s %s regions (%d samples) -> MSE=%.4f RMSE=%.4f MAE=%.4f R2=%.4f Pearson=%.4f",
+                            run_id, region_type, len(y_true_region), 
+                            float(region_metrics["Mean Squared Error"]), 
+                            float(region_metrics["RMSE"]), 
+                            float(region_metrics["MAE"]), 
+                            float(region_metrics["R2 Score"]), 
+                            float(region_metrics["Pearson Correlation"]) if not np.isnan(region_metrics["Pearson Correlation"]) else float('nan')
+                        )
+                    except Exception:
+                        pass
 
+    # Convert to DataFrame
+    metrics = pd.DataFrame(all_metrics)
+
+    # Save metrics
     metrics_dir = os.path.join(RESULTS_PATH, run_id, "metrics")
     os.makedirs(metrics_dir, exist_ok=True)
     metrics_file = os.path.join(metrics_dir, "performance.csv")
     metrics.to_csv(metrics_file, index=False)
-    logging.info(
-        "Metrics saved to %s.", metrics_file
-    )
+    logging.info("Metrics saved to %s.", metrics_file)
+    
+    # Log overall metrics
     try:
+        overall = all_metrics[0]
         logging.info(
-            "Run %s metrics -> MSE=%.4f RMSE=%.4f MAE=%.4f R2=%.4f Pearson=%.4f",
-            run_id, float(mse), float(rmse), float(mae), float(r2), float(pearson_corr) if not np.isnan(pearson_corr) else float('nan')
+            "Run %s overall metrics -> MSE=%.4f RMSE=%.4f MAE=%.4f R2=%.4f Pearson=%.4f",
+            run_id, float(overall["Mean Squared Error"]), float(overall["RMSE"]), 
+            float(overall["MAE"]), float(overall["R2 Score"]), 
+            float(overall["Pearson Correlation"]) if not np.isnan(overall["Pearson Correlation"]) else float('nan')
         )
     except Exception:
         pass

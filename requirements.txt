@@ -27,7 +27,7 @@ streamlit==1.45.0
 # GPU Support - Fixed package name for Python 3.9
 cupy-cuda11x==12.3.0  # Compatible with numpy 1.24.4
 
-# Deep Learning - PyTorch Lightning stack (replaces TensorFlow for LSTM)
+# Deep Learning (Optional, Only needed for LSTM/TFT)
 torch>=2.0.0
 lightning>=2.0.0
 pytorch-forecasting>=0.10.0  # For TFT implementation

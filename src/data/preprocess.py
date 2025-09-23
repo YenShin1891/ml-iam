@@ -7,7 +7,6 @@ from sklearn.preprocessing import StandardScaler
 from configs.paths import DATA_PATH, RESULTS_PATH
 from configs.data import (
     DEFAULT_DATASET,
-    YEAR_RANGE,
     N_LAG_FEATURES,
     OUTPUT_VARIABLES,
     INDEX_COLUMNS,
@@ -140,9 +139,6 @@ def load_and_process_data(version=None) -> pd.DataFrame:
     # Identify year and non-year columns robustly
     all_cols = list(processed_series.columns)
     year_cols = [c for c in all_cols if str(c).isdigit()]
-    # Constrain by configured year range if present
-    y0, y1 = str(YEAR_RANGE[0]), str(YEAR_RANGE[1])
-    year_cols = [c for c in year_cols if y0 <= str(c) <= y1]
     non_year_cols = [c for c in all_cols if c not in year_cols]
 
     # Optional: save a heatmap of missing values over variables x years
