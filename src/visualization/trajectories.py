@@ -24,7 +24,7 @@ def create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, t
         ax.scatter(group_y_test, group_preds, alpha=0.5, color=color, label=year)
     unit = output_units[target_index] if target_index < len(output_units) else ""
     if target_index < len(targets):
-        ax.set_title(targets[target_index])
+        ax.set_title(targets[target_index], fontsize=19)
     if len(y_test_valid) and len(preds_valid):
         min_val = float(min(y_test_valid.min(), preds_valid.min()))
         max_val = float(max(y_test_valid.max(), preds_valid.max()))
@@ -38,10 +38,10 @@ def create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, t
         ylabel = model_name
     configure_axes(ax, min_val, max_val, xlabel, ylabel)
     if unique_years:
-        ax.legend(title='Year', loc='upper left', bbox_to_anchor=(1, 1), fontsize='small')
+        ax.legend(title='Year', loc='upper left', bbox_to_anchor=(1, 1), fontsize=11)
     r2_val = compute_r2(y_test_valid, preds_valid)
     if not np.isnan(r2_val):
-        ax.text(0.05, 0.95, f'R² = {r2_val:.3f}', transform=ax.transAxes, fontsize=14,
+        ax.text(0.05, 0.95, f'R² = {r2_val:.3f}', transform=ax.transAxes, fontsize=17,
                 verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
 # ... (content copied verbatim from original) ...
@@ -91,9 +91,9 @@ def create_single_trajectory_plot(ax, test_data, y_test, preds, target_index, ta
         ax.plot(group_years, group_preds, label='XGBoost', alpha=alpha, linewidth=linewidth)
         ax.fill_between(group_years, group_y_test, group_preds, alpha=0.1)
     ylabel_with_unit = f"{targets[target_index]} ({OUTPUT_UNITS[target_index]})"
-    ax.set_xlabel("Year", fontsize=16)
-    ax.set_ylabel(ylabel_with_unit, fontsize=16)
-    ax.tick_params(axis='both', which='major', labelsize=14)
+    ax.set_xlabel("Year", fontsize=19)
+    ax.set_ylabel(ylabel_with_unit, fontsize=19)
+    ax.tick_params(axis='both', which='major', labelsize=15)
     formatter = FuncFormatter(format_large_numbers)
     ax.yaxis.set_major_formatter(formatter)
     ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
@@ -196,10 +196,9 @@ def configure_axes(ax, min_val: float, max_val: float, xlabel: str, ylabel: str)
     ax.set_xlim(min_val, max_val)
     ax.set_ylim(min_val, max_val)
     ax.set_aspect('equal', adjustable='box')
-    ax.set_xlabel(xlabel, fontsize=16)
-    ax.set_ylabel(ylabel, fontsize=16)
-    ax.tick_params(axis='both', which='major', labelsize=14)
-    ax.tick_params(axis='both', which='minor', labelsize=12)
+    ax.set_xlabel(xlabel, fontsize=19)
+    ax.set_ylabel(ylabel, fontsize=19)
+    ax.tick_params(axis='both', which='major', labelsize=15)
     formatter = FuncFormatter(format_large_numbers)
     ax.xaxis.set_major_formatter(formatter)
     ax.yaxis.set_major_formatter(formatter)
@@ -216,7 +215,7 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[s
         logging.info(f"Scatter: applied inverse scaling using scaler key '{scaler_key}'")
     rows, cols = 3, 3
     fig, axes = plt.subplots(rows, cols, figsize=(20, 20))
-    plt.rcParams.update({'font.size': 14})
+    plt.rcParams.update({'font.size': 16})
     for i, ax in enumerate(axes.flatten()):
         test_data_valid, y_test_valid, preds_valid = preprocess_data(test_data, y_plot, preds_plot, i)
         create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, i, targets, model_name, OUTPUT_UNITS)
@@ -278,7 +277,7 @@ def plot_trajectories(
         individual_indices = []
     rows, cols = 3, 3
     fig, axes = plt.subplots(rows, cols, figsize=(15, 15))
-    plt.rcParams.update({'font.size': 14})
+    plt.rcParams.update({'font.size': 16})
     # NOTE: Previously filtered years to 2015-2100. Commented out to retain full historical range.
     # if test_data is not None and 'Year' in test_data.columns:
     #     year_mask = (test_data['Year'] >= 2015) & (test_data['Year'] <= 2100)
