@@ -31,9 +31,9 @@ np.random.seed(0)
 seed_everything(42, workers=True)
 
 
-def process_data():
+def process_data(dataset_version=None):
     """Load and process data for LSTM training."""
-    data = load_and_process_data()
+    data = load_and_process_data(version=dataset_version)
     prepared, features, targets = prepare_features_and_targets_sequence(data)
     prepared, features = add_missingness_indicators(prepared, features)
     train_data, val_data, test_data = split_data(prepared)
@@ -173,6 +173,12 @@ def parse_arguments():
         help="Note describing the run condition/type for later reference.",
         required=False,
     )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        help="Dataset version to use (subdirectory under data/). If not specified, uses default.",
+        required=False,
+    )
     args = parser.parse_args()
 
     # Validation: if resume is specified, run_id must be provided
@@ -183,12 +189,12 @@ def parse_arguments():
     if not args.resume and args.run_id:
         parser.error("--run_id should only be specified when using --resume")
 
-    return args.run_id, args.resume, args.skip_search, args.note
+    return args.run_id, args.resume, args.skip_search, args.note, args.dataset
 
 
 def main():
     """Main training pipeline."""
-    run_id, resume, skip_search, note = parse_arguments()
+    run_id, resume, skip_search, note, dataset_version = parse_arguments()
 
     if resume is None:
         # New full run still performs preprocessing once, then executes chosen steps.
@@ -196,7 +202,7 @@ def main():
         # Only primary rank initializes logging to avoid duplication
         if os.getenv("PL_TRAINER_GLOBAL_RANK") in (None, "0") and os.getenv("GLOBAL_RANK") in (None, "0") and os.getenv("RANK") in (None, "0"):
             setup_logging(run_id)
-        session_state = process_data()
+        session_state = process_data(dataset_version=dataset_version)
         save_session_state(session_state, run_id)
         resume = "train" if skip_search else "search"
         if skip_search:
