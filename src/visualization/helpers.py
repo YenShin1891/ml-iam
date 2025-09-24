@@ -33,6 +33,11 @@ def render_external_plot(ax, plot_fn: Callable[[plt.Figure], None]):
 
 def _make_display_name(feature: str) -> str:
     import re
+    # Handle features ending with '_is_missing'
+    m_missing = re.match(r'^(.*)_is_missing$', feature)
+    if m_missing:
+        base = m_missing.group(1)
+        return f"{base} N/A"
     m = re.match(r'^prev(\d*)_(.+)$', feature)
     if m:
         n_str, base = m.group(1), m.group(2)
