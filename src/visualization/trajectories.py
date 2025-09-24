@@ -9,9 +9,40 @@ from matplotlib.ticker import FuncFormatter, MaxNLocator
 import streamlit as st
 
 __all__ = [
-    'preprocess_data','format_large_numbers','create_single_trajectory_plot','configure_axes',
+    'preprocess_data','format_large_numbers','create_single_trajectory_plot','create_single_scatter_plot','configure_axes',
     'plot_scatter','plot_trajectories','get_saved_plots_metadata','apply_inverse_scaling','compute_r2'
 ]
+def create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, target_index, targets, model_name, output_units):
+    unique_years = sorted(test_data_valid['Year'].unique()) if len(test_data_valid) else []
+    cmap = cm.get_cmap('viridis')
+    colors = cmap(np.linspace(0, 1, len(unique_years))) if unique_years else []
+    for year, color in zip(unique_years, colors):
+        group_df = test_data_valid[test_data_valid['Year'] == year]
+        group_indices = group_df.index
+        group_y_test = y_test_valid[group_indices]
+        group_preds = preds_valid[group_indices]
+        ax.scatter(group_y_test, group_preds, alpha=0.5, color=color, label=year)
+    unit = output_units[target_index] if target_index < len(output_units) else ""
+    if target_index < len(targets):
+        ax.set_title(targets[target_index])
+    if len(y_test_valid) and len(preds_valid):
+        min_val = float(min(y_test_valid.min(), preds_valid.min()))
+        max_val = float(max(y_test_valid.max(), preds_valid.max()))
+    else:
+        min_val, max_val = 0.0, 1.0
+    if unit:
+        xlabel = f"IAM ({unit})"
+        ylabel = f"{model_name} ({unit})"
+    else:
+        xlabel = "IAM"
+        ylabel = model_name
+    configure_axes(ax, min_val, max_val, xlabel, ylabel)
+    if unique_years:
+        ax.legend(title='Year', loc='upper left', bbox_to_anchor=(1, 1), fontsize='small')
+    r2_val = compute_r2(y_test_valid, preds_valid)
+    if not np.isnan(r2_val):
+        ax.text(0.05, 0.95, f'R² = {r2_val:.3f}', transform=ax.transAxes, fontsize=14,
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
 # ... (content copied verbatim from original) ...
 import numpy as np
@@ -188,40 +219,17 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[s
     plt.rcParams.update({'font.size': 14})
     for i, ax in enumerate(axes.flatten()):
         test_data_valid, y_test_valid, preds_valid = preprocess_data(test_data, y_plot, preds_plot, i)
-        unique_years = sorted(test_data_valid['Year'].unique()) if len(test_data_valid) else []
-        cmap = cm.get_cmap('viridis')
-        colors = cmap(np.linspace(0, 1, len(unique_years))) if unique_years else []
-        for year, color in zip(unique_years, colors):
-            group_df = test_data_valid[test_data_valid['Year'] == year]
-            group_indices = group_df.index
-            group_y_test = y_test_valid[group_indices]
-            group_preds = preds_valid[group_indices]
-            ax.scatter(group_y_test, group_preds, alpha=0.5, color=color, label=year)
-        # Title without units (units only on axes per requirement)
-        unit = OUTPUT_UNITS[i] if i < len(OUTPUT_UNITS) else ""
-        if i < len(targets):
-            ax.set_title(targets[i])
-        # Compute axis bounds
-        if len(y_test_valid) and len(preds_valid):
-            min_val = float(min(y_test_valid.min(), preds_valid.min()))
-            max_val = float(max(y_test_valid.max(), preds_valid.max()))
-        else:
-            logging.warning(f"No valid data for target index {i}; using default axis limits.")
-            min_val, max_val = 0.0, 1.0
-        # Axis labels include units
-        if unit:
-            xlabel = f"IAM ({unit})"
-            ylabel = f"{model_name} ({unit})"
-        else:
-            xlabel = "IAM"
-            ylabel = model_name
-        configure_axes(ax, min_val, max_val, xlabel, ylabel)
-        if unique_years:
-            ax.legend(title='Year', loc='upper left', bbox_to_anchor=(1, 1), fontsize='small')
-        r2_val = compute_r2(y_test_valid, preds_valid)
-    if not np.isnan(r2_val):
-        ax.text(0.05, 0.95, f'R² = {r2_val:.3f}', transform=ax.transAxes, fontsize=14,
-            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, i, targets, model_name, OUTPUT_UNITS)
+        # Save individual scatter plot for each output in indiv_plots dir (single plot per figure)
+        indiv_dir = os.path.join(RESULTS_PATH, run_id, "plots", "indiv_plots")
+        os.makedirs(indiv_dir, exist_ok=True)
+        indiv_filename = f"scatter_{i}_{targets[i] if i < len(targets) else 'unknown'}.png"
+        indiv_path = os.path.join(indiv_dir, indiv_filename)
+        fig_indiv, ax_indiv = plt.subplots(figsize=(7, 7))
+        create_single_scatter_plot(ax_indiv, test_data_valid, y_test_valid, preds_valid, i, targets, model_name, OUTPUT_UNITS)
+        fig_indiv.tight_layout()
+        fig_indiv.savefig(indiv_path, bbox_inches='tight')
+        plt.close(fig_indiv)
     plt.tight_layout()
     if filename is None:
         filename = "scatter_plot.png"
