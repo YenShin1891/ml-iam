@@ -188,20 +188,26 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[s
     plt.rcParams.update({'font.size': 14})
     for i, ax in enumerate(axes.flatten()):
         test_data_valid, y_test_valid, preds_valid = preprocess_data(test_data, y_plot, preds_plot, i)
-        unique_years = sorted(test_data_valid['Year'].unique())
+        unique_years = sorted(test_data_valid['Year'].unique()) if len(test_data_valid) else []
         cmap = cm.get_cmap('viridis')
-        colors = cmap(np.linspace(0, 1, len(unique_years)))
+        colors = cmap(np.linspace(0, 1, len(unique_years))) if unique_years else []
         for year, color in zip(unique_years, colors):
             group_df = test_data_valid[test_data_valid['Year'] == year]
             group_indices = group_df.index
             group_y_test = y_test_valid[group_indices]
             group_preds = preds_valid[group_indices]
             ax.scatter(group_y_test, group_preds, alpha=0.5, color=color, label=year)
-    # Title without units (units only on axes per requirement)
-    unit = OUTPUT_UNITS[i] if i < len(OUTPUT_UNITS) else ""
-    ax.set_title(targets[i])
-        min_val = min(y_test_valid.min(), preds_valid.min())
-        max_val = max(y_test_valid.max(), preds_valid.max())
+        # Title without units (units only on axes per requirement)
+        unit = OUTPUT_UNITS[i] if i < len(OUTPUT_UNITS) else ""
+        if i < len(targets):
+            ax.set_title(targets[i])
+        # Compute axis bounds
+        if len(y_test_valid) and len(preds_valid):
+            min_val = float(min(y_test_valid.min(), preds_valid.min()))
+            max_val = float(max(y_test_valid.max(), preds_valid.max()))
+        else:
+            logging.warning(f"No valid data for target index {i}; using default axis limits.")
+            min_val, max_val = 0.0, 1.0
         # Axis labels include units
         if unit:
             xlabel = f"IAM ({unit})"
@@ -210,7 +216,8 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[s
             xlabel = "IAM"
             ylabel = model_name
         configure_axes(ax, min_val, max_val, xlabel, ylabel)
-        ax.legend(title='Year', loc='upper left', bbox_to_anchor=(1, 1), fontsize='small')
+        if unique_years:
+            ax.legend(title='Year', loc='upper left', bbox_to_anchor=(1, 1), fontsize='small')
         r2_val = compute_r2(y_test_valid, preds_valid)
         if not np.isnan(r2_val):
             ax.text(0.02, 0.95, f"R² = {r2_val:.3f}", transform=ax.transAxes, ha='left', va='top',

@@ -108,6 +108,7 @@ Key data knobs (from `configs/data.py`):
 * `OUTPUT_VARIABLES` – target columns (energy & emissions series).
 * `MIN_COUNT`, `COMPLETENESS_RATIO` – filtering heuristics.
 * `MAX_SERIES_LENGTH`, `N_LAG_FEATURES` – feature engineering scope.
+* `MAX_YEAR` – upper inclusive cutoff for year columns retained during preprocessing (years > MAX_YEAR dropped).
 
 ---
 ## 6. Data Processing

@@ -65,6 +65,7 @@ CATEGORICAL_COLUMNS = ['Region', 'Model_Family']
 # Feature engineering knobs for downstream (kept here for single stop)
 MAX_SERIES_LENGTH = 10
 N_LAG_FEATURES = 3
+MAX_YEAR = 2100  # Upper inclusive cutoff for usable year columns
 
 # Default dataset name (backward compatibility for older scripts)
 DEFAULT_DATASET = 'processed_series_0401.csv'
