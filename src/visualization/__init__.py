@@ -24,7 +24,6 @@ from .helpers import (
     make_grid,
     render_external_plot,
     build_feature_display_names,
-    sequence_time_labels,
 )
 
 
@@ -63,7 +62,7 @@ __all__ = [
     # XGB SHAP
     'get_shap_values','transform_outputs_to_former_inputs','draw_shap_plot','plot_shap',
     # Helpers
-    'make_grid','render_external_plot','build_feature_display_names','sequence_time_labels'
+    'make_grid','render_external_plot','build_feature_display_names'
 ]
 
 # Always expose NN names (either real or stubs) so wildcard imports work.

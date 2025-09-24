@@ -4,7 +4,7 @@ from typing import Callable, List, Optional, Sequence
 import matplotlib.pyplot as plt
 from PIL import Image
 
-__all__ = ['make_grid','render_external_plot','build_feature_display_names','sequence_time_labels']
+__all__ = ['make_grid','render_external_plot','build_feature_display_names']
 
 def make_grid(n_items: int, rows: Optional[int] = None, cols: Optional[int] = None, *, base_figsize=(20, 20)):
     if rows is None or cols is None:
@@ -44,9 +44,3 @@ def build_feature_display_names(features: Sequence[str], name_map: Optional[dict
     name_map = name_map or {}
     return [name_map.get(f, _make_display_name(f)) for f in features]
 
-def sequence_time_labels(sequence_length: int) -> List[str]:
-    labels = []
-    for t in range(sequence_length):
-        lag = sequence_length - 1 - t
-        labels.append('current' if lag == 0 else f'last {lag*5}y')
-    return labels

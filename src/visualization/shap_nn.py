@@ -3,7 +3,7 @@ import os, logging, numpy as np, pandas as pd, shap, torch
 from typing import List, Optional, Dict
 from configs.paths import RESULTS_PATH
 from configs.data import NON_FEATURE_COLUMNS, OUTPUT_UNITS
-from .helpers import make_grid, render_external_plot, build_feature_display_names, sequence_time_labels
+from .helpers import make_grid, render_external_plot, build_feature_display_names
 
 __all__ = [
     'get_lstm_shap_values','plot_lstm_shap','draw_lstm_all_timesteps_shap_plot','draw_temporal_shap_plot','create_timestep_comparison_plots'
@@ -128,8 +128,10 @@ def draw_lstm_all_timesteps_shap_plot(run_id: str, temporal_shap_values, test_se
     X_flat = _np.concatenate(x_flat_parts, axis=1)
     feature_name_map = feature_name_map or {}
     base_names = [feature_name_map.get(f, f) for f in features]
-    labels = sequence_time_labels(sequence_length)
-    display_names = [f"{bn} ({labels[t]})" for t in range(sequence_length) for bn in base_names]
+    # Use build_feature_display_names for time-step features
+    display_names = []
+    for t in range(sequence_length):
+        display_names.extend(build_feature_display_names(base_names, name_map=feature_name_map))
     import matplotlib.pyplot as plt
     plt.rcParams.update({'font.size': 12})
     num_targets = len(targets)
@@ -151,7 +153,7 @@ def draw_lstm_all_timesteps_shap_plot(run_id: str, temporal_shap_values, test_se
             )
             fig_local.tight_layout()
         render_external_plot(ax, _plot)
-        ax.set_title(f"SHAP across all timesteps: {targets[i]} ({OUTPUT_UNITS[i]})")
+        ax.set_title(f"Impact on {targets[i]} ({OUTPUT_UNITS[i]})")
     fig.tight_layout()
     os.makedirs(os.path.join(RESULTS_PATH, run_id, 'plots'), exist_ok=True)
     fig.savefig(os.path.join(RESULTS_PATH, run_id, 'plots', 'lstm_shap_plot.png'))
@@ -172,16 +174,16 @@ def draw_temporal_shap_plot(run_id: str, temporal_shap_values, X_test: pd.DataFr
         top_idx = _np.argsort(avg_importance)[-8:][::-1]
         time_importance = _np.mean(_np.abs(target_shap[:, :, top_idx]), axis=0)
         im = ax.imshow(time_importance.T, aspect='auto', cmap='viridis', interpolation='nearest')
-        labels = sequence_time_labels(sequence_length)
-        ax.set_xticks(range(sequence_length))
-        ax.set_xticklabels(labels)
-        display_names = build_feature_display_names([features[idx] for idx in top_idx], feature_name_map)
-        ax.set_yticks(range(len(top_idx)))
-        ax.set_yticklabels([n[:30] + '...' if len(n) > 30 else n for n in display_names], fontsize=10)
-        ax.set_title(f"Temporal SHAP: {targets[i]} ({OUTPUT_UNITS[i]})", fontsize=14)
-        ax.set_xlabel("Time Step in Sequence", fontsize=12)
-        ax.set_ylabel("Features", fontsize=12)
-        plt.colorbar(im, ax=ax, shrink=0.6)
+    labels = build_feature_display_names([f"timestep_{t}" for t in range(sequence_length)])
+    ax.set_xticks(range(sequence_length))
+    ax.set_xticklabels(labels)
+    display_names = build_feature_display_names([features[idx] for idx in top_idx], feature_name_map)
+    ax.set_yticks(range(len(top_idx)))
+    ax.set_yticklabels([n[:30] + '...' if len(n) > 30 else n for n in display_names], fontsize=10)
+    ax.set_title(f"Temporal SHAP: {targets[i]} ({OUTPUT_UNITS[i]})", fontsize=14)
+    ax.set_xlabel("Time Step in Sequence", fontsize=12)
+    ax.set_ylabel("Features", fontsize=12)
+    plt.colorbar(im, ax=ax, shrink=0.6)
     fig.tight_layout()
     os.makedirs(os.path.join(RESULTS_PATH, run_id, 'plots'), exist_ok=True)
     fig.savefig(os.path.join(RESULTS_PATH, run_id, 'plots', 'lstm_temporal_shap_heatmap.png'), dpi=300, bbox_inches='tight')
@@ -199,7 +201,7 @@ def create_timestep_comparison_plots(run_id: str, temporal_shap_values, features
             continue
         target_shap = temporal_shap_values[:, :, :, i]
         timestep_importance = _np.mean(_np.abs(target_shap), axis=(0, 2))
-        labels = sequence_time_labels(sequence_length)
+        labels = build_feature_display_names([f"timestep_{t}" for t in range(sequence_length)])
         colors = cm.get_cmap('viridis')(_np.linspace(0, 1, sequence_length))
         bars = ax.bar(range(sequence_length), timestep_importance, color=colors, alpha=0.8)
         ax.set_title(f"Time Step Importance: {targets[i]} ({OUTPUT_UNITS[i]})", fontsize=14)
