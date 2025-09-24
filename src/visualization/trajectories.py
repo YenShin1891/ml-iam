@@ -219,9 +219,9 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[s
         if unique_years:
             ax.legend(title='Year', loc='upper left', bbox_to_anchor=(1, 1), fontsize='small')
         r2_val = compute_r2(y_test_valid, preds_valid)
-        if not np.isnan(r2_val):
-            ax.text(0.02, 0.95, f"R² = {r2_val:.3f}", transform=ax.transAxes, ha='left', va='top',
-                    fontsize=12, bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.7, linewidth=0.5))
+    if not np.isnan(r2_val):
+        ax.text(0.05, 0.95, f'R² = {r2_val:.3f}', transform=ax.transAxes, fontsize=14,
+            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
     plt.tight_layout()
     if filename is None:
         filename = "scatter_plot.png"
