@@ -12,6 +12,20 @@ __all__ = [
     'preprocess_data','format_large_numbers','create_single_trajectory_plot','create_single_scatter_plot','configure_axes',
     'plot_scatter','plot_trajectories','get_saved_plots_metadata','apply_inverse_scaling','compute_r2'
 ]
+
+def get_model_type_from_log(run_id):
+    """Detect model type from log file name in RESULTS_PATH/run_id."""
+    run_dir = os.path.join(RESULTS_PATH, run_id)
+    try:
+        for fname in os.listdir(run_dir):
+            if fname.startswith("train_") and fname.endswith(".log"):
+                # e.g., train_lstm.log or train_xgb.log
+                model_name = fname[len("train_"):-len(".log")]
+                return model_name.lower()
+    except Exception as e:
+        logging.info(f"Could not determine model type for run {run_id}: {e}")
+    return None
+
 def create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, target_index, targets, model_name, output_units):
     unique_years = sorted(test_data_valid['Year'].unique()) if len(test_data_valid) else []
     cmap = cm.get_cmap('viridis')
@@ -206,13 +220,16 @@ def configure_axes(ax, min_val: float, max_val: float, xlabel: str, ylabel: str)
     ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
 
 def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[str] = None, model_name: str = "Model"):
-    logging.info("Creating scatter plot (attempting inverse scaling)...")
-    # Prepare copies and inverse scale using same helper as trajectories
+    logging.info("Creating scatter plot (model-aware inverse scaling)...")
+    model_type = get_model_type_from_log(run_id)
     y_plot = None if y_test is None else np.array(y_test, copy=True)
     preds_plot = None if preds is None else np.array(preds, copy=True)
-    y_plot, preds_plot, scaler_key = apply_inverse_scaling(y_plot, preds_plot, run_id)
-    if scaler_key:
-        logging.info(f"Scatter: applied inverse scaling using scaler key '{scaler_key}'")
+    scaler_key = None
+    # Only apply inverse scaling for xgb (or other non-lstm models)
+    if model_type and ("xgb" in model_type or "xgboost" in model_type):
+        y_plot, preds_plot, scaler_key = apply_inverse_scaling(y_plot, preds_plot, run_id)
+        if scaler_key:
+            logging.info(f"Scatter: applied inverse scaling using scaler key '{scaler_key}'")
     rows, cols = 3, 3
     fig, axes = plt.subplots(rows, cols, figsize=(20, 20))
     plt.rcParams.update({'font.size': 16})
@@ -297,11 +314,13 @@ def plot_trajectories(
     # Prepare copies for potential inverse scaling so we don't mutate caller data
     y_plot = None if y_test is None else np.array(y_test, copy=True)
     preds_plot = None if preds is None else np.array(preds, copy=True)
-
-    # Apply inverse scaling via helper
-    y_plot, preds_plot, scaler_key = apply_inverse_scaling(y_plot, preds_plot, run_id)
-    if scaler_key:
-        logging.info(f"Applied inverse scaling using scaler in session_state key: {scaler_key}")
+    model_type = get_model_type_from_log(run_id)
+    scaler_key = None
+    # Only apply inverse scaling for xgb (or other non-lstm models)
+    if model_type and ("xgb" in model_type or "xgboost" in model_type):
+        y_plot, preds_plot, scaler_key = apply_inverse_scaling(y_plot, preds_plot, run_id)
+        if scaler_key:
+            logging.info(f"Applied inverse scaling using scaler in session_state key: {scaler_key}")
     for i, ax in enumerate(axes.flatten()):
         create_single_trajectory_plot(ax, test_data, y_plot, preds_plot, i, targets, alpha, linewidth)
     plt.tight_layout()
