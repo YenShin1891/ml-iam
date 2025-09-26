@@ -20,11 +20,12 @@ import logging
 from pathlib import Path
 from typing import Iterable, List, Tuple, Optional, cast
 
+import numpy as np
 import pandas as pd
 
 # Local config (new consolidated modules)
 from configs.paths import DATA_PATH, RESULTS_PATH, RAW_DATA_PATH
-from configs.data import YEAR_STARTS_AT
+from configs.data import YEAR_STARTS_AT, INDEX_COLUMNS
 from configs import data as dp
 from src.utils.utils import setup_console_logging
 
@@ -171,6 +172,28 @@ def apply_completeness_threshold(df: pd.DataFrame, selected_vars: pd.DataFrame, 
     return kept
 
 
+def filter_by_year_interval(processed_df_year: pd.DataFrame) -> pd.DataFrame:
+    def most_common_year_interval(years: np.ndarray) -> int:
+        if len(years) < 2:
+            return -1
+        intervals = pd.Series(sorted(years)).diff().dropna().astype(int)
+        if intervals.empty:
+            return -1
+        return int(intervals.value_counts().idxmax())
+
+    keep_idx = []
+    for key, group in processed_df_year.groupby(INDEX_COLUMNS):
+        years = group["Year"].dropna().astype(int).unique()
+        mc_interval = most_common_year_interval(years)
+        if mc_interval != -1 and mc_interval < 10:
+            keep_idx.extend(group.index.tolist())
+    before = len(processed_df_year)
+    processed_df_year = processed_df_year.loc[keep_idx].reset_index(drop=True)
+    after = len(processed_df_year)
+    logging.info(f"no_10years tag: removed {before - after} rows with most common year interval >= 10")
+    return processed_df_year
+
+
 def compute_missing_stats(df: pd.DataFrame, original_stat_table: pd.DataFrame) -> pd.DataFrame:
     na_counts = df.isna().sum().reset_index()
     na_counts.columns = ["Variable", "pct_missing"]
@@ -305,6 +328,7 @@ def run_pipeline(
     tags = list(getattr(dp, "TAGS", []))
     include_intermediate = "include-intermediate" in tags
     apply_base_year = "apply-base-year" in tags
+    no_10years = "no-10years" in tags
     
     selected_vars = select_variables(stat_table, output_variables, min_count=min_count or dp.MIN_COUNT, include_intermediate=include_intermediate)
     if include_intermediate:
@@ -341,6 +365,12 @@ def run_pipeline(
         processed_df_year = apply_base_year_filter(processed_df_year, base_year_meta)
     else:
         logging.info("Base-year filtering disabled (no 'apply-base-year' tag present).")
+
+    # Apply year interval filtering if the tag is present
+    if no_10years:
+        processed_df_year = filter_by_year_interval(processed_df_year)
+    else:
+        logging.info("Year-interval filtering disabled (no 'no-10years' tag present).")
 
     # Completeness filtering
     before_rows = len(processed_df_year)
