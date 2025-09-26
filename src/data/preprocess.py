@@ -4,8 +4,8 @@ import numpy as np
 import logging
 
 from configs.config import (
-    DATA_PATH, DATASET_NAME, RESULTS_PATH,
-    YEAR_RANGE,
+    DATA_PATH, RESULTS_PATH,
+    DEFAULT_DATASET, MAX_YEAR,
     OUTPUT_VARIABLES, INDEX_COLUMNS, NON_FEATURE_COLUMNS
 )
 
@@ -53,29 +53,30 @@ def prepare_data(prepared, targets, features):
     return X_train, y_train, X_val, y_val, X_test_with_index, y_test, test_data
 
 
-def load_and_process_data() -> pd.DataFrame:
+def load_and_process_data(version=None) -> pd.DataFrame:
     logging.info("Loading and processing data...")
-    processed_series = pd.read_csv(os.path.join(DATA_PATH, DATASET_NAME))
-    processed_series = processed_series.loc[:, :'2100']
-    non_year_columns = processed_series.loc[:, :'1990']  # First year column is '1990'
-    year_columns = processed_series.loc[:, str(YEAR_RANGE[0]):str(YEAR_RANGE[1])]
-    
-    # create a heatmap to visualize missing values
-    import seaborn as sns
-    import matplotlib.pyplot as plt
-    # index is the variable names
-    year_columns.index = processed_series['Variable']
-    plt.figure(figsize=(20, 80))
-    sns.heatmap(year_columns.isnull(), cbar=False, cmap='viridis')
-    plt.title('Missing Values Heatmap')
-    plt.xlabel('Year')
-    plt.ylabel('Variable')
-    plt.show()
-    plt.savefig(os.path.join(RESULTS_PATH, 'missing_values_heatmap.png'))
+    # Load the dataset specified in configs.data.DEFAULT_DATASET or from version subdirectory.
+    # If version is provided, use version/processed_series.csv, otherwise use DEFAULT_DATASET.
+    if version:
+        dataset_path = os.path.join(DATA_PATH, version, "processed_series.csv")
+    else:
+        dataset_path = os.path.join(DATA_PATH, DEFAULT_DATASET)
+    if not os.path.isfile(dataset_path):
+        raise FileNotFoundError(f"Processed dataset not found: {dataset_path}. Update configs.data.DEFAULT_DATASET.")
+    logging.info(f"Reading processed dataset: {dataset_path}")
+    processed_series = pd.read_csv(dataset_path)
+    # Identify year and non-year columns robustly
+    all_cols = list(processed_series.columns)
+    year_cols = [c for c in all_cols if str(c).isdigit()]
+    try:
+        cutoff = int(MAX_YEAR)
+        year_cols = [c for c in year_cols if int(c) <= cutoff]
+    except Exception:
+        logging.warning("MAX_YEAR invalid; skipping year cutoff filter.")
+    non_year_cols = [c for c in all_cols if c not in year_cols]
 
     year_melted = processed_series.melt(
-        id_vars=non_year_columns, value_vars=year_columns,
-        var_name='Year', value_name='value'
+        id_vars=non_year_cols, value_vars=year_cols, var_name='Year', value_name='value'
     )
     var_pivoted = year_melted.pivot_table(
         index=['Model', 'Model_Family', 'Scenario', 'Scenario_Category', 'Region', 'Year'],

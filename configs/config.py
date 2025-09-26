@@ -6,7 +6,8 @@ RESULTS_PATH = "/mnt/nas3/kcp-yeeun/results"
 YEAR_RANGE = ('2005', '2100')
 MAX_SERIES_LENGTH = 15
 
-DATASET_NAME = 'processed_series_0401.csv'
+DEFAULT_DATASET = 'processed_series_0401.csv'
+MAX_YEAR = 2100
 OUTPUT_VARIABLES = [
     "Emissions|CO2", "Emissions|CH4", "Emissions|N2O",
     "Primary Energy|Coal", "Primary Energy|Gas", "Primary Energy|Oil",
