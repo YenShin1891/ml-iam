@@ -134,6 +134,37 @@ def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
     return prepared, features, targets
 
 
+# def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
+#     logging.info("Preparing features and targets for TFT with full 5-year intervals...")
+#     df = data.copy()
+#     df['Year'] = df['Year'].astype(int)
+
+#     targets = OUTPUT_VARIABLES
+#     features = [col for col in df.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
+#     df.dropna(subset=targets, inplace=True)
+
+#     group_cols = INDEX_COLUMNS
+#     # Expand each group to full 5-year intervals
+#     expanded = []
+#     for _, group in df.groupby(group_cols):
+#         min_year = group['Year'].min()
+#         max_year = group['Year'].max()
+#         # Generate all 5-year intervals between min and max year (inclusive)
+#         all_years = np.arange(min_year, max_year + 1, 5)
+#         # Build a DataFrame with all group keys and all years
+#         group_keys = {col: group.iloc[0][col] for col in group_cols}
+#         full_index = pd.DataFrame({**group_keys, 'Year': all_years})
+#         # Merge to get existing data, missing years will be NaN
+#         merged = pd.merge(full_index, group, on=group_cols + ['Year'], how='left')
+#         expanded.append(merged)
+#     prepared = pd.concat(expanded, ignore_index=True)
+
+#     # Step must align with group_ids used by TimeSeriesDataSet
+#     prepared['Step'] = prepared.groupby(group_cols).cumcount().astype('int64')
+
+#     return prepared, features, targets
+
+
 def remove_rows_with_missing_outputs(X, y, X2=None):
     """
     Remove rows with missing outputs from the dataset.
