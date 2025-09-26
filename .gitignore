@@ -176,3 +176,5 @@ cython_debug/
 # nohup
 nohup.out
 lightning_logs/
+.vscode/settings.json
+metadata/
