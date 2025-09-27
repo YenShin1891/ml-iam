@@ -205,6 +205,68 @@ def prepare_features_and_targets(data: pd.DataFrame) -> tuple:
     return prepared, features, targets
 
 
+def _ensure_5year_intervals(data: pd.DataFrame, group_cols: list, targets: list) -> pd.DataFrame:
+    """
+    Ensure every group has data for every 5-year interval by adding missing rows with NaN targets.
+    """
+    logging.info("Ensuring 5-year intervals with NaN filling...")
+
+    # Get the full range of years across all data
+    min_year = data['Year'].min()
+    max_year = data['Year'].max()
+
+    # Create 5-year intervals
+    year_intervals = list(range(min_year, max_year + 1, 5))
+    if year_intervals[-1] < max_year:
+        year_intervals.append(max_year)
+
+    # For each group, ensure all year intervals exist
+    all_rows = []
+
+    for group_values, group_data in data.groupby(group_cols):
+        # Create a complete DataFrame for this group with all year intervals
+        group_dict = dict(zip(group_cols, group_values if isinstance(group_values, tuple) else [group_values]))
+
+        # Get existing years for this group
+        existing_years = set(group_data['Year'].values)
+
+        # Add rows for missing year intervals
+        for year in year_intervals:
+            if year in existing_years:
+                # Use existing data
+                existing_row = group_data[group_data['Year'] == year].iloc[0:1].copy()
+                all_rows.append(existing_row)
+            else:
+                # Create new row with NaN targets
+                new_row = pd.DataFrame([group_dict], columns=group_cols)
+                new_row['Year'] = year
+
+                # Fill non-target columns with appropriate values
+                for col in data.columns:
+                    if col not in group_cols and col != 'Year':
+                        if col in targets:
+                            # Set targets to NaN
+                            new_row[col] = np.nan
+                        else:
+                            # For feature columns, try to get the value from the closest existing year
+                            if len(group_data) > 0:
+                                closest_year_data = group_data.iloc[0]  # Use first available row as template
+                                new_row[col] = closest_year_data[col]
+                            else:
+                                new_row[col] = np.nan
+
+                all_rows.append(new_row)
+
+    # Combine all rows
+    result = pd.concat(all_rows, ignore_index=True)
+
+    # Sort by group and year
+    result = result.sort_values(group_cols + ['Year']).reset_index(drop=True)
+
+    logging.info(f"Added missing rows: {len(result) - len(data)} new rows created")
+    return result
+
+
 def prepare_features_and_targets_sequence(data: pd.DataFrame) -> tuple:
     """
     Prepare features and targets for sequence models (TFT, LSTM, etc.).
@@ -238,12 +300,29 @@ def prepare_features_and_targets_sequence(data: pd.DataFrame) -> tuple:
 
 
 def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
-    """
-    Legacy function for TFT. Now calls prepare_features_and_targets_sequence.
-    Kept for backward compatibility.
-    """
-    logging.info("Preparing features and targets for TFT (using sequence preprocessing)...")
-    return prepare_features_and_targets_sequence(data)
+    logging.info("Preparing features and targets for TFT...")
+    prepared = data.copy()
+    prepared['Year'] = prepared['Year'].astype(int)
+
+    targets = OUTPUT_VARIABLES
+
+    # Create 5-year intervals with NaN filling for missing years
+    group_cols = INDEX_COLUMNS
+    prepared = _ensure_5year_intervals(prepared, group_cols, targets)
+
+    features = [col for col in prepared.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
+
+    # Don't drop NaN targets anymore - we'll use a loss mask instead
+    # prepared.dropna(subset=targets, inplace=True)
+
+    # Make 'Step' without dropping NaNs first
+    # Step must align with group_ids used by TimeSeriesDataSet
+    prepared.sort_values(group_cols + ['Year'], inplace=True)
+    prepared['Step'] = prepared.groupby(group_cols).cumcount().astype('int64')
+
+    # Remove DeltaYears - no longer needed
+
+    return prepared, features, targets
 
 
 def remove_rows_with_missing_outputs(X, y, X2=None):
@@ -269,4 +348,86 @@ def remove_rows_with_missing_outputs(X, y, X2=None):
 
     if X2 is not None:
         if isinstance(X2, pd.DataFrame):
-            y = y[mask].reset_index(drop=True)
+            X2 = X2[mask].reset_index(drop=True)
+        else:
+            X2 = X2[mask]
+        return X, y, X2
+    else:
+        return X, y
+
+
+def add_missingness_indicators(
+    prepared: pd.DataFrame,
+    features: list,
+    time_known: list = None,
+    categorical_columns: list = None,
+):
+    """
+    Add <col>_is_missing indicators to the full prepared dataframe BEFORE splitting.
+    Indicators are stored as string categoricals ("0"/"1") for categorical encoding.
+    Returns (prepared_with_indicators, updated_features).
+    """
+    if time_known is None:
+        time_known = ["Year"]
+    if categorical_columns is None:
+        from configs.config import CATEGORICAL_COLUMNS as CFG_CATS
+        categorical_columns = CFG_CATS
+
+    updated_features = list(features)
+
+    cont_cols = [
+        c for c in features
+        if c not in set((categorical_columns or []) + list(time_known))
+        and not c.endswith("_is_missing")
+    ]
+
+    for col in cont_cols:
+        miss_col = f"{col}_is_missing"
+        # create as string categoricals ("0"/"1")
+        if miss_col not in prepared.columns:
+            prepared[miss_col] = (
+                prepared[col].isna().map({True: "1", False: "0"}).astype("category")
+            )
+        if miss_col not in updated_features:
+            updated_features.append(miss_col)
+
+    return prepared, updated_features
+
+
+def impute_with_train_medians(
+    train_data: pd.DataFrame,
+    val_data: pd.DataFrame,
+    test_data: pd.DataFrame,
+    features: list,
+    time_known: list = None,
+    categorical_columns: list = None,
+):
+    """
+    Impute continuous feature NaNs in train/val/test with the train median of each column.
+    Does NOT add indicators (use add_missingness_indicators before splitting).
+    Returns (train_data, val_data, test_data).
+    """
+    if time_known is None:
+        time_known = ["Year"]
+    if categorical_columns is None:
+        from configs.config import CATEGORICAL_COLUMNS as CFG_CATS
+        categorical_columns = CFG_CATS
+
+    cont_cols = [
+        c for c in features
+        if c not in set((categorical_columns or []) + list(time_known))
+        and not c.endswith("_is_missing")
+    ]
+
+    for col in cont_cols:
+        if col not in train_data.columns:
+            continue
+        fill_value = pd.to_numeric(train_data[col], errors="coerce").median()
+        if pd.isna(fill_value):
+            logging.warning(f"Column '{col}' has all-NaN in train; filling with 0.0")
+            fill_value = 0.0
+        for df in (train_data, val_data, test_data):
+            if col in df.columns:
+                df[col] = df[col].fillna(fill_value)
+
+    return train_data, val_data, test_data
