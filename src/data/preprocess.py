@@ -109,6 +109,68 @@ def prepare_features_and_targets(data: pd.DataFrame) -> tuple:
     return prepared, features, targets
 
 
+def _ensure_5year_intervals(data: pd.DataFrame, group_cols: list, targets: list) -> pd.DataFrame:
+    """
+    Ensure every group has data for every 5-year interval by adding missing rows with NaN targets.
+    """
+    logging.info("Ensuring 5-year intervals with NaN filling...")
+
+    # Get the full range of years across all data
+    min_year = data['Year'].min()
+    max_year = data['Year'].max()
+
+    # Create 5-year intervals
+    year_intervals = list(range(min_year, max_year + 1, 5))
+    if year_intervals[-1] < max_year:
+        year_intervals.append(max_year)
+
+    # For each group, ensure all year intervals exist
+    all_rows = []
+
+    for group_values, group_data in data.groupby(group_cols):
+        # Create a complete DataFrame for this group with all year intervals
+        group_dict = dict(zip(group_cols, group_values if isinstance(group_values, tuple) else [group_values]))
+
+        # Get existing years for this group
+        existing_years = set(group_data['Year'].values)
+
+        # Add rows for missing year intervals
+        for year in year_intervals:
+            if year in existing_years:
+                # Use existing data
+                existing_row = group_data[group_data['Year'] == year].iloc[0:1].copy()
+                all_rows.append(existing_row)
+            else:
+                # Create new row with NaN targets
+                new_row = pd.DataFrame([group_dict], columns=group_cols)
+                new_row['Year'] = year
+
+                # Fill non-target columns with appropriate values
+                for col in data.columns:
+                    if col not in group_cols and col != 'Year':
+                        if col in targets:
+                            # Set targets to NaN
+                            new_row[col] = np.nan
+                        else:
+                            # For feature columns, try to get the value from the closest existing year
+                            if len(group_data) > 0:
+                                closest_year_data = group_data.iloc[0]  # Use first available row as template
+                                new_row[col] = closest_year_data[col]
+                            else:
+                                new_row[col] = np.nan
+
+                all_rows.append(new_row)
+
+    # Combine all rows
+    result = pd.concat(all_rows, ignore_index=True)
+
+    # Sort by group and year
+    result = result.sort_values(group_cols + ['Year']).reset_index(drop=True)
+
+    logging.info(f"Added missing rows: {len(result) - len(data)} new rows created")
+    return result
+
+
 def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
     logging.info("Preparing features and targets for TFT...")
     prepared = data.copy()
@@ -116,53 +178,24 @@ def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
     prepared['Year'] = prepared['Year'].astype(int)
 
     targets = OUTPUT_VARIABLES
-    features = [col for col in prepared.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
-    
-    prepared.dropna(subset=targets, inplace=True)
 
-    # Make 'Step' and 'DeltaYears' after dropping NaNs
-    # Step must align with group_ids used by TimeSeriesDataSet
+    # Create 5-year intervals with NaN filling for missing years
     group_cols = INDEX_COLUMNS
+    prepared = _ensure_5year_intervals(prepared, group_cols, targets)
+
+    features = [col for col in prepared.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
+
+    # Don't drop NaN targets anymore - we'll use a loss mask instead
+    # prepared.dropna(subset=targets, inplace=True)
+
+    # Make 'Step' without dropping NaNs first
+    # Step must align with group_ids used by TimeSeriesDataSet
     prepared.sort_values(group_cols + ['Year'], inplace=True)
     prepared['Step'] = prepared.groupby(group_cols).cumcount().astype('int64')
 
-    # Explicit gap feature: years elapsed since previous observation within each series
-    prepared['DeltaYears'] = (
-        prepared.groupby(group_cols)['Year'].diff().fillna(0).astype(int)
-    )
-    
+    # Remove DeltaYears - no longer needed
+
     return prepared, features, targets
-
-
-# def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
-#     logging.info("Preparing features and targets for TFT with full 5-year intervals...")
-#     df = data.copy()
-#     df['Year'] = df['Year'].astype(int)
-
-#     targets = OUTPUT_VARIABLES
-#     features = [col for col in df.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
-#     df.dropna(subset=targets, inplace=True)
-
-#     group_cols = INDEX_COLUMNS
-#     # Expand each group to full 5-year intervals
-#     expanded = []
-#     for _, group in df.groupby(group_cols):
-#         min_year = group['Year'].min()
-#         max_year = group['Year'].max()
-#         # Generate all 5-year intervals between min and max year (inclusive)
-#         all_years = np.arange(min_year, max_year + 1, 5)
-#         # Build a DataFrame with all group keys and all years
-#         group_keys = {col: group.iloc[0][col] for col in group_cols}
-#         full_index = pd.DataFrame({**group_keys, 'Year': all_years})
-#         # Merge to get existing data, missing years will be NaN
-#         merged = pd.merge(full_index, group, on=group_cols + ['Year'], how='left')
-#         expanded.append(merged)
-#     prepared = pd.concat(expanded, ignore_index=True)
-
-#     # Step must align with group_ids used by TimeSeriesDataSet
-#     prepared['Step'] = prepared.groupby(group_cols).cumcount().astype('int64')
-
-#     return prepared, features, targets
 
 
 def remove_rows_with_missing_outputs(X, y, X2=None):
@@ -199,7 +232,7 @@ def remove_rows_with_missing_outputs(X, y, X2=None):
 def add_missingness_indicators(
     prepared: pd.DataFrame,
     features: list,
-    time_known: list = ["Year", "DeltaYears"],
+    time_known: list = None,
     categorical_columns: list = None,
 ):
     """
@@ -207,6 +240,8 @@ def add_missingness_indicators(
     Indicators are stored as string categoricals ("0"/"1") for categorical encoding.
     Returns (prepared_with_indicators, updated_features).
     """
+    if time_known is None:
+        time_known = ["Year"]
     if categorical_columns is None:
         from configs.config import CATEGORICAL_COLUMNS as CFG_CATS
         categorical_columns = CFG_CATS
@@ -237,7 +272,7 @@ def impute_with_train_medians(
     val_data: pd.DataFrame,
     test_data: pd.DataFrame,
     features: list,
-    time_known: list = ["Year", "DeltaYears"],
+    time_known: list = None,
     categorical_columns: list = None,
 ):
     """
@@ -245,6 +280,8 @@ def impute_with_train_medians(
     Does NOT add indicators (use add_missingness_indicators before splitting).
     Returns (train_data, val_data, test_data).
     """
+    if time_known is None:
+        time_known = ["Year"]
     if categorical_columns is None:
         from configs.config import CATEGORICAL_COLUMNS as CFG_CATS
         categorical_columns = CFG_CATS
