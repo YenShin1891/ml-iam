@@ -12,6 +12,7 @@ from configs.data import (
     INDEX_COLUMNS,
     NON_FEATURE_COLUMNS,
     CATEGORICAL_COLUMNS,
+    MAX_YEAR,
 )
 
 def split_data(prepared, test_size=0.1, val_size=0.1):
@@ -139,6 +140,11 @@ def load_and_process_data(version=None) -> pd.DataFrame:
     # Identify year and non-year columns robustly
     all_cols = list(processed_series.columns)
     year_cols = [c for c in all_cols if str(c).isdigit()]
+    try:
+        cutoff = int(MAX_YEAR)
+        year_cols = [c for c in year_cols if int(c) <= cutoff]
+    except Exception:
+        logging.warning("MAX_YEAR invalid; skipping year cutoff filter.")
     non_year_cols = [c for c in all_cols if c not in year_cols]
 
     # Optional: save a heatmap of missing values over variables x years

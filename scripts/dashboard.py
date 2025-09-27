@@ -155,14 +155,23 @@ def filter_and_plot(run_id):
     current_test_data = st.session_state.get('current_test_data', st.session_state.test_data)
     filtered_test_data = current_test_data[st.session_state.test_mask].reset_index(drop=True)
 
-    # Prepare filter metadata
+    # Compute aggregated metrics once (will also be cached) and embed in metadata for persistence
+    metrics_df = _compute_filtered_metrics(filtered_y_test, filtered_preds, st.session_state.targets)
+    metrics_row = metrics_df.iloc[0].to_dict()
+    # Sanitize NaN / Inf for JSON compatibility
+    for k, v in list(metrics_row.items()):
+        if isinstance(v, float) and (np.isnan(v) or np.isinf(v)):
+            metrics_row[k] = None
+
+    # Prepare filter metadata (including metrics)
     filter_metadata = {
         'timestamp': datetime.datetime.now().isoformat(),
         'scenario_categories': st.session_state.selected_scenario_categories,
         'regions': st.session_state.selected_regions,
         'model_families': st.session_state.selected_model_families,
         'num_data_points': len(filtered_test_data),
-        'targets': st.session_state.targets
+        'targets': st.session_state.targets,
+        'metrics': metrics_row
     }
 
     # Get environment variables for individual plot saving
@@ -217,6 +226,50 @@ def filter_and_plot(run_id):
         individual_indices=individual_indices
     )
 
+    # Metrics expander (appears after plot render)
+    with st.expander("View Metrics", expanded=True):
+        metrics_df = _compute_filtered_metrics(filtered_y_test, filtered_preds, st.session_state.targets)
+        st.dataframe(metrics_df, use_container_width=True)
+
+@st.cache_data(show_spinner=False)
+def _compute_filtered_metrics(y_true_filtered: np.ndarray, y_pred_filtered: np.ndarray, targets):
+    """Compute aggregate metrics across all targets for filtered instances.
+
+    Flattens (n_samples, n_targets) arrays after masking NaNs per element.
+    Returns single-row DataFrame.
+    """
+    y_true = np.asarray(y_true_filtered)
+    y_pred = np.asarray(y_pred_filtered)
+    if y_true.ndim == 1:
+        y_true = y_true.reshape(-1, 1)
+    if y_pred.ndim == 1:
+        y_pred = y_pred.reshape(-1, 1)
+    # Align columns
+    n_targets = min(y_true.shape[1], y_pred.shape[1])
+    y_true = y_true[:, :n_targets]
+    y_pred = y_pred[:, :n_targets]
+    mask = (~np.isnan(y_true)) & (~np.isnan(y_pred))
+    yt_flat = y_true[mask]
+    yp_flat = y_pred[mask]
+    count = yt_flat.size
+    if count == 0:
+        return pd.DataFrame([{'Count': 0, 'R2': np.nan, 'MAE': np.nan, 'RMSE': np.nan, 'MAPE_%': np.nan}])
+    var = np.var(yt_flat)
+    if var == 0:
+        r2 = np.nan
+    else:
+        ss_res = np.sum((yt_flat - yp_flat) ** 2)
+        ss_tot = np.sum((yt_flat - yt_flat.mean()) ** 2)
+        r2 = np.nan if ss_tot == 0 else 1 - ss_res/ss_tot
+    mae = float(np.mean(np.abs(yt_flat - yp_flat)))
+    rmse = float(np.sqrt(np.mean((yt_flat - yp_flat) ** 2)))
+    non_zero = np.abs(yt_flat) > 1e-12
+    if non_zero.any():
+        mape = float(np.mean(np.abs((yt_flat[non_zero] - yp_flat[non_zero]) / yt_flat[non_zero])) * 100)
+    else:
+        mape = np.nan
+    return pd.DataFrame([{'Count': int(count), 'R2': r2, 'MAE': mae, 'RMSE': rmse, 'MAPE_%': mape}])
+
 def display_recent_plots_sidebar(run_id):
     """Display recent plots in the sidebar."""
     st.sidebar.subheader("Recent Plots")
@@ -250,6 +303,19 @@ def display_recent_plots_sidebar(run_id):
                         metadata_text += f"  \n🤖  {', '.join(models)}"
                     
                     metadata_text += f"  \n{metadata.get('num_data_points', 0)} points"
+
+                    # Show quick metrics summary if available
+                    metrics = metadata.get('metrics')
+                    if metrics:
+                        r2_disp = metrics.get('R2')
+                        mae_disp = metrics.get('MAE')
+                        rmse_disp = metrics.get('RMSE')
+                        # Format numbers if not None
+                        def _fmt(v):
+                            if v is None or (isinstance(v, float) and np.isnan(v)):
+                                return '—'
+                            return f"{v:.3f}"
+                        metadata_text += f"  \nR2 {_fmt(r2_disp)} | RMSE {_fmt(rmse_disp)}"
                     
                     st.markdown(metadata_text)
                 
@@ -334,7 +400,7 @@ def handle_filtering_and_plotting(run_id):
         st.session_state.apply_filters_clicked = False
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="ML IAM Dashboard", add_help=False)
+    parser = argparse.ArgumentParser(description="ML-IAM Emulation Viewer", add_help=False)
     parser.add_argument("--run_id", "-r", dest="run_id", help="Default run_id to load results from", required=True)
     # Parse known args to ignore Streamlit's own args
     args, _ = parser.parse_known_args(sys.argv[1:])
@@ -371,7 +437,7 @@ def main():
         return
 
     # Main dashboard UI
-    st.title("ML IAM Emulation Dashboard")
+    st.title("ML-IAM Emulation Viewer")
     make_filters(st.session_state.test_data)
     
     # Handle filtering and plotting
