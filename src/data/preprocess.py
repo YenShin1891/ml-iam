@@ -124,48 +124,48 @@ def _ensure_5year_intervals(data: pd.DataFrame, group_cols: list, targets: list)
     if year_intervals[-1] < max_year:
         year_intervals.append(max_year)
 
-    # For each group, ensure all year intervals exist
-    all_rows = []
+    # Get unique groups
+    unique_groups = data[group_cols].drop_duplicates()
 
-    for group_values, group_data in data.groupby(group_cols):
-        # Create a complete DataFrame for this group with all year intervals
-        group_dict = dict(zip(group_cols, group_values if isinstance(group_values, tuple) else [group_values]))
-
-        # Get existing years for this group
-        existing_years = set(group_data['Year'].values)
-
-        # Add rows for missing year intervals
+    # Create complete grid of all group × year combinations
+    complete_grid = []
+    for _, group_row in unique_groups.iterrows():
         for year in year_intervals:
-            if year in existing_years:
-                # Use existing data
-                existing_row = group_data[group_data['Year'] == year].iloc[0:1].copy()
-                all_rows.append(existing_row)
-            else:
-                # Create new row with NaN targets
-                new_row = pd.DataFrame([group_dict], columns=group_cols)
-                new_row['Year'] = year
+            row_dict = group_row.to_dict()
+            row_dict['Year'] = year
+            complete_grid.append(row_dict)
 
-                # Fill non-target columns with appropriate values
+    complete_df = pd.DataFrame(complete_grid)
+
+    # Merge with original data to keep existing rows and identify missing ones
+    merged = complete_df.merge(data, on=group_cols + ['Year'], how='left', indicator=True)
+
+    # For rows that exist in original data, use original values
+    existing_mask = merged['_merge'] == 'both'
+
+    # For missing rows, fill with appropriate values
+    missing_mask = merged['_merge'] == 'left_only'
+
+    if missing_mask.any():
+        # Get template values for each group (use first available row)
+        group_templates = data.groupby(group_cols).first().reset_index()
+
+        # For missing rows, fill non-target columns with group template values
+        for _, template in group_templates.iterrows():
+            group_filter = True
+            for col in group_cols:
+                group_filter &= (merged[col] == template[col])
+
+            row_mask = missing_mask & group_filter
+            if row_mask.any():
                 for col in data.columns:
-                    if col not in group_cols and col != 'Year':
-                        if col in targets:
-                            # Set targets to NaN
-                            new_row[col] = np.nan
-                        else:
-                            # For feature columns, try to get the value from the closest existing year
-                            if len(group_data) > 0:
-                                closest_year_data = group_data.iloc[0]  # Use first available row as template
-                                new_row[col] = closest_year_data[col]
-                            else:
-                                new_row[col] = np.nan
+                    if col not in group_cols + ['Year'] + targets:
+                        merged.loc[row_mask, col] = template[col]
+                    elif col in targets:
+                        merged.loc[row_mask, col] = np.nan
 
-                all_rows.append(new_row)
-
-    # Combine all rows
-    result = pd.concat(all_rows, ignore_index=True)
-
-    # Sort by group and year
-    result = result.sort_values(group_cols + ['Year']).reset_index(drop=True)
+    # Remove merge indicator and sort
+    result = merged.drop('_merge', axis=1).sort_values(group_cols + ['Year']).reset_index(drop=True)
 
     logging.info(f"Added missing rows: {len(result) - len(data)} new rows created")
     return result
