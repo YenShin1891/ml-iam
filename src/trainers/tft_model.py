@@ -9,6 +9,7 @@ from lightning.pytorch import Trainer
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_forecasting import TemporalFusionTransformer, RMSE, TimeSeriesDataSet
 from pytorch_forecasting.metrics import MultiLoss
+from pytorch_forecasting.models.base._base_model import PredictCallback
 
 from configs.paths import RESULTS_PATH
 from configs.models.tft import TFTTrainerConfig
@@ -104,12 +105,17 @@ def create_final_trainer(trainer_cfg: TFTTrainerConfig) -> Trainer:
     devices = trainer_cfg.devices
     if devices == "auto" or (isinstance(devices, int) and devices < 1):
         devices = 1
+
+    # Add PredictCallback to handle predictions properly
+    predict_callback = PredictCallback()
+
     return Trainer(
         max_epochs=trainer_cfg.max_epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=devices,
         strategy="auto",
         gradient_clip_val=trainer_cfg.gradient_clip_val,
+        callbacks=[predict_callback],
         logger=False,
         enable_progress_bar=False,
         enable_checkpointing=False,  # Manual saving

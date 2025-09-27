@@ -69,13 +69,23 @@ class LSTMDataset(Dataset):
         if scaler_y is None:
             scaler_y = StandardScaler()
 
+        # Handle NaN targets for masked loss
+        # Create binary mask for valid targets (True = valid, False = missing)
+        y_valid_mask = ~np.isnan(y)
+
+        # For scaling, temporarily fill NaN targets with zeros (will be masked during training)
+        y_for_scaling = np.where(np.isnan(y), 0.0, y)
+
         # Fit and transform or just transform
         if fit_scalers:
             self.X_scaled = scaler_X.fit_transform(X_filled)
-            self.y_scaled = scaler_y.fit_transform(y)
+            self.y_scaled = scaler_y.fit_transform(y_for_scaling)
         else:
             self.X_scaled = scaler_X.transform(X_filled)
-            self.y_scaled = scaler_y.transform(y)
+            self.y_scaled = scaler_y.transform(y_for_scaling)
+
+        # Store the original valid mask for target masking
+        self.y_valid_mask = y_valid_mask
 
         self.scaler_X = scaler_X
         self.scaler_y = scaler_y
@@ -84,7 +94,8 @@ class LSTMDataset(Dataset):
         self.X_sequences = []
         self.y_sequences = []
         self.previous_targets = []  # Previous targets for teacher forcing
-        self.masks = []
+        self.masks = []  # Feature masks for padded values
+        self.target_masks = []  # Loss masks for missing targets
         self.group_info = []
 
         # Group by the group_ids columns
@@ -106,6 +117,9 @@ class LSTMDataset(Dataset):
                 x_seq = self.X_scaled[start_pos:start_pos + sequence_length]
                 y_seq = self.y_scaled[end_pos]  # Predict the last item in sequence
 
+                # Create target loss mask (True = valid target, False = missing target)
+                target_mask = self.y_valid_mask[end_pos]  # Mask for the prediction target
+
                 # Create previous targets for teacher forcing
                 # Previous targets are the ground truth targets from the sequence
                 if start_pos > 0:
@@ -117,20 +131,22 @@ class LSTMDataset(Dataset):
                     if sequence_length > 1:
                         prev_targets_seq[1:] = self.y_scaled[start_pos:start_pos+sequence_length-1]
 
-                # Create mask for padded values
+                # Create mask for padded values (feature mask)
                 mask_data = X_filled.iloc[start_pos:start_pos + sequence_length]
-                mask = (mask_data != mask_value).all(axis=1)
+                feature_mask = (mask_data != mask_value).all(axis=1)
 
                 self.X_sequences.append(torch.FloatTensor(x_seq))
                 self.y_sequences.append(torch.FloatTensor(y_seq))
                 self.previous_targets.append(torch.FloatTensor(prev_targets_seq))
-                self.masks.append(torch.FloatTensor(mask.values))
+                self.masks.append(torch.FloatTensor(feature_mask.values))
+                self.target_masks.append(torch.FloatTensor(target_mask.astype(float)))
                 self.group_info.append(group_name)
 
         self.X_sequences = torch.stack(self.X_sequences)
         self.y_sequences = torch.stack(self.y_sequences)
         self.previous_targets = torch.stack(self.previous_targets)
         self.masks = torch.stack(self.masks)
+        self.target_masks = torch.stack(self.target_masks)
 
     def __len__(self):
         return len(self.X_sequences)
@@ -140,7 +156,8 @@ class LSTMDataset(Dataset):
             'x': self.X_sequences[idx],
             'y': self.y_sequences[idx],
             'previous_targets': self.previous_targets[idx],  # For teacher forcing
-            'mask': self.masks[idx],
+            'mask': self.masks[idx],  # Feature mask for padded values
+            'target_mask': self.target_masks[idx],  # Loss mask for missing targets
             'group': self.group_info[idx]
         }
 
@@ -279,8 +296,31 @@ class LSTMModel(LightningModule):
         # Return only the last prediction (or all predictions if needed)
         return predictions[-1]  # [batch_size, output_size]
 
+    def masked_loss(self, y_hat, y_true, target_mask):
+        """Compute masked MSE loss where only valid targets contribute.
+
+        Args:
+            y_hat: Predictions [batch_size, output_size]
+            y_true: Ground truth targets [batch_size, output_size]
+            target_mask: Binary mask [batch_size, output_size] (1 = valid, 0 = missing)
+        """
+        # Element-wise MSE
+        mse = (y_hat - y_true) ** 2
+
+        # Apply mask: only compute loss for valid targets
+        masked_mse = mse * target_mask
+
+        # Average over valid elements only
+        num_valid = target_mask.sum()
+        if num_valid > 0:
+            return masked_mse.sum() / num_valid
+        else:
+            # If no valid targets, return zero loss
+            return torch.tensor(0.0, device=y_hat.device, requires_grad=True)
+
     def training_step(self, batch, batch_idx):
         x, y, mask = batch['x'], batch['y'], batch['mask']
+        target_mask = batch['target_mask']
 
         # x contains ALL features (u_t) - no splitting needed
         exogenous_seq = x
@@ -295,30 +335,37 @@ class LSTMModel(LightningModule):
             # Standard forward pass without teacher forcing
             y_hat = self(exogenous_seq, mask, teacher_forcing=False)
 
-        loss = F.mse_loss(y_hat, y)
+        # Use masked loss - only valid targets contribute
+        loss = self.masked_loss(y_hat, y, target_mask)
         self.log('train_loss', loss, prog_bar=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
         x, y, mask = batch['x'], batch['y'], batch['mask']
+        target_mask = batch['target_mask']
 
         # x contains ALL features (u_t) - no splitting needed
         exogenous_seq = x
 
         # For validation, use autoregressive (no teacher forcing)
         y_hat = self(exogenous_seq, mask, teacher_forcing=False)
-        loss = F.mse_loss(y_hat, y)
+
+        # Use masked loss - only valid targets contribute
+        loss = self.masked_loss(y_hat, y, target_mask)
         self.log('val_loss', loss, prog_bar=True)
         return loss
 
     def test_step(self, batch, batch_idx):
         x, y, mask = batch['x'], batch['y'], batch['mask']
+        target_mask = batch['target_mask']
 
         # x contains ALL features (u_t) - no splitting needed
         exogenous_seq = x
 
         y_hat = self(exogenous_seq, mask, teacher_forcing=False)
-        loss = F.mse_loss(y_hat, y)
+
+        # Use masked loss - only valid targets contribute
+        loss = self.masked_loss(y_hat, y, target_mask)
         self.log('test_loss', loss)
         return y_hat
 
@@ -1031,7 +1078,10 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
 
     # Get valid (non-NaN) predictions and targets for metrics (like TFT pattern)
     y_test = test_data[targets].values
-    valid_mask = ~np.isnan(aligned_preds).any(axis=1)
+    # Create mask for rows with no NaN in either predictions or targets
+    pred_mask = ~np.isnan(aligned_preds).any(axis=1)
+    target_mask = ~np.isnan(y_test).any(axis=1)
+    valid_mask = pred_mask & target_mask
     valid_preds = aligned_preds[valid_mask]
     valid_targets = y_test[valid_mask]
 

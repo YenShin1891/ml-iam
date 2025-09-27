@@ -11,7 +11,7 @@ from src.data.preprocess import (
     add_missingness_indicators,
     impute_with_train_medians,
     load_and_process_data,
-    prepare_features_and_targets_sequence,
+    prepare_features_and_targets_lstm,
     split_data,
 )
 from src.trainers.lstm_trainer import (
@@ -32,13 +32,20 @@ seed_everything(42, workers=True)
 
 
 def process_data(dataset_version=None):
-    """Load and process data for LSTM training."""
+    """Load and process data for LSTM training with missing timestamp handling."""
     data = load_and_process_data(version=dataset_version)
-    prepared, features, targets = prepare_features_and_targets_sequence(data)
+
+    # Use special missing value for inserted timestamps (different from LSTM mask_value)
+    missing_value = -999.0
+    prepared, features, targets = prepare_features_and_targets_lstm(data, missing_value=missing_value)
     prepared, features = add_missingness_indicators(prepared, features)
     train_data, val_data, test_data = split_data(prepared)
+
+    # Hybrid approach:
+    # 1. Use median imputation for originally missing features (with missingness indicators)
+    # 2. Keep special missing_value (-999) only for inserted timestamp rows
     train_data, val_data, test_data = impute_with_train_medians(
-        train_data, val_data, test_data, features
+        train_data, val_data, test_data, features, exclude_value=missing_value
     )
 
     # Keep DataFrames like TFT (not arrays like XGBoost) for proper grouping

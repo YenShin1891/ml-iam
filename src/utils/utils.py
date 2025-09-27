@@ -192,23 +192,3 @@ def create_dask_client():
         dashboard_address=None,
         local_directory='/tmp/dask-worker-space'  
     )
-
-def masked_mse(y_true, y_pred):
-    import tensorflow as tf
-    # Ensure both y_true and y_pred are float32
-    y_true = tf.cast(y_true, dtype=tf.float32)
-    y_pred = tf.cast(y_pred, dtype=tf.float32)
-    
-    # 마스크: NaN이 아닌 값만 True
-    mask = tf.math.logical_not(tf.math.is_nan(y_true))
-    mask = tf.cast(mask, dtype=tf.float32)
-
-    # NaN을 0으로 대체해서 계산
-    y_true = tf.where(mask == 1.0, y_true, tf.zeros_like(y_true))
-    y_pred = tf.where(mask == 1.0, y_pred, tf.zeros_like(y_pred))
-
-    squared_error = tf.square(y_true - y_pred)
-
-    # 평균은 마스크된 값으로만 계산
-    masked_loss = tf.reduce_sum(squared_error * mask) / tf.reduce_sum(mask)
-    return masked_loss
