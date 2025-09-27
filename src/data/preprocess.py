@@ -178,22 +178,23 @@ def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
     prepared['Year'] = prepared['Year'].astype(int)
 
     targets = OUTPUT_VARIABLES
-
-    # Create 5-year intervals with NaN filling for missing years
-    group_cols = INDEX_COLUMNS
-    prepared = _ensure_5year_intervals(prepared, group_cols, targets)
-
     features = [col for col in prepared.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
 
-    # Don't drop NaN targets anymore - we'll use a loss mask instead
-    # prepared.dropna(subset=targets, inplace=True)
+    # Drop rows with NaN targets since TimeSeriesDataSet doesn't handle NaN targets
+    prepared.dropna(subset=targets, inplace=True)
 
-    # Make 'Step' without dropping NaNs first
     # Step must align with group_ids used by TimeSeriesDataSet
+    # Calculate Step based on actual year intervals (assuming 5-year steps)
+    group_cols = INDEX_COLUMNS
     prepared.sort_values(group_cols + ['Year'], inplace=True)
-    prepared['Step'] = prepared.groupby(group_cols).cumcount().astype('int64')
 
-    # Remove DeltaYears - no longer needed
+    def calculate_step_from_year(group):
+        # Calculate step based on year intervals from the minimum year in each group
+        min_year = group['Year'].min()
+        group['Step'] = ((group['Year'] - min_year) // 5).astype('int64')
+        return group
+
+    prepared = prepared.groupby(group_cols).apply(calculate_step_from_year).reset_index(drop=True)
 
     return prepared, features, targets
 
