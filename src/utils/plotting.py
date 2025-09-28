@@ -81,6 +81,95 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, use_log=False, model
     plt.close()
 
 
+def plot_scatter_with_uncertainty(run_id, test_data, y_true, y_pred_quantiles, targets, use_log=False, model_label: str = "QuantileModel"):
+    """
+    Enhanced scatter plot showing median predictions with error bars for uncertainty (quantile predictions).
+    Args:
+        run_id: Identifier for the run (for saving figures, etc.)
+        test_data: Test dataset (not used in plot, but for context)
+        y_true: True target values, shape (n_samples, n_targets)
+        y_pred_quantiles: Predicted quantiles, shape (n_samples, n_targets, n_quantiles) or (n_samples, n_quantiles)
+        targets: List of target names
+        use_log: Whether to use log scale for axes
+        model_label: Label for predicted values
+    """
+    import matplotlib.pyplot as plt
+    import os
+    rows, cols = 3, 3
+    fig, axes = plt.subplots(rows, cols, figsize=(20, 20))
+
+    for i, ax in enumerate(axes.flatten()):
+        if i >= len(targets):
+            ax.axis('off')
+            continue
+
+        # Extract quantiles for this target (robust to #quantiles and ordering)
+        if y_pred_quantiles.ndim == 3:
+            nq = y_pred_quantiles.shape[-1]
+            # heuristic grid to pick nearest indices to 0.1 / 0.5 / 0.9 without needing an explicit list
+            qgrid = np.linspace(0.0, 1.0, nq)
+            mid_idx   = int(np.argmin(np.abs(qgrid - 0.5)))
+            lower_idx = int(np.argmin(np.abs(qgrid - 0.1)))
+            upper_idx = int(np.argmin(np.abs(qgrid - 0.9)))
+
+            median_pred = y_pred_quantiles[:, i, mid_idx]
+            lower_80    = y_pred_quantiles[:, i, lower_idx]
+            upper_80    = y_pred_quantiles[:, i, upper_idx]
+        else:
+            # Fallback: median-only (2D case). Draw points, no error bars.
+            median_pred = y_pred_quantiles[:, i]
+            lower_80    = median_pred
+            upper_80    = median_pred
+
+        # Remove NaNs for plotting
+        mask = ~np.isnan(y_true[:, i]) & ~np.isnan(median_pred)
+        y_true_valid        = y_true[mask, i]
+        median_pred_valid   = median_pred[mask]
+        lower_valid         = lower_80[mask]
+        upper_valid         = upper_80[mask]
+
+        # Ensure non-negative error bar lengths and handle inverted intervals defensively
+        lo = np.minimum(median_pred_valid, lower_valid)
+        hi = np.maximum(median_pred_valid, upper_valid)
+        yerr_lower = np.maximum(0.0, median_pred_valid - lo)
+        yerr_upper = np.maximum(0.0, hi - median_pred_valid)
+
+        # Scatter with error bars (or zeros if median-only)
+        ax.errorbar(
+            y_true_valid, median_pred_valid,
+            yerr=[yerr_lower, yerr_upper],
+            fmt='o', alpha=0.6, capsize=2, capthick=1
+        )
+
+
+        # Perfect prediction line
+        if use_log:
+            abs_true = np.abs(y_true_valid)
+            abs_pred = np.abs(median_pred_valid)
+            min_val = max(min(abs_true.min(), abs_pred.min()), 1e-10)
+            max_val = max(abs_true.max(), abs_pred.max())
+        else:
+            min_val = min(y_true_valid.min(), median_pred_valid.min())
+            max_val = max(y_true_valid.max(), median_pred_valid.max())
+        ax.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.8)
+
+        if use_log:
+            ax.set_xscale('log')
+            ax.set_yscale('log')
+        ax.set_xlim(min_val, max_val)
+        ax.set_ylim(min_val, max_val)
+        ax.set_aspect('equal', adjustable='box')
+        ax.set_xlabel('True Values' + (' (log scale)' if use_log else ''))
+        ax.set_ylabel(f'{model_label} Median (with 80% intervals)' + (' (log scale)' if use_log else ''))
+        ax.set_title(f'{targets[i]} - Predictions with Uncertainty')
+
+    plt.tight_layout()
+    os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots"), exist_ok=True)
+    filename = f"scatter_quantile_{model_label.lower()}_log.png" if use_log else f"scatter_quantile_{model_label.lower()}.png"
+    plt.savefig(os.path.join(RESULTS_PATH, run_id, "plots", filename), bbox_inches='tight')
+    plt.close()
+
+
 def plot_time_series(test_data, y_test, preds, targets, alpha=0.5, linewidth=0.5):
     rows, cols = 3, 3
     fig, axes = plt.subplots(rows, cols, figsize=(15, 15))

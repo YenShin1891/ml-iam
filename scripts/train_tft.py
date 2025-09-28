@@ -26,7 +26,7 @@ from src.utils.utils import (
     save_session_state,
     setup_logging,
 )
-from src.utils.plotting import plot_scatter
+from src.utils.plotting import plot_scatter_with_uncertainty
 
 np.random.seed(0)
 seed_everything(42, workers=True)
@@ -86,21 +86,35 @@ def test_tft(session_state, run_id):
 
 
 def plot_tft(session_state, run_id):
-    logging.info("Plotting TFT predictions...")
-    preds = session_state.get("preds")
-    targets = session_state["targets"]
-    if preds is None:
-        raise ValueError("No predictions found in session state. Please run the test step first.")
+    logging.info("Plotting TFT quantile predictions from session_state...")
 
-    horizon_df = session_state.get('horizon_df')
-    horizon_y_true = session_state.get('horizon_y_true')
-    
-    if horizon_df is not None and horizon_y_true is not None:
-        logging.info("Using forecast horizon subset (%d rows) for plotting.", len(horizon_df))
-        plot_scatter(run_id, horizon_df, horizon_y_true, preds, targets, use_log=False, model_label="TFT")
-        plot_scatter(run_id, horizon_df, horizon_y_true, preds, targets, use_log=True, model_label="TFT")
-    else:
-        raise ValueError("No forecast horizon data found in session state. Please run the test step with predict=True.")
+    targets = session_state["targets"]
+    horizon_df = session_state.get("horizon_df")
+    y_true = session_state.get("horizon_y_true")
+    y_pred_q = session_state.get("horizon_y_pred_quantiles")  # <-- use quantiles
+
+    missing = [k for k in ["horizon_df", "horizon_y_true", "horizon_y_pred_quantiles"]
+               if session_state.get(k) is None]
+    if missing:
+        raise ValueError(f"Missing {missing} in session_state. Run the test step first.")
+
+    # Ensure shape is [N, n_targets, n_quantiles]
+    y_pred_q = np.asarray(y_pred_q)
+    if y_pred_q.ndim == 2:
+        n_samples, n_cols = y_pred_q.shape
+        n_targets = len(targets)
+        if n_cols % n_targets != 0:
+            raise ValueError(
+                f"Cannot infer n_quantiles from shape {y_pred_q.shape} with {n_targets} targets."
+            )
+        n_quantiles = n_cols // n_targets
+        y_pred_q = y_pred_q.reshape(n_samples, n_targets, n_quantiles)
+    elif y_pred_q.ndim != 3:
+        raise ValueError(f"Expected quantiles with ndim 2 or 3; got {y_pred_q.ndim}.")
+
+    # Plot (linear + log)
+    plot_scatter_with_uncertainty(run_id, horizon_df, y_true, y_pred_q, targets,
+                                  use_log=False, model_label="TFT")
 
 
 def parse_arguments():
@@ -151,8 +165,9 @@ def main():
         return
     else:
         setup_logging(run_id)
-        # session_state = load_session_state(run_id)
-        session_state = process_data(dataset_version=dataset_version)
+        session_state = load_session_state(run_id)
+        if resume != "plot":
+            session_state = process_data(dataset_version=dataset_version)
         save_session_state(session_state, run_id)
 
     # Step-wise execution when resuming

@@ -294,7 +294,7 @@ def predict_tft(session_state: dict, run_id: str) -> np.ndarray:
                 train_template,
                 test_data,
                 stop_randomization=True,
-                predict=True,  # only decoder (forecast horizon) timesteps retained
+                # Remove predict=True to use historical test data with known targets
             )
         except Exception as e:
             raise RuntimeError(
@@ -314,14 +314,53 @@ def predict_tft(session_state: dict, run_id: str) -> np.ndarray:
             num_workers=_default_num_workers(),
             persistent_workers=True,
         )
+        # Import PredictCallback for quantile predictions
+        from pytorch_forecasting.models.base._base_model import PredictCallback
+
+        # Create trainer with PredictCallback for quantile predictions
         trainer = _create_infer_trainer()
 
-        logging.info("Predicting with TFT model (forecast horizon only)...")
-        returns = model.predict(test_loader, return_index=True)
+        # Add PredictCallback to handle quantile predictions properly
+        predict_callback = PredictCallback()
+        trainer.callbacks.append(predict_callback)
 
-        from pytorch_forecasting.models.base._base_model import Prediction as _PFPrediction  # type: ignore
-        if not isinstance(returns, _PFPrediction):
-            raise RuntimeError(f"Unexpected predict() return type: {type(returns)}; expected pytorch_forecasting Prediction.")
+        logging.info("Predicting with TFT model on test data...")
+
+        # For quantile predictions, ensure the model is in quantile mode
+        if hasattr(model, 'loss') and hasattr(model.loss, 'quantiles'):
+            logging.info("Model is using quantile loss, predictions should include quantiles")
+
+        # First get raw predictions for the full historical dataset
+        raw_returns = model.predict(test_loader, return_index=True, mode="raw")
+
+        # Check what we get with raw mode
+        print(f"DEBUG: Raw predictions output type: {type(raw_returns.output)}")
+        if torch.is_tensor(raw_returns.output):
+            print(f"DEBUG: Raw predictions shape: {raw_returns.output.shape}")
+        elif isinstance(raw_returns.output, dict):
+            print(f"DEBUG: Raw predictions dict keys: {raw_returns.output.keys()}")
+            for k, v in raw_returns.output.items():
+                if torch.is_tensor(v):
+                    print(f"DEBUG: Raw predictions['{k}'] shape: {v.shape}")
+
+        # Try to convert raw predictions to quantiles using the model's to_quantiles method
+        if isinstance(raw_returns.output, dict):
+            # Apply to_quantiles to convert raw output to quantiles
+            quantile_output = model.to_quantiles(raw_returns.output)
+            print(f"DEBUG: Quantile output type: {type(quantile_output)}")
+            if torch.is_tensor(quantile_output):
+                print(f"DEBUG: Quantile output shape: {quantile_output.shape}")
+
+            # Create new returns object with quantile predictions
+            from types import SimpleNamespace
+            returns = SimpleNamespace()
+            returns.output = quantile_output
+            returns.index = raw_returns.index
+        else:
+            # If raw output is not a dict, we might need a different approach
+            returns = raw_returns
+
+        # Skip type check since we might be using a mock returns object
 
         outputs = returns.output
         if isinstance(outputs, list):
@@ -332,7 +371,28 @@ def predict_tft(session_state: dict, run_id: str) -> np.ndarray:
             preds_tensor = outputs[0] if len(outputs) == 1 else torch.stack(outputs, dim=-1)
         elif torch.is_tensor(outputs):
             preds_tensor = outputs
+        elif hasattr(outputs, 'prediction'):
+            # PyTorch Forecasting Output object - extract the prediction tensor
+            preds_tensor = outputs.prediction
+            if isinstance(preds_tensor, list):
+                print(f"DEBUG: Extracted prediction list from Output object, length: {len(preds_tensor)}")
+                if len(preds_tensor) > 0:
+                    print(f"DEBUG: First item type: {type(preds_tensor[0])}")
+                    if torch.is_tensor(preds_tensor[0]):
+                        print(f"DEBUG: First item shape: {preds_tensor[0].shape}")
+                # Handle list of tensors - this should be targets x [samples, timesteps, quantiles]
+                if all(torch.is_tensor(p) for p in preds_tensor):
+                    # Stack along the target dimension (should be dim=-1 for [samples, timesteps, targets, quantiles])
+                    preds_tensor = torch.stack(preds_tensor, dim=-2)  # Insert targets as second-to-last dimension
+                    print(f"DEBUG: Stacked tensor shape: {preds_tensor.shape}")
+                    # Expected shape: [samples, timesteps, targets, quantiles] = [49114, 13, 9, 7]
+            else:
+                print(f"DEBUG: Extracted prediction tensor from Output object, shape: {preds_tensor.shape}")
         else:
+            # Try to inspect the Output object to understand its structure
+            print(f"DEBUG: Output object attributes: {dir(outputs)}")
+            if hasattr(outputs, '__dict__'):
+                print(f"DEBUG: Output object dict: {outputs.__dict__}")
             raise RuntimeError(f"Unsupported Prediction.output type: {type(outputs)}")
 
         index_attr = getattr(returns, 'index', None)
@@ -354,32 +414,63 @@ def predict_tft(session_state: dict, run_id: str) -> np.ndarray:
 
         idx_df = _normalize_index_df(index_df, time_idx_name)
 
-        # If predictions are 3D (n_samples, pred_len, out_size) but index_df only has n_samples rows,
-        # expand the index so each horizon step has its own row with incremented time index.
-        if torch.is_tensor(preds_tensor) and preds_tensor.ndim == 3:
-            n_samples, pred_len, out_size = preds_tensor.shape
-            if len(idx_df) == n_samples and pred_len > 1:
-                logging.info(
-                    "Expanding index_df for multi-step horizon: samples=%d, pred_len=%d", n_samples, pred_len
-                )
-                # Build expanded index
-                expanded_rows = []
-                base_cols = idx_df.columns.tolist()
-                if time_idx_name not in base_cols:
-                    raise KeyError(
-                        f"Time index column '{time_idx_name}' not found in prediction index DataFrame columns: {base_cols}"
+        # Handle predictions based on dimensionality
+        if torch.is_tensor(preds_tensor):
+            if preds_tensor.ndim == 4:
+                # 4D: (n_samples, pred_len, n_targets, n_quantiles) - quantile predictions
+                n_samples, pred_len, n_targets, n_quantiles = preds_tensor.shape
+                if len(idx_df) == n_samples and pred_len > 1:
+                    logging.info(
+                        "Expanding index_df for multi-step horizon: samples=%d, pred_len=%d", n_samples, pred_len
                     )
-                for i in range(n_samples):
-                    base_row = idx_df.iloc[i]
-                    base_time = base_row[time_idx_name]
-                    for h in range(pred_len):
-                        new_row = base_row.copy()
-                        # Assumption: decoder steps are consecutive increments
-                        new_row[time_idx_name] = base_time + h
-                        expanded_rows.append(new_row)
-                idx_df = pd.DataFrame(expanded_rows).reset_index(drop=True)
-                # Flatten predictions accordingly
-                preds_flat = preds_tensor.detach().cpu().numpy().reshape(n_samples * pred_len, out_size)
+                    # Build expanded index
+                    expanded_rows = []
+                    base_cols = idx_df.columns.tolist()
+                    if time_idx_name not in base_cols:
+                        raise KeyError(
+                            f"Time index column '{time_idx_name}' not found in prediction index DataFrame columns: {base_cols}"
+                        )
+                    for i in range(n_samples):
+                        base_row = idx_df.iloc[i]
+                        base_time = base_row[time_idx_name]
+                        for h in range(pred_len):
+                            new_row = base_row.copy()
+                            # Assumption: decoder steps are consecutive increments
+                            new_row[time_idx_name] = base_time + h
+                            expanded_rows.append(new_row)
+                    idx_df = pd.DataFrame(expanded_rows).reset_index(drop=True)
+
+                    # Flatten 4D predictions: [samples, timesteps, targets, quantiles] -> [samples*timesteps, targets*quantiles]
+                    preds_flat = preds_tensor.detach().cpu().numpy().reshape(n_samples * pred_len, n_targets * n_quantiles)
+                else:
+                    # No expansion needed, just reshape last two dimensions
+                    preds_flat = preds_tensor.detach().cpu().numpy().reshape(n_samples * pred_len, n_targets * n_quantiles)
+            elif preds_tensor.ndim == 3:
+                # 3D: (n_samples, pred_len, out_size) - regular predictions
+                n_samples, pred_len, out_size = preds_tensor.shape
+                if len(idx_df) == n_samples and pred_len > 1:
+                    logging.info(
+                        "Expanding index_df for multi-step horizon: samples=%d, pred_len=%d", n_samples, pred_len
+                    )
+                    # Build expanded index
+                    expanded_rows = []
+                    base_cols = idx_df.columns.tolist()
+                    if time_idx_name not in base_cols:
+                        raise KeyError(
+                            f"Time index column '{time_idx_name}' not found in prediction index DataFrame columns: {base_cols}"
+                        )
+                    for i in range(n_samples):
+                        base_row = idx_df.iloc[i]
+                        base_time = base_row[time_idx_name]
+                        for h in range(pred_len):
+                            new_row = base_row.copy()
+                            new_row[time_idx_name] = base_time + h
+                            expanded_rows.append(new_row)
+                    idx_df = pd.DataFrame(expanded_rows).reset_index(drop=True)
+                    # Flatten predictions accordingly
+                    preds_flat = preds_tensor.detach().cpu().numpy().reshape(n_samples * pred_len, out_size)
+                else:
+                    preds_flat = _flatten_predictions(preds_tensor)
             else:
                 preds_flat = _flatten_predictions(preds_tensor)
         else:
@@ -389,6 +480,7 @@ def predict_tft(session_state: dict, run_id: str) -> np.ndarray:
         key_cols = group_ids + [time_idx_name]
         # Collect reference columns (ensure presence in test_data)
         ref_cols = [c for c in key_cols + ['Year'] + targets if c in test_data.columns]
+
         horizon_df = idx_df[key_cols].merge(
             test_data[ref_cols].drop_duplicates(key_cols),
             on=key_cols,
@@ -412,29 +504,51 @@ def predict_tft(session_state: dict, run_id: str) -> np.ndarray:
         n_quantiles = 7
         median_idx = 3  # 0.5 quantile
 
+        # Debug the reshape issue
+        print(f"DEBUG: y_pred_quantiles shape: {y_pred_quantiles.shape}")
+        print(f"DEBUG: Expected reshape: n_targets={n_targets}, n_quantiles={n_quantiles}")
+
+        # Use actual dimensions instead of expected ones since PyTorch Forecasting may filter some series
+        actual_samples, actual_cols = y_pred_quantiles.shape
+        expected_cols = n_targets * n_quantiles
+
+        if actual_cols != expected_cols:
+            raise ValueError(f"Expected {expected_cols} columns for {n_targets} targets * {n_quantiles} quantiles, got {actual_cols}")
+
         if n_targets > 1:
-            # Multi-target: shape is [n_samples, n_targets * n_quantiles]
-            # Reshape to [n_samples, n_targets, n_quantiles] and extract median
-            y_pred_reshaped = y_pred_quantiles.reshape(-1, n_targets, n_quantiles)
-            y_pred_median = y_pred_reshaped[:, :, median_idx]  # [n_samples, n_targets]
+            # Multi-target: reshape to [actual_samples, n_targets, n_quantiles] and extract median
+            y_pred_reshaped = y_pred_quantiles.reshape(actual_samples, n_targets, n_quantiles)
+            y_pred_median = y_pred_reshaped[:, :, median_idx]  # [actual_samples, n_targets]
         else:
-            # Single target: shape is [n_samples, n_quantiles]
-            y_pred_median = y_pred_quantiles[:, median_idx:median_idx+1]  # [n_samples, 1]
+            # Single target: shape is [actual_samples, n_quantiles]
+            y_pred_median = y_pred_quantiles[:, median_idx:median_idx+1]  # [actual_samples, 1]
 
-        valid_mask = (~np.isnan(y_true).any(axis=1)) & (~np.isnan(y_pred_median).any(axis=1))
-        if valid_mask.any():
-            save_metrics(run_id, y_true[valid_mask], y_pred_median[valid_mask])
+        # For forecast horizon, be more permissive - check for completely valid predictions
+        # rather than requiring all targets to be non-NaN for each row
+        pred_valid_mask = ~np.isnan(y_pred_median).any(axis=1)
 
-            # Also save quantile-specific metrics
+        # Save metrics if we have any valid predictions, handling NaNs in targets per-target basis
+        if pred_valid_mask.any():
+            y_true_subset = y_true[pred_valid_mask]
+            y_pred_median_subset = y_pred_median[pred_valid_mask]
+            y_pred_quantiles_subset = y_pred_quantiles[pred_valid_mask]
+
+            # For point metrics, find rows where both true and pred are valid
+            final_valid_mask = (~np.isnan(y_true_subset).any(axis=1)) & (~np.isnan(y_pred_median_subset).any(axis=1))
+
+            if final_valid_mask.any():
+                save_metrics(run_id, y_true_subset[final_valid_mask], y_pred_median_subset[final_valid_mask])
+
+            # For quantile metrics, save regardless of NaNs in targets (they can handle NaNs)
             if n_targets > 1:
-                # Reshape quantile predictions for multi-target case
-                y_pred_quantiles_valid = y_pred_quantiles[valid_mask].reshape(-1, n_targets, n_quantiles)
+                y_pred_quantiles_reshaped = y_pred_quantiles_subset.reshape(-1, n_targets, n_quantiles)
             else:
-                y_pred_quantiles_valid = y_pred_quantiles[valid_mask]
+                y_pred_quantiles_reshaped = y_pred_quantiles_subset
 
-            save_quantile_metrics(run_id, y_true[valid_mask], y_pred_quantiles_valid)
+            save_quantile_metrics(run_id, y_true_subset, y_pred_quantiles_reshaped)
+            logging.info(f"Saved quantile metrics for {len(y_true_subset)} prediction samples")
         else:
-            logging.warning("No valid rows to compute metrics (all horizon targets or predictions contain NaNs).")
+            logging.warning("No valid predictions to compute metrics (all predictions contain NaNs).")
 
         # Expose horizon dataframe, y_true, and both median and full quantile predictions for downstream use
         session_state['horizon_df'] = horizon_df
@@ -658,6 +772,14 @@ def _flatten_predictions(preds_tensor) -> np.ndarray:
         preds_np = np.asarray(preds_tensor)
 
     # Normalize shapes to (N, out_size)
+    if preds_np.ndim == 4:
+        # Quantile predictions: (targets, samples, horizon_steps, quantiles)
+        # For forecast horizon predictions, take the last time step for each sample
+        # Reshape to (samples, targets * quantiles)
+        n_targets, n_samples, horizon_steps, n_quantiles = preds_np.shape
+        # Take the last horizon step: shape becomes (targets, samples, quantiles)
+        # Then transpose to (samples, targets, quantiles) and reshape to (samples, targets * quantiles)
+        return preds_np[:, :, -1, :].transpose(1, 0, 2).reshape(n_samples, n_targets * n_quantiles)
     if preds_np.ndim == 3:
         n_samples, pred_len, out_size = preds_np.shape
         return preds_np.reshape(n_samples * pred_len, out_size)
