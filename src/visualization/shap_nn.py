@@ -195,89 +195,143 @@ def get_tft_shap_values(run_id, X_test: pd.DataFrame, max_encoder_length=12):
     background_inputs = extract_inputs_from_loader(background_loader, max_batches=1)
     test_inputs = extract_inputs_from_loader(test_loader, max_batches=1)
 
-    # Create wrapper for SHAP that handles TFT input format
-    import torch as _torch
-    class TFTWrapperForSHAP(_torch.nn.Module):
-        def __init__(self, tft_model):
-            super().__init__()
-            self.tft_model = tft_model
+    # Calculate SHAP values for each target separately
+    all_temporal_shap = []
+    all_averaged_shap = []
 
-        def forward(self, x):
-            # x shape: (batch, time, features)
-            batch_size, time_steps, n_features = x.shape
+    for target_idx, target_name in enumerate(targets):
+        logging.info(f"Calculating SHAP values for target {target_idx + 1}/{len(targets)}: {target_name}")
 
-            # Debug: log shapes and ranges
-            logging.debug(f"SHAP input shape: {x.shape}, range: [{x.min():.3f}, {x.max():.3f}]")
+        # Create wrapper for this specific target
+        import torch as _torch
+        class TFTWrapperForSHAP(_torch.nn.Module):
+            def __init__(self, tft_model, train_template, target_idx):
+                super().__init__()
+                self.tft_model = tft_model
+                self.train_template = train_template
+                self.target_idx = target_idx
 
-            # Get categorical info from the dataset template
-            categorical_encoders = getattr(train_template, 'categorical_encoders', {}) or {}
+            def forward(self, x):
+                # x is already the combined encoder features (cont + cat) from the TFT dataset
+                # We need to recreate the batch dict that TFT expects
+                batch_size, time_steps, n_features = x.shape
 
-            # Only use categorical features that are actually in our feature list
-            feature_to_idx = {feat: idx for idx, feat in enumerate(features)}
-            categorical_features = [feat for feat in categorical_encoders.keys() if feat in feature_to_idx]
-            cat_indices = [feature_to_idx[feat] for feat in categorical_features]
-            cont_indices = [idx for idx in range(len(features)) if idx not in cat_indices]
+                # Get the original batch structure from a sample batch
+                sample_loader = test_dataset.to_dataloader(train=False, batch_size=1, num_workers=0)
+                sample_batch = next(iter(sample_loader))
+                sample_x, _ = sample_batch
 
-            logging.debug(f"Categorical features: {categorical_features}")
-            logging.debug(f"Categorical indices: {cat_indices}")
-            logging.debug(f"Continuous indices: {cont_indices}")
+                # Use the sample batch structure but replace with our SHAP input
+                batch_dict = {}
+                for key, value in sample_x.items():
+                    if key == 'encoder_cont':
+                        # Use the continuous part of our input
+                        n_cont = value.shape[-1]
+                        if n_cont > 0:
+                            batch_dict[key] = x[:, :, :n_cont]
+                        else:
+                            batch_dict[key] = _torch.empty(batch_size, time_steps, 0)
+                    elif key == 'encoder_cat':
+                        # Use the categorical part of our input
+                        n_cont = sample_x['encoder_cont'].shape[-1] if 'encoder_cont' in sample_x else 0
+                        n_cat = value.shape[-1] if value.numel() > 0 else 0
+                        if n_cat > 0 and n_features > n_cont:
+                            batch_dict[key] = x[:, :, n_cont:n_cont+n_cat].long()
+                        else:
+                            batch_dict[key] = _torch.empty(batch_size, time_steps, 0, dtype=_torch.long)
+                    else:
+                        # Keep other keys as-is but adjust batch size
+                        if isinstance(value, list):
+                            batch_dict[key] = value
+                        elif hasattr(value, 'size') and value.size(0) == 1:
+                            batch_dict[key] = value.expand(batch_size, *value.shape[1:])
+                        elif hasattr(value, 'size'):
+                            batch_dict[key] = value[:batch_size]
+                        else:
+                            batch_dict[key] = value
 
-            # Extract continuous and categorical features properly
-            if cont_indices:
-                encoder_cont = x[:, :, cont_indices]
-            else:
-                encoder_cont = _torch.empty(batch_size, time_steps, 0)
+                output = self.tft_model(batch_dict)
 
-            if cat_indices:
-                encoder_cat = x[:, :, cat_indices].long()
-                # Debug: check categorical value ranges
-                logging.debug(f"Categorical values range: [{encoder_cat.min():.0f}, {encoder_cat.max():.0f}]")
-                for i, feat in enumerate(categorical_features):
-                    if feat in feature_to_idx:
-                        cat_vals = encoder_cat[:, :, i]
-                        encoder = categorical_encoders[feat]
-                        max_allowed = len(encoder.classes_) - 1 if hasattr(encoder, 'classes_') else 'unknown'
-                        logging.debug(f"Feature {feat}: range [{cat_vals.min():.0f}, {cat_vals.max():.0f}], max_allowed: {max_allowed}")
-            else:
-                encoder_cat = _torch.empty(batch_size, time_steps, 0, dtype=_torch.long)
+                # Extract prediction tensor
+                pred_tensor = None
+                if isinstance(output, _torch.Tensor):
+                    pred_tensor = output
+                elif isinstance(output, (list, tuple)):
+                    for item in output:
+                        if isinstance(item, _torch.Tensor):
+                            pred_tensor = item
+                            break
+                elif hasattr(output, 'prediction'):
+                    pred_tensor = output.prediction
+                elif hasattr(output, 'output'):
+                    pred_tensor = output.output
+                else:
+                    # Try to extract tensor attributes
+                    for attr_name in dir(output):
+                        if not attr_name.startswith('_'):
+                            try:
+                                attr_val = getattr(output, attr_name)
+                                if isinstance(attr_val, _torch.Tensor):
+                                    pred_tensor = attr_val
+                                    break
+                            except:
+                                continue
 
-            # Create batch dict in TFT format
-            batch_dict = {
-                'encoder_cont': encoder_cont,
-                'encoder_cat': encoder_cat,
-                'encoder_target': _torch.zeros(batch_size, time_steps, len(targets)),
-                'encoder_lengths': _torch.full((batch_size,), time_steps, dtype=_torch.long),
-                'decoder_cont': _torch.zeros(batch_size, 1, len(cont_indices)),
-                'decoder_cat': _torch.zeros(batch_size, 1, len(cat_indices), dtype=_torch.long),
-                'decoder_target': _torch.zeros(batch_size, 1, len(targets)),
-                'decoder_lengths': _torch.ones(batch_size, dtype=_torch.long),
-            }
+                if pred_tensor is None:
+                    raise ValueError(f"Could not extract tensor from TFT output of type {type(output)}")
 
-            return self.tft_model(batch_dict)
+                # For target-specific SHAP: need to extract predictions for specific target
+                # TFT output shape: [batch, time_steps, attention_heads, lstm_layers]
+                # We need to figure out how to map this to actual target predictions
 
-    wrapper = TFTWrapperForSHAP(model)
-    wrapper.eval()
+                # For now, average over time steps and attention heads, take one lstm layer
+                # This is a simplified approach - ideally we'd understand the exact TFT output format
+                if pred_tensor.dim() == 4:
+                    # Average over time steps (dim 1) and attention heads (dim 2)
+                    # Use self.target_idx to select relevant component
+                    result = pred_tensor.mean(dim=(1, 2))  # [batch, lstm_layers]
+                    # Use target_idx to select which lstm layer or component
+                    if result.shape[1] > self.target_idx:
+                        return result[:, self.target_idx:self.target_idx+1]  # [batch, 1]
+                    else:
+                        # If not enough components, use sum of all
+                        return result.sum(dim=1, keepdim=True)  # [batch, 1]
+                else:
+                    # For other shapes, just average to get [batch, 1]
+                    while pred_tensor.dim() > 2:
+                        pred_tensor = pred_tensor.mean(dim=-1)
+                    if pred_tensor.dim() == 2:
+                        return pred_tensor.mean(dim=1, keepdim=True)  # [batch, 1]
+                    else:
+                        return pred_tensor.unsqueeze(1)  # [batch, 1]
 
-    background_inputs.requires_grad_(True)
-    test_inputs.requires_grad_(True)
+        wrapper = TFTWrapperForSHAP(model, train_template, target_idx)
+        wrapper.eval()
 
-    explainer = shap.DeepExplainer(wrapper, background_inputs)
-    logging.info("Calculating TFT SHAP values...")
-    shap_values = explainer.shap_values(test_inputs, check_additivity=False)
+        background_inputs.requires_grad_(True)
+        test_inputs.requires_grad_(True)
 
-    import numpy as _np
-    if isinstance(shap_values, list):
-        shap_values = [_to_numpy(sv) for sv in shap_values]
-        shap_values = _np.array(shap_values, dtype=_np.float64)
-        shap_values = _np.transpose(shap_values, (1, 2, 3, 0))
-    else:
-        shap_values = _to_numpy(shap_values)
-        shap_values = _np.array(shap_values, dtype=_np.float64)
-        if shap_values.ndim == 3:
-            shap_values = _np.expand_dims(shap_values, axis=-1)
+        explainer = shap.DeepExplainer(wrapper, background_inputs)
+        logging.info(f"Calculating SHAP values for {target_name}...")
+        shap_values = explainer.shap_values(test_inputs, check_additivity=False)
 
-    original_temporal_shap = shap_values.copy()
-    averaged = _np.mean(shap_values, axis=1)
+        import numpy as _np
+        if isinstance(shap_values, list):
+            shap_values = [_to_numpy(sv) for sv in shap_values]
+            shap_values = _np.array(shap_values, dtype=_np.float64)
+            shap_values = _np.transpose(shap_values, (1, 2, 3, 0))
+        else:
+            shap_values = _to_numpy(shap_values)
+            shap_values = _np.array(shap_values, dtype=_np.float64)
+            if shap_values.ndim == 3:
+                shap_values = _np.expand_dims(shap_values, axis=-1)
+
+        all_temporal_shap.append(shap_values)
+        all_averaged_shap.append(_np.mean(shap_values, axis=1))
+
+    # Combine all targets into final arrays
+    original_temporal_shap = _np.concatenate(all_temporal_shap, axis=-1)  # [samples, time, features, targets]
+    averaged = _np.concatenate(all_averaged_shap, axis=-1)  # [samples, features, targets]
 
     os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots"), exist_ok=True)
     _np.save(os.path.join(RESULTS_PATH, run_id, "plots", "tft_shap_values_temporal.npy"), original_temporal_shap)
