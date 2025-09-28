@@ -20,7 +20,7 @@ class TFTDatasetConfig:
     min_prediction_length: int = 1
     add_relative_time_idx: bool = True
     add_target_scales: bool = True
-    allow_missing_timesteps: bool = True
+    allow_missing_timesteps: bool = False
     pretrained_categorical_encoders: Dict[str, Any] = field(default_factory=dict)
 
     def build(
@@ -34,7 +34,7 @@ class TFTDatasetConfig:
 
         if isinstance(targets, str):
             targets = [targets]
-        time_known = ["Year"]
+        time_known = ["Year", "DeltaYears"]
         indicator_cols = [f for f in features if f.endswith("_is_missing")]
 
         # unknown real-valued features exclude categoricals, known time columns, and indicator categoricals

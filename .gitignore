@@ -178,3 +178,4 @@ nohup.out
 lightning_logs/
 .vscode/settings.json
 metadata/
+CLAUDE.md

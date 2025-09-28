@@ -109,68 +109,6 @@ def prepare_features_and_targets(data: pd.DataFrame) -> tuple:
     return prepared, features, targets
 
 
-def _ensure_5year_intervals(data: pd.DataFrame, group_cols: list, targets: list) -> pd.DataFrame:
-    """
-    Ensure every group has data for every 5-year interval by adding missing rows with NaN targets.
-    """
-    logging.info("Ensuring 5-year intervals with NaN filling...")
-
-    # Get the full range of years across all data
-    min_year = data['Year'].min()
-    max_year = data['Year'].max()
-
-    # Create 5-year intervals
-    year_intervals = list(range(min_year, max_year + 1, 5))
-    if year_intervals[-1] < max_year:
-        year_intervals.append(max_year)
-
-    # Get unique groups
-    unique_groups = data[group_cols].drop_duplicates()
-
-    # Create complete grid of all group × year combinations
-    complete_grid = []
-    for _, group_row in unique_groups.iterrows():
-        for year in year_intervals:
-            row_dict = group_row.to_dict()
-            row_dict['Year'] = year
-            complete_grid.append(row_dict)
-
-    complete_df = pd.DataFrame(complete_grid)
-
-    # Merge with original data to keep existing rows and identify missing ones
-    merged = complete_df.merge(data, on=group_cols + ['Year'], how='left', indicator=True)
-
-    # For rows that exist in original data, use original values
-    existing_mask = merged['_merge'] == 'both'
-
-    # For missing rows, fill with appropriate values
-    missing_mask = merged['_merge'] == 'left_only'
-
-    if missing_mask.any():
-        # Get template values for each group (use first available row)
-        group_templates = data.groupby(group_cols).first().reset_index()
-
-        # For missing rows, fill non-target columns with group template values
-        for _, template in group_templates.iterrows():
-            group_filter = True
-            for col in group_cols:
-                group_filter &= (merged[col] == template[col])
-
-            row_mask = missing_mask & group_filter
-            if row_mask.any():
-                for col in data.columns:
-                    if col not in group_cols + ['Year'] + targets:
-                        merged.loc[row_mask, col] = template[col]
-                    elif col in targets:
-                        merged.loc[row_mask, col] = np.nan
-
-    # Remove merge indicator and sort
-    result = merged.drop('_merge', axis=1).sort_values(group_cols + ['Year']).reset_index(drop=True)
-
-    logging.info(f"Added missing rows: {len(result) - len(data)} new rows created")
-    return result
-
-
 def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
     logging.info("Preparing features and targets for TFT...")
     prepared = data.copy()
@@ -179,23 +117,20 @@ def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
 
     targets = OUTPUT_VARIABLES
     features = [col for col in prepared.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
-
-    # Drop rows with NaN targets since TimeSeriesDataSet doesn't handle NaN targets
+    
     prepared.dropna(subset=targets, inplace=True)
 
+    # Make 'Step' and 'DeltaYears' after dropping NaNs
     # Step must align with group_ids used by TimeSeriesDataSet
-    # Calculate Step based on actual year intervals (assuming 5-year steps)
     group_cols = INDEX_COLUMNS
     prepared.sort_values(group_cols + ['Year'], inplace=True)
+    prepared['Step'] = prepared.groupby(group_cols).cumcount().astype('int64')
 
-    def calculate_step_from_year(group):
-        # Calculate step based on year intervals from the minimum year in each group
-        min_year = group['Year'].min()
-        group['Step'] = ((group['Year'] - min_year) // 5).astype('int64')
-        return group
-
-    prepared = prepared.groupby(group_cols).apply(calculate_step_from_year).reset_index(drop=True)
-
+    # Explicit gap feature: years elapsed since previous observation within each series
+    prepared['DeltaYears'] = (
+        prepared.groupby(group_cols)['Year'].diff().fillna(0).astype(int)
+    )
+    
     return prepared, features, targets
 
 
