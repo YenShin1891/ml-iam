@@ -97,6 +97,7 @@ def test_rnn(model, X_test, y_test):
 def save_metrics(run_id, y_true, y_pred):
     """
     Save performance metrics to a CSV file under the specified run directory.
+    Expects y_pred to be point predictions (median from quantile predictions).
     """
     mse = mean_squared_error(y_true, y_pred)
     mae = np.mean(np.abs(y_true - y_pred))
@@ -119,3 +120,99 @@ def save_metrics(run_id, y_true, y_pred):
     metrics_file = os.path.join(metrics_dir, "performance.csv")
     metrics.to_csv(metrics_file, index=False)
     logging.info("Metrics saved to %s.", metrics_file)
+
+
+def save_quantile_metrics(run_id, y_true, y_pred_quantiles, quantiles=None):
+    """
+    Save quantile-specific metrics including coverage and calibration.
+
+    Args:
+        run_id: Experiment run identifier
+        y_true: True values [n_samples, n_targets]
+        y_pred_quantiles: Quantile predictions [n_samples, n_targets, n_quantiles] or [n_samples, n_quantiles]
+        quantiles: List of quantile levels, defaults to [0.02, 0.1, 0.25, 0.5, 0.75, 0.9, 0.98]
+    """
+    if quantiles is None:
+        quantiles = [0.02, 0.1, 0.25, 0.5, 0.75, 0.9, 0.98]
+
+    # Ensure consistent shapes
+    if y_pred_quantiles.ndim == 2 and len(quantiles) == y_pred_quantiles.shape[1]:
+        # Single target case: [n_samples, n_quantiles]
+        y_pred_quantiles = y_pred_quantiles[:, np.newaxis, :]  # [n_samples, 1, n_quantiles]
+        y_true = y_true.reshape(-1, 1) if y_true.ndim == 1 else y_true
+
+    n_samples, n_targets, n_quantiles = y_pred_quantiles.shape
+
+    quantile_metrics = []
+    for target_idx in range(n_targets):
+        for q_idx, q in enumerate(quantiles):
+            q_pred = y_pred_quantiles[:, target_idx, q_idx]
+            y_target = y_true[:, target_idx]
+
+            # Coverage: percentage of true values below the quantile prediction
+            coverage = np.mean(y_target <= q_pred)
+
+            # Quantile loss
+            residual = y_target - q_pred
+            q_loss = np.mean(np.maximum(q * residual, (q - 1) * residual))
+
+            quantile_metrics.append({
+                "Run ID": run_id,
+                "Target": target_idx,
+                "Quantile": q,
+                "Coverage": coverage,
+                "Expected_Coverage": q,
+                "Coverage_Error": abs(coverage - q),
+                "Quantile_Loss": q_loss
+            })
+
+    # Calculate interval coverage for common prediction intervals
+    intervals = [
+        (0.1, 0.9, "80%"),   # 80% prediction interval
+        (0.25, 0.75, "50%"), # 50% prediction interval
+        (0.02, 0.98, "96%")  # 96% prediction interval
+    ]
+
+    interval_metrics = []
+    for lower_q, upper_q, interval_name in intervals:
+        if lower_q in quantiles and upper_q in quantiles:
+            lower_idx = quantiles.index(lower_q)
+            upper_idx = quantiles.index(upper_q)
+            expected_coverage = upper_q - lower_q
+
+            for target_idx in range(n_targets):
+                lower_pred = y_pred_quantiles[:, target_idx, lower_idx]
+                upper_pred = y_pred_quantiles[:, target_idx, upper_idx]
+                y_target = y_true[:, target_idx]
+
+                # Interval coverage
+                in_interval = (y_target >= lower_pred) & (y_target <= upper_pred)
+                coverage = np.mean(in_interval)
+
+                # Average interval width
+                avg_width = np.mean(upper_pred - lower_pred)
+
+                interval_metrics.append({
+                    "Run ID": run_id,
+                    "Target": target_idx,
+                    "Interval": interval_name,
+                    "Coverage": coverage,
+                    "Expected_Coverage": expected_coverage,
+                    "Coverage_Error": abs(coverage - expected_coverage),
+                    "Average_Width": avg_width
+                })
+
+    # Save metrics
+    metrics_dir = os.path.join(RESULTS_PATH, run_id, "metrics")
+    os.makedirs(metrics_dir, exist_ok=True)
+
+    quantile_df = pd.DataFrame(quantile_metrics)
+    quantile_file = os.path.join(metrics_dir, "quantile_metrics.csv")
+    quantile_df.to_csv(quantile_file, index=False)
+
+    interval_df = pd.DataFrame(interval_metrics)
+    interval_file = os.path.join(metrics_dir, "interval_metrics.csv")
+    interval_df.to_csv(interval_file, index=False)
+
+    logging.info("Quantile metrics saved to %s", quantile_file)
+    logging.info("Interval metrics saved to %s", interval_file)

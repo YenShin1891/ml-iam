@@ -8,8 +8,8 @@ from sklearn.model_selection import ParameterSampler
 import torch
 from lightning.pytorch import Trainer
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
-from pytorch_forecasting import TemporalFusionTransformer, RMSE, TimeSeriesDataSet
-from pytorch_forecasting.metrics import MultiLoss
+from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
+from pytorch_forecasting.metrics import MultiLoss, QuantileLoss
 
 from configs.config import RESULTS_PATH, CATEGORICAL_COLUMNS, INDEX_COLUMNS
 from configs.models import TFTSearchSpace, TFTTrainerConfig
@@ -171,12 +171,15 @@ def train_final_tft(
 
     # re-init model with best params; use train_dataset for normalization metadata
     n_targets = len(targets)
+    # Use QuantileLoss with 7 quantiles (default quantiles)
+    quantile_loss = QuantileLoss()
+    n_quantiles = 7
     if n_targets > 1:
-        output_size = [1] * n_targets
-        loss = MultiLoss([RMSE() for _ in range(n_targets)])
+        output_size = [n_quantiles] * n_targets
+        loss = MultiLoss([quantile_loss for _ in range(n_targets)])
     else:
-        output_size = 1
-        loss = RMSE()
+        output_size = n_quantiles
+        loss = quantile_loss
 
     tft_final = TemporalFusionTransformer.from_dataset(
         train_dataset,
@@ -236,7 +239,7 @@ def train_final_tft(
 
 
 def predict_tft(session_state: dict, run_id: str) -> np.ndarray:
-    from src.trainers.evaluation import save_metrics
+    from src.trainers.evaluation import save_metrics, save_quantile_metrics
 
     test_data = session_state["test_data"]
     targets = session_state["targets"]
@@ -394,19 +397,46 @@ def predict_tft(session_state: dict, run_id: str) -> np.ndarray:
             )
 
         y_true = horizon_df[targets].values
-        y_pred = preds_flat
-        valid_mask = (~np.isnan(y_true).any(axis=1)) & (~np.isnan(y_pred).any(axis=1))
+        y_pred_quantiles = preds_flat  # Full quantile predictions (7 quantiles per target)
+
+        # Extract median (50th percentile) predictions for point prediction metrics
+        # With 7 quantiles [0.02, 0.1, 0.25, 0.5, 0.75, 0.9, 0.98], median is at index 3
+        n_targets = len(targets)
+        n_quantiles = 7
+        median_idx = 3  # 0.5 quantile
+
+        if n_targets > 1:
+            # Multi-target: shape is [n_samples, n_targets * n_quantiles]
+            # Reshape to [n_samples, n_targets, n_quantiles] and extract median
+            y_pred_reshaped = y_pred_quantiles.reshape(-1, n_targets, n_quantiles)
+            y_pred_median = y_pred_reshaped[:, :, median_idx]  # [n_samples, n_targets]
+        else:
+            # Single target: shape is [n_samples, n_quantiles]
+            y_pred_median = y_pred_quantiles[:, median_idx:median_idx+1]  # [n_samples, 1]
+
+        valid_mask = (~np.isnan(y_true).any(axis=1)) & (~np.isnan(y_pred_median).any(axis=1))
         if valid_mask.any():
-            save_metrics(run_id, y_true[valid_mask], y_pred[valid_mask])
+            save_metrics(run_id, y_true[valid_mask], y_pred_median[valid_mask])
+
+            # Also save quantile-specific metrics
+            if n_targets > 1:
+                # Reshape quantile predictions for multi-target case
+                y_pred_quantiles_valid = y_pred_quantiles[valid_mask].reshape(-1, n_targets, n_quantiles)
+            else:
+                y_pred_quantiles_valid = y_pred_quantiles[valid_mask]
+
+            save_quantile_metrics(run_id, y_true[valid_mask], y_pred_quantiles_valid)
         else:
             logging.warning("No valid rows to compute metrics (all horizon targets or predictions contain NaNs).")
 
-        # Expose horizon dataframe and y_true for downstream plotting
+        # Expose horizon dataframe, y_true, and both median and full quantile predictions for downstream use
         session_state['horizon_df'] = horizon_df
         session_state['horizon_y_true'] = y_true
+        session_state['horizon_y_pred_median'] = y_pred_median
+        session_state['horizon_y_pred_quantiles'] = y_pred_quantiles
 
-        # Return only the horizon predictions matrix
-        return y_pred
+        # Return the median predictions for backward compatibility
+        return y_pred_median
 
 
 # ---------- Shared dataset builders ----------
@@ -481,13 +511,15 @@ def _from_train_template(train_dataset, new_df, mode):
 
 
 def _init_tft_model(train_dataset, params: dict, n_targets: int) -> TemporalFusionTransformer:
-    # For multi-target, pytorch-forecasting expects output_size as a list (one per target) and a MultiLoss
+    # Use QuantileLoss with 7 quantiles (default quantiles)
+    quantile_loss = QuantileLoss()
+    n_quantiles = 7
     if n_targets > 1:
-        output_size = [1] * n_targets
-        loss = MultiLoss([RMSE() for _ in range(n_targets)])
+        output_size = [n_quantiles] * n_targets
+        loss = MultiLoss([quantile_loss for _ in range(n_targets)])
     else:
-        output_size = 1
-        loss = RMSE()
+        output_size = n_quantiles
+        loss = quantile_loss
 
     return TemporalFusionTransformer.from_dataset(
         train_dataset,
