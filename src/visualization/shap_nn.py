@@ -417,10 +417,11 @@ def draw_shap_all_timesteps_plot(run_id: str, temporal_shap_values, test_sequenc
     X_flat = _np.concatenate(x_flat_parts, axis=1)
     feature_name_map = feature_name_map or {}
     base_names = [feature_name_map.get(f, f) for f in features]
-    # Use build_feature_display_names for time-step features
+    # Create timestep-prefixed feature names for proper temporal differentiation
     display_names = []
     for t in range(sequence_length):
-        display_names.extend(build_feature_display_names(base_names, name_map=feature_name_map))
+        timestep_features = [f"timestep_{t}_{f}" for f in features]
+        display_names.extend(build_feature_display_names(timestep_features, name_map=feature_name_map))
     import matplotlib.pyplot as plt
     plt.rcParams.update({'font.size': 12})
     num_targets = len(targets)
