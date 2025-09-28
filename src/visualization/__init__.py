@@ -33,6 +33,11 @@ _nn_exports = [
     'draw_lstm_all_timesteps_shap_plot',
     'draw_temporal_shap_plot',
     'create_timestep_comparison_plots',
+    'get_tft_shap_values',
+    'plot_tft_shap',
+    'draw_shap_all_timesteps_plot',
+    'get_shap_values',
+    'plot_shap',
 ]
 
 try:  # Optional neural SHAP (requires torch)
@@ -42,6 +47,11 @@ try:  # Optional neural SHAP (requires torch)
         draw_lstm_all_timesteps_shap_plot,
         draw_temporal_shap_plot,
         create_timestep_comparison_plots,
+        get_tft_shap_values,
+        plot_tft_shap,
+        draw_shap_all_timesteps_plot,
+        get_shap_values,
+        plot_shap,
     )
     _HAS_NN_SHAP = True
 except ModuleNotFoundError as e:
@@ -53,7 +63,9 @@ except ModuleNotFoundError as e:
     # Create stub symbols
     get_lstm_shap_values = plot_lstm_shap = \
         draw_lstm_all_timesteps_shap_plot = draw_temporal_shap_plot = \
-        create_timestep_comparison_plots = _nn_unavailable
+        create_timestep_comparison_plots = get_tft_shap_values = \
+        plot_tft_shap = draw_shap_all_timesteps_plot = \
+        get_shap_values = plot_shap = _nn_unavailable
         
 __all__ = [
     # Trajectories

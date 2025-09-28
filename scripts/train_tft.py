@@ -26,7 +26,7 @@ from src.utils.utils import (
     save_session_state,
     setup_logging,
 )
-from src.visualization import plot_scatter
+from src.visualization import plot_scatter, plot_tft_shap
 
 np.random.seed(0)
 seed_everything(42, workers=True)
@@ -103,6 +103,8 @@ def plot_tft(session_state, run_id):
     logging.info("Plotting TFT predictions...")
     preds = session_state.get("preds")
     targets = session_state["targets"]
+    features = session_state["features"]
+
     if preds is None:
         raise ValueError("No predictions found in session state. Please run the test step first.")
 
@@ -112,8 +114,30 @@ def plot_tft(session_state, run_id):
     if horizon_df is not None and horizon_y_true is not None:
         logging.info("Using forecast horizon subset (%d rows) for plotting.", len(horizon_df))
         plot_scatter(run_id, horizon_df, horizon_y_true, preds, targets, model_name="TFT")
+        test_data_for_shap = horizon_df
     else:
-        raise ValueError("No forecast horizon data found in session state. Please run the test step with predict=True.")
+        test_data = session_state.get("test_data")
+        test_targets = session_state.get("test_data")[targets].values if test_data is not None else None
+
+        if test_data is not None and test_targets is not None:
+            plot_scatter(run_id, test_data, test_targets, preds, targets, model_name="TFT")
+            test_data_for_shap = test_data
+        else:
+            raise ValueError("No test data found in session state. Please run the test step with predict=True.")
+
+    # Generate SHAP plots - use full test data instead of horizon subset for sufficient sequence length
+    test_data_for_shap = session_state.get("test_data")
+    if test_data_for_shap is not None:
+        from configs.models.tft import TFTDatasetConfig
+        max_encoder_length = session_state.get("tft_max_encoder_length", TFTDatasetConfig().max_encoder_length)
+        try:
+            plot_tft_shap(run_id, test_data_for_shap, features, targets, max_encoder_length=max_encoder_length)
+        except Exception as e:
+            logging.warning(f"TFT SHAP analysis failed: {e}")
+            logging.info("This is likely due to categorical encoding incompatibilities in older TFT runs.")
+            logging.info("SHAP analysis will be skipped. For full SHAP support, consider retraining with newer TFT pipeline.")
+    else:
+        logging.warning("No test data available for SHAP analysis")
 
 
 def parse_arguments():
