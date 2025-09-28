@@ -234,6 +234,13 @@ def train_final_tft(
     final_trainer.fit(model=tft_final, train_dataloaders=combined_loader)
     final_trainer.save_checkpoint(final_ckpt_path)
 
+    # Save dataset template for SHAP compatibility
+    try:
+        torch.save(combined_dataset, dataset_tpl_path)
+        logging.info("Saved TFT dataset template to %s", dataset_tpl_path)
+    except Exception as e:
+        logging.warning("Failed to save dataset template: %s", e)
+
 
 def predict_tft(session_state: dict, run_id: str) -> np.ndarray:
     from src.trainers.evaluation import save_metrics
