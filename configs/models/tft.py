@@ -14,9 +14,11 @@ class TFTDatasetConfig:
 
     time_idx: str = "Step"
     group_ids: List[str] = field(default_factory=lambda: INDEX_COLUMNS)
-    max_encoder_length: int = 2
-    min_encoder_length: int = 2
-    max_prediction_length: int = MAX_SERIES_LENGTH - 2
+    max_encoder_length: int = 3
+    min_encoder_length: int = 3
+    # model trains on variable encoder lengths from min to max
+    # in prediction, it uses the maximum available encoder length up to max_encoder_length
+    max_prediction_length: int = MAX_SERIES_LENGTH - 3
     min_prediction_length: int = 1
     add_relative_time_idx: bool = True
     add_target_scales: bool = True

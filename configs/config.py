@@ -4,7 +4,7 @@ RESULTS_PATH = "/mnt/nas3/kcp-yeeun/results"
 
 # Constants
 YEAR_RANGE = ('2005', '2100')
-MAX_SERIES_LENGTH = 15
+MAX_SERIES_LENGTH = 15  # try not to exceed average length(=17) for tft
 
 DEFAULT_DATASET = 'processed_series_0401.csv'
 MAX_YEAR = 2100
