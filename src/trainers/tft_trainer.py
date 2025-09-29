@@ -476,10 +476,10 @@ def _create_train_dataset(session_state):
 def _from_train_template(train_dataset, new_df, mode):
     """Build a dataset from a train template via TimeSeriesDataSet.from_dataset."""
     kwargs = {}
-    if mode in {"eval", "test"}:
+    if mode in {"eval", "test", "predict"}:
         kwargs["stop_randomization"] = True
-    if mode == "test":
-        # Ensure prediction indices (group_ids + time_idx) are returned by model.predict(..., return_index=True)
+    if mode == "predict":
+        # Only for real inference: keep only decoder timesteps and ensure prediction indices are returned
         kwargs["predict"] = True
     return TimeSeriesDataSet.from_dataset(train_dataset, new_df, **kwargs)
 
