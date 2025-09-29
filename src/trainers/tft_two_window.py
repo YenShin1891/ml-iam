@@ -138,25 +138,34 @@ def _predict_early_window(session_state: dict, run_id: str) -> Tuple[np.ndarray,
         if torch.is_tensor(preds_tensor) and preds_tensor.ndim == 3:
             n_samples, pred_len, out_size = preds_tensor.shape
             if len(idx_df) == n_samples and pred_len > 1:
+                # Pre-group test data for efficient lookup - much faster than filtering in loop
+                early_test_grouped = early_test_data.groupby(list(template_group_ids))
+
                 expanded_rows = []
                 for i in range(n_samples):
                     base_row = idx_df.iloc[i]
 
                     # Get the actual trajectory data to find the correct step sequence
                     trajectory_key = tuple(base_row[col] for col in template_group_ids)
-                    traj_data = early_test_data[
-                        early_test_data[list(template_group_ids)].apply(tuple, axis=1) == trajectory_key
-                    ].sort_values(template_time_idx)
+                    try:
+                        traj_data = early_test_grouped.get_group(trajectory_key).sort_values(template_time_idx)
 
-                    if len(traj_data) >= pred_len:
-                        # Use the actual steps from the trajectory data (first pred_len steps)
-                        actual_steps = sorted(traj_data[template_time_idx].unique())[:pred_len]
-                        for step_val in actual_steps:
-                            new_row = base_row.copy()
-                            new_row[template_time_idx] = step_val
-                            expanded_rows.append(new_row)
-                    else:
-                        # Fallback to increment if trajectory data is insufficient
+                        if len(traj_data) >= pred_len:
+                            # Use the actual steps from the trajectory data (first pred_len steps)
+                            actual_steps = sorted(traj_data[template_time_idx].unique())[:pred_len]
+                            for step_val in actual_steps:
+                                new_row = base_row.copy()
+                                new_row[template_time_idx] = step_val
+                                expanded_rows.append(new_row)
+                        else:
+                            # Fallback to increment if trajectory data is insufficient
+                            base_time = base_row[template_time_idx]
+                            for h in range(pred_len):
+                                new_row = base_row.copy()
+                                new_row[template_time_idx] = base_time + h
+                                expanded_rows.append(new_row)
+                    except KeyError:
+                        # Trajectory not found, use fallback increment
                         base_time = base_row[template_time_idx]
                         for h in range(pred_len):
                             new_row = base_row.copy()
@@ -328,25 +337,34 @@ def _predict_late_window(session_state: dict, run_id: str) -> tuple[np.ndarray, 
         if torch.is_tensor(preds_tensor) and preds_tensor.ndim == 3:
             n_samples, pred_len, out_size = preds_tensor.shape
             if len(idx_df) == n_samples and pred_len > 1:
+                # Pre-group test data for efficient lookup - much faster than filtering in loop
+                late_test_grouped = late_test_data.groupby(list(template_group_ids))
+
                 expanded_rows = []
                 for i in range(n_samples):
                     base_row = idx_df.iloc[i]
 
                     # Get the actual trajectory data to find the correct step sequence
                     trajectory_key = tuple(base_row[col] for col in template_group_ids)
-                    traj_data = late_test_data[
-                        late_test_data[list(template_group_ids)].apply(tuple, axis=1) == trajectory_key
-                    ].sort_values(template_time_idx)
+                    try:
+                        traj_data = late_test_grouped.get_group(trajectory_key).sort_values(template_time_idx)
 
-                    if len(traj_data) >= pred_len:
-                        # Use the actual steps from the trajectory data
-                        actual_steps = sorted(traj_data[template_time_idx].unique())[-pred_len:]
-                        for step_val in actual_steps:
-                            new_row = base_row.copy()
-                            new_row[template_time_idx] = step_val
-                            expanded_rows.append(new_row)
-                    else:
-                        # Fallback to increment if trajectory data is insufficient
+                        if len(traj_data) >= pred_len:
+                            # Use the actual steps from the trajectory data
+                            actual_steps = sorted(traj_data[template_time_idx].unique())[-pred_len:]
+                            for step_val in actual_steps:
+                                new_row = base_row.copy()
+                                new_row[template_time_idx] = step_val
+                                expanded_rows.append(new_row)
+                        else:
+                            # Fallback to increment if trajectory data is insufficient
+                            base_time = base_row[template_time_idx]
+                            for h in range(pred_len):
+                                new_row = base_row.copy()
+                                new_row[template_time_idx] = base_time + h
+                                expanded_rows.append(new_row)
+                    except KeyError:
+                        # Trajectory not found, use fallback increment
                         base_time = base_row[template_time_idx]
                         for h in range(pred_len):
                             new_row = base_row.copy()
