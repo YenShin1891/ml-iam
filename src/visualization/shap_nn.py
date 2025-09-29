@@ -533,7 +533,7 @@ def get_shap_values(run_id, X_test: pd.DataFrame, model_type: str = "auto", **kw
     else:
         raise ValueError(f"Unsupported model type: {model_type}")
 
-def plot_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], targets: List[str], model_type: str = "auto", feature_name_map: Optional[Dict[str, str]] = None, **kwargs):
+def plot_nn_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], targets: List[str], model_type: str = "auto", feature_name_map: Optional[Dict[str, str]] = None, **kwargs):
     """Plot SHAP values for any supported model type (auto-detects if not specified)."""
     if model_type == "auto":
         # Auto-detect model type

@@ -56,7 +56,7 @@ def transform_outputs_to_former_inputs(run_id: str, shap_values: np.ndarray, tar
         json.dump(feature_renaming, json_file, indent=4)
     return input_only
 
-def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, feature_name_map: Optional[Dict[str, str]] = None, model_prefix=""):
+def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, feature_name_map: Optional[Dict[str, str]] = None, model_prefix="", xlim_range: Optional[tuple] = None):
     n_display = 8
     import matplotlib.pyplot as plt
     plt.rcParams.update({'font.size': 12})
@@ -99,6 +99,9 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=F
                     plot_type='violin',
                     show=False,
                 )
+            # Set x-axis limits to zoom into configured range if specified
+            if xlim_range is not None:
+                plt.xlim(xlim_range[0], xlim_range[1])
             fig_local.tight_layout()
         render_external_plot(ax, _plot)
         title_suffix = " (excluding top feature)" if exclude_top else ""
@@ -110,7 +113,7 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=F
     fig.savefig(os.path.join(RESULTS_PATH, run_id, 'plots', filename))
     plt.close(fig)
 
-def plot_shap(run_id, X_test_with_index, features, targets, feature_name_map: Optional[Dict[str, str]] = None):
+def plot_xgb_shap(run_id, X_test_with_index, features, targets, feature_name_map: Optional[Dict[str, str]] = None, xlim_range: Optional[tuple] = None):
     logging.info("Creating SHAP plots...")
     ckpt_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", "final_best.json")
     if not os.path.exists(ckpt_path):
@@ -124,5 +127,5 @@ def plot_shap(run_id, X_test_with_index, features, targets, feature_name_map: Op
     get_shap_values(run_id, X_test)
     shap_values = np.load(os.path.join(RESULTS_PATH, run_id, "plots", "shap_values.npy"), allow_pickle=True)
     shap_values = transform_outputs_to_former_inputs(run_id, shap_values, targets, features)
-    draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, feature_name_map=feature_name_map)
-    draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=True, feature_name_map=feature_name_map)
+    draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, feature_name_map=feature_name_map, xlim_range=xlim_range)
+    draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=True, feature_name_map=feature_name_map, xlim_range=xlim_range)

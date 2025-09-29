@@ -7,7 +7,7 @@ from src.data.preprocess import prepare_data, load_and_process_data, prepare_fea
 from src.trainers.xgb_trainer import hyperparameter_search, train_and_save_model
 from src.trainers.evaluation import test_xgb_autoregressively, save_metrics
 from src.utils.utils import setup_logging, save_session_state, load_session_state, load_model, get_next_run_id, load_best_params
-from src.visualization import plot_scatter, plot_shap
+from src.visualization import plot_scatter, plot_xgb_shap
 
 np.random.seed(0)
 
@@ -120,7 +120,7 @@ def plot_xgb(session_state, run_id):
     test_data = session_state["test_data"]
 
     plot_scatter(run_id, test_data, y_test, preds, targets, model_name="XGBoost")
-    plot_shap(run_id, X_test_with_index, features, targets)
+    plot_xgb_shap(run_id, X_test_with_index, features, targets)
 
 
 def parse_arguments():
