@@ -18,14 +18,14 @@ from .tft_trainer import (
 )
 
 
-def _create_early_window_test_data(test_data: pd.DataFrame) -> pd.DataFrame:
-    """Filter test data to early window (steps 0-14) for each trajectory."""
+def _create_early_window_test_data(test_data: pd.DataFrame, window_length: int) -> pd.DataFrame:
+    """Filter test data to early window for each trajectory."""
     filtered_groups = []
 
     for (model, scenario), group in test_data.groupby(['Model', 'Scenario']):
         steps = sorted(group['Step'].unique())
-        if len(steps) >= 15:  # Need at least 15 steps for early window
-            early_steps = steps[:15]  # Steps 0-14
+        if len(steps) >= window_length:  # Need at least window_length steps for early window
+            early_steps = steps[:window_length]  # First window_length steps
             early_group = group[group['Step'].isin(early_steps)].copy()
             filtered_groups.append(early_group)
 
@@ -37,14 +37,6 @@ def _create_early_window_test_data(test_data: pd.DataFrame) -> pd.DataFrame:
 def _predict_early_window(session_state: dict, run_id: str) -> Tuple[np.ndarray, pd.DataFrame]:
     """Generate predictions for early window using existing trained model."""
     logging.info("Generating early window predictions using existing model...")
-
-    # Create early window test data
-    test_data = session_state["test_data"]
-    early_test_data = _create_early_window_test_data(test_data)
-
-    if len(early_test_data) == 0:
-        logging.warning("No early window test data available")
-        return np.array([]), pd.DataFrame()
 
     # Use existing trained model to predict on early window data
     with _single_gpu_env():
@@ -78,6 +70,19 @@ def _predict_early_window(session_state: dict, run_id: str) -> Tuple[np.ndarray,
                     ) from retry_e
         except Exception as e:
             raise RuntimeError(f"Failed to load dataset template for early window: {e}")
+
+        # Get window lengths from template
+        max_encoder_length = getattr(train_template, 'max_encoder_length', 2)
+        max_prediction_length = getattr(train_template, 'max_prediction_length', 13)
+        early_window_length = max_encoder_length + max_prediction_length
+
+        # Create early window test data
+        test_data = session_state["test_data"]
+        early_test_data = _create_early_window_test_data(test_data, early_window_length)
+
+        if len(early_test_data) == 0:
+            logging.warning("No early window test data available")
+            return np.array([]), pd.DataFrame()
 
         # Create test dataset for early window
         try:
@@ -188,7 +193,7 @@ def _predict_early_window(session_state: dict, run_id: str) -> Tuple[np.ndarray,
         return preds_flat, horizon_df
 
 
-def _create_late_window_test_data(test_data: pd.DataFrame, window_length: int = 15, prediction_length: int = 13) -> pd.DataFrame:
+def _create_late_window_test_data(test_data: pd.DataFrame, window_length: int, prediction_length: int) -> pd.DataFrame:
     """Create late window test data positioned to end at each trajectory's last step."""
     filtered_groups = []
 
@@ -230,8 +235,11 @@ def _predict_late_window(session_state: dict, run_id: str) -> tuple[np.ndarray, 
         window_length = max_prediction_length
         prediction_length = max_prediction_length
     except Exception:
-        window_length = 13  # fallback - use prediction length only
-        prediction_length = 13  # fallback
+        # Default fallback values - you may need to adjust these based on your model
+        max_encoder_length = 2  # fallback
+        max_prediction_length = 13  # fallback
+        window_length = max_prediction_length  # fallback - use prediction length only
+        prediction_length = max_prediction_length  # fallback
 
     late_test_data = _create_late_window_test_data(test_data, window_length, prediction_length)
 
