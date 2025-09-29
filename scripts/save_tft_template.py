@@ -25,7 +25,7 @@ def save_template_for_run(run_id):
         raise ValueError(f"Run directory {run_dir} does not exist")
 
     # Check if template already exists
-    template_path = run_dir / "checkpoints" / "tft_dataset_template.pt"
+    template_path = run_dir / "final" / "dataset_template.pt"
     if template_path.exists():
         logging.info("Template already exists at %s", template_path)
         return str(template_path)
