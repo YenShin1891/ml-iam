@@ -127,6 +127,30 @@ def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
     test_data = session_state["test_data"]
     targets = session_state["targets"]
 
+    # Truncate all sequences to 13 timesteps for consistent encoder context
+    logging.info("Truncating all test sequences to 13 timesteps for consistent encoder context...")
+    truncated_groups = []
+    group_cols = ['Model', 'Scenario', 'Region']
+
+    for group_keys, group_data in test_data.groupby(group_cols):
+        # Sort by Step to ensure proper order
+        group_sorted = group_data.sort_values('Step').reset_index(drop=True)
+
+        # Take only first 13 timesteps (steps 0-12)
+        if len(group_sorted) >= 13:
+            truncated_group = group_sorted.iloc[:13].copy()
+            truncated_groups.append(truncated_group)
+        else:
+            # Keep groups with fewer than 13 steps as-is (they won't be used anyway)
+            truncated_groups.append(group_sorted)
+
+    if truncated_groups:
+        test_data_truncated = pd.concat(truncated_groups, ignore_index=True)
+        logging.info(f"Truncated test data: {len(test_data_truncated)} rows from {len(truncated_groups)} trajectories")
+    else:
+        test_data_truncated = test_data
+        logging.warning("No test data groups found for truncation")
+
     with single_gpu_env():
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             teardown_distributed()
@@ -137,7 +161,7 @@ def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
         logging.info("Building test dataset for TFT prediction using saved template...")
         train_template = load_dataset_template(run_id)
         try:
-            test_dataset = from_train_template(train_template, test_data, mode="predict")
+            test_dataset = from_train_template(train_template, test_data_truncated, mode="eval")
         except Exception as e:
             raise RuntimeError(
                 "Failed to build test dataset from saved template. Ensure column/dtype schema matches: "
@@ -191,14 +215,14 @@ def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
         else:
             raise RuntimeError(f"Unsupported prediction tensor shape: {preds.shape}")
 
-        # Build index for alignment: replicate approach using group ids + time_idx from test_data
+        # Build index for alignment: replicate approach using group ids + time_idx from test_data_truncated
         key_cols = group_id_fields + [time_idx_name]
-        if not all(k in test_data.columns for k in key_cols):
-            missing = [k for k in key_cols if k not in test_data.columns]
+        if not all(k in test_data_truncated.columns for k in key_cols):
+            missing = [k for k in key_cols if k not in test_data_truncated.columns]
             raise RuntimeError(f"Test data missing required key columns for alignment: {missing}")
 
         # Extract horizon portion (predict=True should already restrict to decoder steps)
-        horizon_df = test_data[key_cols + targets].drop_duplicates(key_cols).copy()
+        horizon_df = test_data_truncated[key_cols + targets].drop_duplicates(key_cols).copy()
         if preds_flat.shape[0] != len(horizon_df):
             logging.warning(
                 "Prediction rows (%d) != horizon rows (%d). Proceeding best-effort alignment.",

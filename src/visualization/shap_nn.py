@@ -147,12 +147,12 @@ def get_tft_shap_values(run_id, X_test: pd.DataFrame, max_encoder_length=12):
                 f"meet minimum length requirement ({min_required_length} timesteps)")
 
     # Create test dataset from template
-    test_dataset = from_train_template(train_template, X_test_filtered, mode="predict")
+    test_dataset = from_train_template(train_template, X_test_filtered, mode="eval")
 
     # Create background data (smaller subset for SHAP)
     background_size = min(200, len(X_test_filtered))
     background_data = X_test_filtered.iloc[:background_size]
-    background_dataset = from_train_template(train_template, background_data, mode="predict")
+    background_dataset = from_train_template(train_template, background_data, mode="eval")
 
     # Get data loaders
     background_loader = background_dataset.to_dataloader(
