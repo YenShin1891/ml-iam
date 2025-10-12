@@ -1,0 +1,41 @@
+# python version has to be 3.9
+
+# Core Data Science Libraries
+pandas==2.2.2
+numpy==1.26.4  # streamlit might need numpy 2.0.2 because of dependency issues
+scipy==1.10.1  # Compatible with numpy 1.24.4
+scikit-learn==1.3.2  # Compatible with numpy 1.24.4 and scipy 1.10.1
+
+# XGBoost with GPU support
+xgboost==2.1.4
+
+# Dask and Distributed Computing
+dask[dataframe]==2024.8.0
+distributed==2024.8.0
+# dask-cuda  # Optional: for better NVIDIA GPU integration - commented out due to version conflicts
+
+# Visualization
+matplotlib==3.9.4
+seaborn==0.13.2 
+
+# SHAP (SHapley Additive exPlanations)
+shap==0.47.2
+
+# GPU Support - Fixed package name for Python 3.9
+cupy-cuda11x==12.3.0  # Compatible with numpy 1.24.4
+
+# Deep Learning (Optional, Only needed for LSTM/TFT)
+torch>=2.0.0
+lightning>=2.0.0
+pytorch-forecasting>=0.10.0  # For TFT implementation
+
+# ====================================================================
+# DASHBOARD ENVIRONMENT SETUP (due to numpy compatibility issues)
+# ====================================================================
+# For dashboard/streamlit, create separate environment:
+# mamba create -n mliam_st python=3.9
+# mamba activate mliam_st  
+# pip install numpy==1.24.4 pandas==2.0.3 scipy==1.10.1 scikit-learn==1.3.2
+# pip install matplotlib==3.7.5 seaborn==0.12.2 numba==0.57.1 shap==0.41.0
+# pip install streamlit==1.45.0 xgboost 
+# pip install torch  # don't need this for just XGBoost
