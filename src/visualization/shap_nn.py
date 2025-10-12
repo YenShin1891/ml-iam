@@ -195,6 +195,11 @@ def get_tft_shap_values(run_id, X_test: pd.DataFrame, max_encoder_length=12):
     background_inputs = extract_inputs_from_loader(background_loader, max_batches=1)
     test_inputs = extract_inputs_from_loader(test_loader, max_batches=1)
 
+    # Extract sample batch structure once for efficiency (avoids recreating DataLoader in forward pass)
+    sample_loader = test_dataset.to_dataloader(train=False, batch_size=1, num_workers=0)
+    sample_batch = next(iter(sample_loader))
+    sample_x, _ = sample_batch
+
     # Calculate SHAP values for each target separately
     all_temporal_shap = []
     all_averaged_shap = []
@@ -205,21 +210,20 @@ def get_tft_shap_values(run_id, X_test: pd.DataFrame, max_encoder_length=12):
         # Create wrapper for this specific target
         import torch as _torch
         class TFTWrapperForSHAP(_torch.nn.Module):
-            def __init__(self, tft_model, train_template, target_idx):
+            def __init__(self, tft_model, train_template, target_idx, sample_batch_structure):
                 super().__init__()
                 self.tft_model = tft_model
                 self.train_template = train_template
                 self.target_idx = target_idx
+                self.sample_batch_structure = sample_batch_structure
 
             def forward(self, x):
                 # x is already the combined encoder features (cont + cat) from the TFT dataset
                 # We need to recreate the batch dict that TFT expects
                 batch_size, time_steps, n_features = x.shape
 
-                # Get the original batch structure from a sample batch
-                sample_loader = test_dataset.to_dataloader(train=False, batch_size=1, num_workers=0)
-                sample_batch = next(iter(sample_loader))
-                sample_x, _ = sample_batch
+                # Use the pre-extracted sample batch structure
+                sample_x = self.sample_batch_structure
 
                 # Use the sample batch structure but replace with our SHAP input
                 batch_dict = {}
@@ -305,7 +309,7 @@ def get_tft_shap_values(run_id, X_test: pd.DataFrame, max_encoder_length=12):
                     else:
                         return pred_tensor.unsqueeze(1)  # [batch, 1]
 
-        wrapper = TFTWrapperForSHAP(model, train_template, target_idx)
+        wrapper = TFTWrapperForSHAP(model, train_template, target_idx, sample_x)
         wrapper.eval()
 
         background_inputs.requires_grad_(True)
