@@ -81,3 +81,18 @@ class TFTTrainerConfig:
     patience: int = 3
     # Use Union for flexibility: -1 for all, int count, list of device indices, or "auto"
     devices: Union[int, List[int], str] = "auto"
+
+    # Loss function selection: "rmse" (recommended) or "quantile" (experimental, poor performance)
+    # WARNING: quantile loss shows significantly worse performance in our experiments
+    # across multiple metrics. Use with caution - results are poor compared to RMSE.
+    # Implementation details and experimental evidence: commits 61fb48a and 0586dba
+    # Quantile loss changes:
+    # - Output size: 1 → 7 quantiles per target
+    # - Prediction handling: point predictions → quantile predictions with median extraction
+    # - Metrics: standard metrics + quantile-specific coverage/calibration metrics
+    # - Plotting: standard scatter → uncertainty plots with error bars
+    #
+    # Usage examples:
+    # Default (RMSE): TFTTrainerConfig()
+    # Quantile:      TFTTrainerConfig(loss_type="quantile")
+    loss_type: str = "rmse"

@@ -9,7 +9,7 @@ import torch
 from lightning.pytorch import Trainer
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_forecasting import TemporalFusionTransformer, RMSE, TimeSeriesDataSet
-from pytorch_forecasting.metrics import MultiLoss
+from pytorch_forecasting.metrics import MultiLoss, QuantileLoss
 
 from configs.config import RESULTS_PATH, CATEGORICAL_COLUMNS, INDEX_COLUMNS
 from configs.models import TFTSearchSpace, TFTTrainerConfig
@@ -129,7 +129,7 @@ def hyperparameter_search_tft(
         logging.info(f"TFT Search Iteration {i+1}/{search_cfg.search_iter_n} - Params: {params}")
 
         n_targets = len(targets)
-        tft = _init_tft_model(train_dataset, params, n_targets)
+        tft = _init_tft_model(train_dataset, params, n_targets, trainer_cfg)
 
         checkpoint_callback = _make_trial_checkpoint(run_id, i)
         trainer = _create_search_trainer(trainer_cfg, checkpoint_callback)
@@ -171,12 +171,32 @@ def train_final_tft(
 
     # re-init model with best params; use train_dataset for normalization metadata
     n_targets = len(targets)
-    if n_targets > 1:
-        output_size = [1] * n_targets
-        loss = MultiLoss([RMSE() for _ in range(n_targets)])
+
+    # Configure loss function and output size based on trainer config
+    if trainer_cfg.loss_type == "quantile":
+        # WARNING: Quantile loss shows significantly worse performance than RMSE
+        # in our experiments. Results are poor across multiple metrics.
+        # See commits 61fb48a and 0586dba for implementation details and poor results.
+        logging.warning(
+            "Using quantile loss which has shown poor performance in experiments. "
+            "Consider using 'rmse' loss_type for better results."
+        )
+        quantile_loss = QuantileLoss()
+        n_quantiles = 7  # Default QuantileLoss uses 7 quantiles
+        if n_targets > 1:
+            output_size = [n_quantiles] * n_targets
+            loss = MultiLoss([quantile_loss for _ in range(n_targets)])
+        else:
+            output_size = n_quantiles
+            loss = quantile_loss
     else:
-        output_size = 1
-        loss = RMSE()
+        # Default: RMSE (recommended based on experimental validation)
+        if n_targets > 1:
+            output_size = [1] * n_targets
+            loss = MultiLoss([RMSE() for _ in range(n_targets)])
+        else:
+            output_size = 1
+            loss = RMSE()
 
     tft_final = TemporalFusionTransformer.from_dataset(
         train_dataset,
@@ -243,7 +263,7 @@ def train_final_tft(
 
 
 def predict_tft(session_state: dict, run_id: str) -> np.ndarray:
-    from src.trainers.evaluation import save_metrics
+    from src.trainers.evaluation import save_metrics, save_quantile_metrics
 
     test_data = session_state["test_data"]
     targets = session_state["targets"]
@@ -401,19 +421,103 @@ def predict_tft(session_state: dict, run_id: str) -> np.ndarray:
             )
 
         y_true = horizon_df[targets].values
-        y_pred = preds_flat
-        valid_mask = (~np.isnan(y_true).any(axis=1)) & (~np.isnan(y_pred).any(axis=1))
-        if valid_mask.any():
-            save_metrics(run_id, y_true[valid_mask], y_pred[valid_mask])
+        n_targets = len(targets)
+
+        # Detect if this is a quantile model by checking prediction dimensions or config
+        trainer_cfg = TFTTrainerConfig()
+        is_quantile_model = trainer_cfg.loss_type == "quantile"
+
+        # Alternative detection: check if predictions have quantile structure (7 quantiles per target)
+        if not is_quantile_model and preds_flat.shape[1] == n_targets * 7:
+            is_quantile_model = True
+            logging.info("Detected quantile model from prediction dimensions")
+
+        if is_quantile_model:
+            # Handle quantile predictions using separate function
+            return _handle_quantile_predictions(run_id, horizon_df, y_true, preds_flat, targets, session_state)
         else:
-            logging.warning("No valid rows to compute metrics (all horizon targets or predictions contain NaNs).")
+            # Handle RMSE predictions (standard case)
+            y_pred = preds_flat
+            valid_mask = (~np.isnan(y_true).any(axis=1)) & (~np.isnan(y_pred).any(axis=1))
+            if valid_mask.any():
+                save_metrics(run_id, y_true[valid_mask], y_pred[valid_mask])
+            else:
+                logging.warning("No valid rows to compute metrics (all targets or predictions contain NaNs).")
 
-        # Expose horizon dataframe and y_true for downstream plotting
-        session_state['horizon_df'] = horizon_df
-        session_state['horizon_y_true'] = y_true
+            # Expose horizon dataframe and y_true for downstream plotting
+            session_state['horizon_df'] = horizon_df
+            session_state['horizon_y_true'] = y_true
 
-        # Return only the horizon predictions matrix
-        return y_pred
+            # Return predictions matrix
+            return y_pred
+
+
+def _handle_quantile_predictions(
+    run_id: str,
+    horizon_df: pd.DataFrame,
+    y_true: np.ndarray,
+    preds_flat: np.ndarray,
+    targets: List[str],
+    session_state: dict
+) -> np.ndarray:
+    """
+    Handle quantile model predictions: extract median, save metrics, and store in session state.
+
+    Args:
+        run_id: Experiment run identifier
+        horizon_df: Horizon dataframe with metadata
+        y_true: True target values [n_samples, n_targets]
+        preds_flat: Flattened quantile predictions [n_samples, n_targets * n_quantiles]
+        targets: List of target names
+        session_state: Session state dictionary to update
+
+    Returns:
+        Median predictions for backward compatibility [n_samples, n_targets]
+    """
+    from src.trainers.evaluation import save_metrics, save_quantile_metrics
+
+    n_targets = len(targets)
+    n_quantiles = 7  # Default QuantileLoss uses 7 quantiles
+    median_idx = 3   # 0.5 quantile is at index 3
+
+    logging.info(
+        "Processing quantile predictions: WARNING - quantile loss shows poor performance. "
+        "See commits 61fb48a and 0586dba for experimental evidence."
+    )
+
+    # Reshape predictions to [n_samples, n_targets, n_quantiles]
+    if n_targets > 1:
+        y_pred_quantiles = preds_flat.reshape(-1, n_targets, n_quantiles)
+        y_pred_median = y_pred_quantiles[:, :, median_idx]  # Extract median
+    else:
+        # Single target case: preds_flat is [n_samples, n_quantiles]
+        y_pred_quantiles = preds_flat
+        y_pred_median = preds_flat[:, median_idx:median_idx+1]  # Keep 2D shape
+
+    valid_mask = (~np.isnan(y_true).any(axis=1)) & (~np.isnan(y_pred_median).any(axis=1))
+    if valid_mask.any():
+        # Save regular metrics using median predictions
+        save_metrics(run_id, y_true[valid_mask], y_pred_median[valid_mask])
+
+        # Save quantile-specific metrics
+        if n_targets > 1:
+            y_pred_quantiles_valid = y_pred_quantiles[valid_mask]
+        else:
+            y_pred_quantiles_valid = y_pred_quantiles[valid_mask]
+        save_quantile_metrics(run_id, y_true[valid_mask], y_pred_quantiles_valid)
+
+        logging.info("Saved both standard and quantile metrics for quantile model")
+    else:
+        logging.warning("No valid rows to compute metrics (all targets or predictions contain NaNs).")
+
+    # Store both median and full quantile predictions in session state
+    session_state['horizon_df'] = horizon_df
+    session_state['horizon_y_true'] = y_true
+    session_state['horizon_y_pred_median'] = y_pred_median
+    session_state['horizon_y_pred_quantiles'] = y_pred_quantiles
+
+    # Return median predictions for backward compatibility
+    return y_pred_median
 
 
 # ---------- Shared dataset builders ----------
@@ -487,14 +591,35 @@ def _from_train_template(train_dataset, new_df, mode):
 # ---------- Helpers for hyperparameter search ----------
 
 
-def _init_tft_model(train_dataset, params: dict, n_targets: int) -> TemporalFusionTransformer:
-    # For multi-target, pytorch-forecasting expects output_size as a list (one per target) and a MultiLoss
-    if n_targets > 1:
-        output_size = [1] * n_targets
-        loss = MultiLoss([RMSE() for _ in range(n_targets)])
+def _init_tft_model(train_dataset, params: dict, n_targets: int, trainer_cfg: TFTTrainerConfig = None) -> TemporalFusionTransformer:
+    if trainer_cfg is None:
+        trainer_cfg = TFTTrainerConfig()
+
+    # Configure loss function and output size based on trainer config
+    if trainer_cfg.loss_type == "quantile":
+        # WARNING: Quantile loss shows significantly worse performance than RMSE
+        # in our experiments. Results are poor across multiple metrics.
+        # See commits 61fb48a and 0586dba for implementation details and poor results.
+        logging.warning(
+            "Using quantile loss which has shown poor performance in experiments. "
+            "Consider using 'rmse' loss_type for better results."
+        )
+        quantile_loss = QuantileLoss()
+        n_quantiles = 7  # Default QuantileLoss uses 7 quantiles
+        if n_targets > 1:
+            output_size = [n_quantiles] * n_targets
+            loss = MultiLoss([quantile_loss for _ in range(n_targets)])
+        else:
+            output_size = n_quantiles
+            loss = quantile_loss
     else:
-        output_size = 1
-        loss = RMSE()
+        # Default: RMSE (recommended based on experimental validation)
+        if n_targets > 1:
+            output_size = [1] * n_targets
+            loss = MultiLoss([RMSE() for _ in range(n_targets)])
+        else:
+            output_size = 1
+            loss = RMSE()
 
     return TemporalFusionTransformer.from_dataset(
         train_dataset,
