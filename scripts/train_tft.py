@@ -26,7 +26,7 @@ from src.utils.utils import (
     save_session_state,
     setup_logging,
 )
-from src.visualization import plot_scatter
+from src.visualization import plot_scatter, plot_tft_shap
 
 np.random.seed(0)
 seed_everything(42, workers=True)
@@ -93,8 +93,15 @@ def train_tft(session_state, run_id):
     return best_params
 
 
-def test_tft(session_state, run_id):
-    preds = predict_tft(session_state, run_id)
+def test_tft(session_state, run_id, use_two_window=False):
+    if use_two_window:
+        from src.trainers.tft_two_window_simple import predict_tft_two_window
+        logging.info("Using two-window prediction approach...")
+        preds = predict_tft_two_window(session_state, run_id)
+    else:
+        logging.info("Using standard single-window prediction...")
+        preds = predict_tft(session_state, run_id)
+
     session_state["preds"] = preds
     return preds
 
@@ -103,6 +110,8 @@ def plot_tft(session_state, run_id):
     logging.info("Plotting TFT predictions...")
     preds = session_state.get("preds")
     targets = session_state["targets"]
+    features = session_state["features"]
+
     if preds is None:
         raise ValueError("No predictions found in session state. Please run the test step first.")
 
@@ -112,8 +121,30 @@ def plot_tft(session_state, run_id):
     if horizon_df is not None and horizon_y_true is not None:
         logging.info("Using forecast horizon subset (%d rows) for plotting.", len(horizon_df))
         plot_scatter(run_id, horizon_df, horizon_y_true, preds, targets, model_name="TFT")
+        test_data_for_shap = horizon_df
     else:
-        raise ValueError("No forecast horizon data found in session state. Please run the test step with predict=True.")
+        test_data = session_state.get("test_data")
+        test_targets = session_state.get("test_data")[targets].values if test_data is not None else None
+
+        if test_data is not None and test_targets is not None:
+            plot_scatter(run_id, test_data, test_targets, preds, targets, model_name="TFT")
+            test_data_for_shap = test_data
+        else:
+            raise ValueError("No test data found in session state. Please run the test step with predict=True.")
+
+    # Generate SHAP plots - use full test data instead of horizon subset for sufficient sequence length
+    test_data_for_shap = session_state.get("test_data")
+    if test_data_for_shap is not None:
+        from configs.models.tft import TFTDatasetConfig
+        max_encoder_length = session_state.get("tft_max_encoder_length", TFTDatasetConfig().max_encoder_length)
+        try:
+            plot_tft_shap(run_id, test_data_for_shap, features, targets, max_encoder_length=max_encoder_length)
+        except Exception as e:
+            logging.warning(f"TFT SHAP analysis failed: {e}")
+            logging.info("This is likely due to categorical encoding incompatibilities in older TFT runs.")
+            logging.info("SHAP analysis will be skipped. For full SHAP support, consider retraining with newer TFT pipeline.")
+    else:
+        logging.warning("No test data available for SHAP analysis")
 
 
 def parse_arguments():
@@ -132,6 +163,11 @@ def parse_arguments():
         help="Dataset version to use (subdirectory under data/). If not specified, uses default.",
         required=False,
     )
+    parser.add_argument(
+        "--two-window",
+        action="store_true",
+        help="Use two-window prediction approach (early + late windows with weighted averaging).",
+    )
     args = parser.parse_args()
 
     # Validation: if resume is specified, run_id must be provided
@@ -142,23 +178,27 @@ def parse_arguments():
     if not args.resume and args.run_id:
         parser.error("--run_id should only be specified when using --resume")
 
-    return args.run_id, args.resume, args.dataset
+    return args.run_id, args.resume, args.dataset, args.two_window
 
 
 def main():
-    run_id, resume, dataset_version = parse_arguments()
+    run_id, resume, dataset_version, use_two_window = parse_arguments()
 
     if resume is None:
         # Full pipeline: process -> search -> train -> test -> plot
         run_id = get_next_run_id()
         setup_logging(run_id)
+
+        if use_two_window:
+            logging.info("Using two-window prediction approach")
+
         session_state = process_data(dataset_version=dataset_version)
         save_session_state(session_state, run_id)
         search_tft(session_state, run_id)
         save_session_state(session_state, run_id)
         train_tft(session_state, run_id)
         save_session_state(session_state, run_id)
-        test_tft(session_state, run_id)
+        test_tft(session_state, run_id, use_two_window=use_two_window)
         save_session_state(session_state, run_id)
         plot_tft(session_state, run_id)
         return
@@ -174,7 +214,7 @@ def main():
         train_tft(session_state, run_id)
         save_session_state(session_state, run_id)
     elif resume == "test":
-        test_tft(session_state, run_id)
+        test_tft(session_state, run_id, use_two_window=use_two_window)
         save_session_state(session_state, run_id)
     elif resume == "plot":
         plot_tft(session_state, run_id)

@@ -18,7 +18,7 @@ from .shap_xgb import (
     get_shap_values,
     transform_outputs_to_former_inputs,
     draw_shap_plot,
-    plot_shap,
+    plot_xgb_shap,
 )
 from .helpers import (
     make_grid,
@@ -33,6 +33,11 @@ _nn_exports = [
     'draw_lstm_all_timesteps_shap_plot',
     'draw_temporal_shap_plot',
     'create_timestep_comparison_plots',
+    'get_tft_shap_values',
+    'plot_tft_shap',
+    'draw_shap_all_timesteps_plot',
+    'get_shap_values',
+    'plot_nn_shap',
 ]
 
 try:  # Optional neural SHAP (requires torch)
@@ -42,6 +47,11 @@ try:  # Optional neural SHAP (requires torch)
         draw_lstm_all_timesteps_shap_plot,
         draw_temporal_shap_plot,
         create_timestep_comparison_plots,
+        get_tft_shap_values,
+        plot_tft_shap,
+        draw_shap_all_timesteps_plot,
+        get_shap_values,
+        plot_nn_shap,
     )
     _HAS_NN_SHAP = True
 except ModuleNotFoundError as e:
@@ -53,14 +63,16 @@ except ModuleNotFoundError as e:
     # Create stub symbols
     get_lstm_shap_values = plot_lstm_shap = \
         draw_lstm_all_timesteps_shap_plot = draw_temporal_shap_plot = \
-        create_timestep_comparison_plots = _nn_unavailable
+        create_timestep_comparison_plots = get_tft_shap_values = \
+        plot_tft_shap = draw_shap_all_timesteps_plot = \
+        get_shap_values = plot_nn_shap = _nn_unavailable
         
 __all__ = [
     # Trajectories
     'preprocess_data','format_large_numbers','create_single_trajectory_plot','configure_axes',
     'plot_scatter','plot_trajectories','get_saved_plots_metadata',
     # XGB SHAP
-    'get_shap_values','transform_outputs_to_former_inputs','draw_shap_plot','plot_shap',
+    'get_shap_values','transform_outputs_to_former_inputs','draw_shap_plot','plot_xgb_shap',
     # Helpers
     'make_grid','render_external_plot','build_feature_display_names'
 ]
