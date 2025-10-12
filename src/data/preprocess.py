@@ -126,7 +126,12 @@ def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
     prepared.sort_values(group_cols + ['Year'], inplace=True)
     prepared['Step'] = prepared.groupby(group_cols).cumcount().astype('int64')
 
-    # Explicit gap feature: years elapsed since previous observation within each series
+    # DeltaYears: years elapsed since previous observation within each series. explicitly
+    # encodes temporal gaps for the model.
+    # Note: We tried removing this column and using TFT's allow_missing_values=True option +
+    # blank rows (see end of 'plotting_for_figure' branch) thinking inconsistent intervals
+    # could confuse the model. However, training failed badly with allow_missing_values=True,
+    # and community reports confirm poor performance with this option.
     prepared['DeltaYears'] = (
         prepared.groupby(group_cols)['Year'].diff().fillna(0).astype(int)
     )
