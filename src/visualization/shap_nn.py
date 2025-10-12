@@ -343,7 +343,7 @@ def get_tft_shap_values(run_id, X_test: pd.DataFrame, max_encoder_length=12):
 
     return original_temporal_shap, averaged, X_processed, test_inputs_np
 
-def plot_lstm_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], targets: List[str], sequence_length=1, feature_name_map: Optional[Dict[str, str]] = None):
+def plot_lstm_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], targets: List[str], sequence_length=1):
     logging.info("Creating LSTM SHAP plots...")
     model_path = os.path.join(RESULTS_PATH, run_id, "final", "best.ckpt")
     if not os.path.exists(model_path):
@@ -356,13 +356,13 @@ def plot_lstm_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str],
         X_test = X_test.iloc[idx]
     try:
         temporal_shap, averaged, X_proc, test_seq = get_lstm_shap_values(run_id, X_test, sequence_length)
-        draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, features, targets, sequence_length, feature_name_map, model_type="lstm")
-        draw_temporal_shap_plot(run_id, temporal_shap, X_proc, features, targets, sequence_length, feature_name_map, model_type="lstm")
+        draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, features, targets, sequence_length, model_type="lstm")
+        draw_temporal_shap_plot(run_id, temporal_shap, X_proc, features, targets, sequence_length, model_type="lstm")
     except Exception as e:
         logging.error("Failed to create LSTM SHAP plots: %s", e)
         logging.exception("Full error traceback:")
 
-def plot_tft_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], targets: List[str], max_encoder_length=12, feature_name_map: Optional[Dict[str, str]] = None):
+def plot_tft_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], targets: List[str], max_encoder_length=12):
     logging.info("Creating TFT SHAP plots...")
     model_path = os.path.join(RESULTS_PATH, run_id, "final", "best.ckpt")
     if not os.path.exists(model_path):
@@ -402,26 +402,24 @@ def plot_tft_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], 
     try:
         temporal_shap, averaged, X_proc, test_seq = get_tft_shap_values(run_id, X_test, max_encoder_length)
         sequence_length = test_seq.shape[1]  # Get actual sequence length from TFT data
-        draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, features, targets, sequence_length, feature_name_map, model_type="tft")
-        draw_temporal_shap_plot(run_id, temporal_shap, X_proc, features, targets, sequence_length, feature_name_map, model_type="tft")
+        draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, features, targets, sequence_length, model_type="tft")
+        draw_temporal_shap_plot(run_id, temporal_shap, X_proc, features, targets, sequence_length, model_type="tft")
     except Exception as e:
         logging.error("Failed to create TFT SHAP plots: %s", e)
         logging.exception("Full error traceback:")
 
-def draw_shap_all_timesteps_plot(run_id: str, temporal_shap_values, test_sequences_np, features: List[str], targets: List[str], sequence_length: int, feature_name_map: Optional[Dict[str, str]] = None, model_type: str = "lstm") -> None:
+def draw_shap_all_timesteps_plot(run_id: str, temporal_shap_values, test_sequences_np, features: List[str], targets: List[str], sequence_length: int, model_type: str = "lstm") -> None:
     import numpy as _np
     if sequence_length <= 0:
         logging.warning("Invalid sequence_length=%d; skipping all-timesteps SHAP plot", sequence_length)
         return
     x_flat_parts = [test_sequences_np[:, t, :] for t in range(sequence_length)]
     X_flat = _np.concatenate(x_flat_parts, axis=1)
-    feature_name_map = feature_name_map or {}
-    base_names = [feature_name_map.get(f, f) for f in features]
     # Create timestep-prefixed feature names for proper temporal differentiation
     display_names = []
     for t in range(sequence_length):
         timestep_features = [f"timestep_{t}_{f}" for f in features]
-        display_names.extend(build_feature_display_names(timestep_features, name_map=feature_name_map))
+        display_names.extend(build_feature_display_names(timestep_features))
     import matplotlib.pyplot as plt
     plt.rcParams.update({'font.size': 12})
     num_targets = len(targets)
@@ -449,7 +447,7 @@ def draw_shap_all_timesteps_plot(run_id: str, temporal_shap_values, test_sequenc
     fig.savefig(os.path.join(RESULTS_PATH, run_id, 'plots', f'{model_type}_shap_plot.png'))
     plt.close(fig)
 
-def draw_temporal_shap_plot(run_id: str, temporal_shap_values, X_test: pd.DataFrame, features: List[str], targets: List[str], sequence_length: int, feature_name_map: Optional[Dict[str, str]] = None, model_type: str = "lstm") -> None:
+def draw_temporal_shap_plot(run_id: str, temporal_shap_values, X_test: pd.DataFrame, features: List[str], targets: List[str], sequence_length: int, model_type: str = "lstm") -> None:
     import matplotlib.pyplot as plt, numpy as _np
     from tqdm import tqdm
     plt.rcParams.update({'font.size': 12})
@@ -467,7 +465,7 @@ def draw_temporal_shap_plot(run_id: str, temporal_shap_values, X_test: pd.DataFr
     labels = build_feature_display_names([f"timestep_{t}" for t in range(sequence_length)])
     ax.set_xticks(range(sequence_length))
     ax.set_xticklabels(labels)
-    display_names = build_feature_display_names([features[idx] for idx in top_idx], feature_name_map)
+    display_names = build_feature_display_names([features[idx] for idx in top_idx])
     ax.set_yticks(range(len(top_idx)))
     ax.set_yticklabels([n[:30] + '...' if len(n) > 30 else n for n in display_names], fontsize=10)
     ax.set_title(f"Temporal SHAP: {targets[i]} ({OUTPUT_UNITS[i]})", fontsize=14)
@@ -478,9 +476,9 @@ def draw_temporal_shap_plot(run_id: str, temporal_shap_values, X_test: pd.DataFr
     os.makedirs(os.path.join(RESULTS_PATH, run_id, 'plots'), exist_ok=True)
     fig.savefig(os.path.join(RESULTS_PATH, run_id, 'plots', f'{model_type}_temporal_shap_heatmap.png'), dpi=300, bbox_inches='tight')
     plt.close(fig)
-    create_timestep_comparison_plots(run_id, temporal_shap_values, features, targets, sequence_length, feature_name_map, model_type)
+    create_timestep_comparison_plots(run_id, temporal_shap_values, features, targets, sequence_length, model_type)
 
-def create_timestep_comparison_plots(run_id: str, temporal_shap_values, features: List[str], targets: List[str], sequence_length: int, feature_name_map: Optional[Dict[str, str]] = None, model_type: str = "lstm") -> None:
+def create_timestep_comparison_plots(run_id: str, temporal_shap_values, features: List[str], targets: List[str], sequence_length: int, model_type: str = "lstm") -> None:
     import matplotlib.pyplot as plt, numpy as _np
     from matplotlib import cm
     plt.rcParams.update({'font.size': 12})
@@ -533,7 +531,7 @@ def get_shap_values(run_id, X_test: pd.DataFrame, model_type: str = "auto", **kw
     else:
         raise ValueError(f"Unsupported model type: {model_type}")
 
-def plot_nn_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], targets: List[str], model_type: str = "auto", feature_name_map: Optional[Dict[str, str]] = None, **kwargs):
+def plot_nn_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], targets: List[str], model_type: str = "auto", **kwargs):
     """Plot SHAP values for any supported model type (auto-detects if not specified)."""
     if model_type == "auto":
         # Auto-detect model type
@@ -545,17 +543,17 @@ def plot_nn_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], t
 
     if model_type == "lstm":
         sequence_length = kwargs.get("sequence_length", 1)
-        plot_lstm_shap(run_id, X_test_with_index, features, targets, sequence_length, feature_name_map)
+        plot_lstm_shap(run_id, X_test_with_index, features, targets, sequence_length)
     elif model_type == "tft":
         max_encoder_length = kwargs.get("max_encoder_length", 12)
-        plot_tft_shap(run_id, X_test_with_index, features, targets, max_encoder_length, feature_name_map)
+        plot_tft_shap(run_id, X_test_with_index, features, targets, max_encoder_length)
     else:
         raise ValueError(f"Unsupported model type: {model_type}")
 
 # Legacy function name for backward compatibility
-def draw_lstm_all_timesteps_shap_plot(run_id: str, temporal_shap_values, test_sequences_np, features: List[str], targets: List[str], sequence_length: int, feature_name_map: Optional[Dict[str, str]] = None) -> None:
+def draw_lstm_all_timesteps_shap_plot(run_id: str, temporal_shap_values, test_sequences_np, features: List[str], targets: List[str], sequence_length: int) -> None:
     """Legacy function - use draw_shap_all_timesteps_plot instead."""
-    draw_shap_all_timesteps_plot(run_id, temporal_shap_values, test_sequences_np, features, targets, sequence_length, feature_name_map, model_type="lstm")
+    draw_shap_all_timesteps_plot(run_id, temporal_shap_values, test_sequences_np, features, targets, sequence_length, model_type="lstm")
 
 # Helper functions for TFT SHAP with older models
 def _extract_categorical_encoders_from_model(model):

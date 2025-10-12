@@ -67,7 +67,6 @@ def _make_display_name(feature: str) -> str:
 
     return f"{feature} (current)"
 
-def build_feature_display_names(features: Sequence[str], name_map: Optional[dict] = None) -> List[str]:
-    name_map = name_map or {}
-    return [name_map.get(f, _make_display_name(f)) for f in features]
+def build_feature_display_names(features: Sequence[str]) -> List[str]:
+    return [_make_display_name(f) for f in features]
 
