@@ -123,12 +123,19 @@ def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
     if necessary, and computes metrics only on rows with fully valid predictions.
     """
     from src.trainers.evaluation import save_metrics
+    from configs.models.tft import TFTDatasetConfig
 
     test_data = session_state["test_data"]
     targets = session_state["targets"]
 
-    # Truncate all sequences to 13 timesteps for consistent encoder context
-    logging.info("Truncating all test sequences to 13 timesteps for consistent encoder context...")
+    # Calculate required sequence length from TFT configuration
+    config = TFTDatasetConfig()
+    required_sequence_length = config.max_encoder_length + config.max_prediction_length
+
+    # Truncate all sequences to required length for consistent encoder context
+    logging.info(f"Truncating all test sequences to {required_sequence_length} timesteps "
+                f"(max_encoder_length={config.max_encoder_length} + max_prediction_length={config.max_prediction_length}) "
+                f"for consistent encoder context...")
     truncated_groups = []
     group_cols = ['Model', 'Scenario', 'Region']
 
@@ -136,12 +143,12 @@ def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
         # Sort by Step to ensure proper order
         group_sorted = group_data.sort_values('Step').reset_index(drop=True)
 
-        # Take only first 13 timesteps (steps 0-12)
-        if len(group_sorted) >= 13:
-            truncated_group = group_sorted.iloc[:13].copy()
+        # Take only first required_sequence_length timesteps
+        if len(group_sorted) >= required_sequence_length:
+            truncated_group = group_sorted.iloc[:required_sequence_length].copy()
             truncated_groups.append(truncated_group)
         else:
-            # Keep groups with fewer than 13 steps as-is (they won't be used anyway)
+            # Keep groups with fewer than required steps as-is (they won't be used anyway)
             truncated_groups.append(group_sorted)
 
     if truncated_groups:

@@ -17,13 +17,17 @@ from .tft_utils import single_gpu_env, teardown_distributed
 
 
 def create_early_window_test_data(test_data: pd.DataFrame) -> pd.DataFrame:
-    """Filter test data to early window (steps 0-14) for each trajectory."""
+    """Filter test data to early window for each trajectory."""
+    # Get required sequence length from TFT configuration
+    config = TFTDatasetConfig()
+    required_length = config.max_encoder_length + config.max_prediction_length
+
     filtered_groups = []
 
     for (model, scenario), group in test_data.groupby(['Model', 'Scenario']):
         steps = sorted(group['Step'].unique())
-        if len(steps) >= 15:  # Need at least 15 steps for early window
-            early_steps = steps[:15]  # Steps 0-14
+        if len(steps) >= required_length:  # Need at least required_length steps for early window
+            early_steps = steps[:required_length]  # Steps 0 to (required_length-1)
             early_group = group[group['Step'].isin(early_steps)].copy()
             filtered_groups.append(early_group)
 

@@ -149,3 +149,29 @@ def create_combined_dataset(
     """Create combined train+val dataset."""
     combined_df = pd.concat([train_df, val_df], axis=0, ignore_index=True)
     return TimeSeriesDataSet.from_dataset(train_dataset, combined_df)
+
+
+def create_dataset_with_custom_encoders(
+    session_state: Dict,
+    custom_encoders: Dict[str, Any]
+) -> TimeSeriesDataSet:
+    """Create a TFT dataset using custom categorical encoders.
+
+    Args:
+        session_state: Dictionary containing training data, features, and targets
+        custom_encoders: Dictionary of pre-trained categorical encoders
+
+    Returns:
+        TimeSeriesDataSet configured with the custom encoders
+    """
+    train_data = session_state["train_data"].copy()
+    features = session_state["features"]
+    targets = session_state["targets"]
+
+    # Create config with custom encoders - no monkey patching needed!
+    config = TFTDatasetConfig()
+    config.pretrained_categorical_encoders = custom_encoders
+
+    params = config.build(features, targets, mode="train")
+
+    return TimeSeriesDataSet(train_data, **params)

@@ -580,53 +580,18 @@ def _extract_categorical_encoders_from_model(model):
 
 def _create_template_with_model_encoders(model, session_state, run_id):
     """Create a dataset template using encoders extracted from the trained model."""
-    from src.trainers.tft_dataset import create_train_dataset
+    from src.trainers.tft_dataset import create_train_dataset, create_dataset_with_custom_encoders
 
     # Extract encoders from the model
     model_encoders = _extract_categorical_encoders_from_model(model)
 
     if model_encoders:
         logging.info("Using extracted encoders from model for dataset template")
-        # Create a modified session state with the model's encoders
-        session_state_copy = session_state.copy()
-        # We'll need to modify the dataset creation to use these encoders
-        return _create_dataset_with_custom_encoders(session_state_copy, model_encoders)
+        # Use the new factory function - no monkey patching needed!
+        return create_dataset_with_custom_encoders(session_state, model_encoders)
     else:
         logging.warning("No encoders found in model, using default dataset creation")
         # Fall back to original method
         train_template, _ = create_train_dataset(session_state)
         return train_template
 
-def _create_dataset_with_custom_encoders(session_state, custom_encoders):
-    """Create a TFT dataset using custom categorical encoders."""
-    from src.trainers.tft_dataset import create_train_dataset
-    from configs.models.tft import TFTDatasetConfig
-
-    try:
-        # Temporarily modify the TFT config to use our custom encoders
-        original_build = TFTDatasetConfig.build
-
-        def build_with_custom_encoders(self, features, targets, mode):
-            params = original_build(self, features, targets, mode)
-            params['categorical_encoders'] = custom_encoders
-            return params
-
-        # Monkey patch the build method
-        TFTDatasetConfig.build = build_with_custom_encoders
-
-        # Create the dataset template
-        train_template, _ = create_train_dataset(session_state)
-
-        # Restore the original build method
-        TFTDatasetConfig.build = original_build
-
-        logging.info("Successfully created dataset template with custom encoders")
-        return train_template
-
-    except Exception as e:
-        logging.error(f"Failed to create dataset with custom encoders: {e}")
-        # Restore original method just in case
-        TFTDatasetConfig.build = original_build
-        # Fall back to default creation
-        train_template, _ = create_train_dataset(session_state)
-        return train_template
