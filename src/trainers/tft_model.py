@@ -97,12 +97,10 @@ def create_search_trainer(
 
 def create_final_trainer(trainer_cfg: TFTTrainerConfig) -> Trainer:
     """Create trainer for final model training."""
-    # Mirror LSTM final trainer behavior: use a single device to avoid Lightning
-    # spawning multiple processes when devices is set to 'auto' (which can lead
-    # to distributed setup logs like GLOBAL_RANK, MEMBER, etc.). If the caller
-    # explicitly passes an int > 1 or a list, respect it; otherwise force 1.
+    # Use the devices configuration as-is for final training to allow multi-GPU usage
+    # Only override if explicitly set to invalid values
     devices = trainer_cfg.devices
-    if devices == "auto" or (isinstance(devices, int) and devices < 1):
+    if isinstance(devices, int) and devices < 1:
         devices = 1
     return Trainer(
         max_epochs=trainer_cfg.max_epochs,
