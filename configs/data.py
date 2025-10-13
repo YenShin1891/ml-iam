@@ -63,7 +63,7 @@ NON_FEATURE_COLUMNS = ['Model', 'Scenario', 'Scenario_Category', 'Year']
 CATEGORICAL_COLUMNS = ['Region', 'Model_Family']
 
 # Feature engineering knobs for downstream (kept here for single stop)
-MAX_SERIES_LENGTH = 10
+MAX_SERIES_LENGTH = 15  # try not to exceed average length(=17) for tft
 N_LAG_FEATURES = 2
 MAX_YEAR = 2100  # Upper inclusive cutoff for usable year columns
 

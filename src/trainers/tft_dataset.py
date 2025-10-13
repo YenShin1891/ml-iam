@@ -9,7 +9,7 @@ import torch
 from pytorch_forecasting import TimeSeriesDataSet
 
 from configs.paths import RESULTS_PATH
-from configs.models.tft import TFTDatasetConfig
+# TFTDatasetConfig imported locally in functions to match original pattern
 from configs.data import CATEGORICAL_COLUMNS, INDEX_COLUMNS
 
 
@@ -54,15 +54,17 @@ def _build_union_encoders(session_state: Dict, categorical_cols: List[str], add_
 
 def build_datasets(session_state: Dict) -> Tuple[TimeSeriesDataSet, TimeSeriesDataSet]:
     """Build train/val TimeSeriesDataSet objects using shared template logic (encoders handle categoricals)."""
-    val_data = session_state["val_data"].copy()
+    val_data = session_state["val_data"]
     train_dataset, _ = create_train_dataset(session_state)
     val_dataset = from_train_template(train_dataset, val_data, mode="eval")
     return train_dataset, val_dataset
 
 
-def create_train_dataset(session_state: Dict) -> Tuple[TimeSeriesDataSet, TFTDatasetConfig]:
+def create_train_dataset(session_state: Dict) -> Tuple[TimeSeriesDataSet, Any]:
     """Create training dataset with configuration, coercing categorical-like columns first."""
-    train_data = session_state["train_data"].copy()
+    from configs.models.tft import TFTDatasetConfig
+
+    train_data = session_state["train_data"]
     features = session_state["features"]
     targets = session_state["targets"]
 
