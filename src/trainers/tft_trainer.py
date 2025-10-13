@@ -116,145 +116,162 @@ def train_final_tft(
 
 
 def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
-    """Make predictions with robust index alignment and horizon-only metrics.
-
-    Restores legacy alignment: uses saved dataset template, calls predict with
-    return_index semantics (through manual reconstruction), expands multi-step horizons
-    if necessary, and computes metrics only on rows with fully valid predictions.
-    """
+    """Make predictions following the exact original tft_trajectory_plotting logic."""
     from src.trainers.evaluation import save_metrics
-    from configs.models.tft import TFTDatasetConfig
 
     test_data = session_state["test_data"]
     targets = session_state["targets"]
 
-    # Calculate required sequence length from TFT configuration
-    config = TFTDatasetConfig()
-    required_sequence_length = config.max_encoder_length + config.max_prediction_length
-
-    # Truncate all sequences to required length for consistent encoder context
-    logging.info(f"Truncating all test sequences to {required_sequence_length} timesteps "
-                f"(max_encoder_length={config.max_encoder_length} + max_prediction_length={config.max_prediction_length}) "
-                f"for consistent encoder context...")
-    truncated_groups = []
-    group_cols = ['Model', 'Scenario', 'Region']
-
-    for group_keys, group_data in test_data.groupby(group_cols):
-        # Sort by Step to ensure proper order
-        group_sorted = group_data.sort_values('Step').reset_index(drop=True)
-
-        # Take only first required_sequence_length timesteps
-        if len(group_sorted) >= required_sequence_length:
-            truncated_group = group_sorted.iloc[:required_sequence_length].copy()
-            truncated_groups.append(truncated_group)
-        else:
-            # Keep groups with fewer than required steps as-is (they won't be used anyway)
-            truncated_groups.append(group_sorted)
-
-    if truncated_groups:
-        test_data_truncated = pd.concat(truncated_groups, ignore_index=True)
-        logging.info(f"Truncated test data: {len(test_data_truncated)} rows from {len(truncated_groups)} trajectories")
-    else:
-        test_data_truncated = test_data
-        logging.warning("No test data groups found for truncation")
-
+    # Follow original pattern exactly
     with single_gpu_env():
+        # Best effort teardown if a process group is somehow still alive
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             teardown_distributed()
             if torch.distributed.is_initialized():
                 raise RuntimeError("Failed to teardown existing distributed process group before prediction.")
 
         model = load_tft_checkpoint(run_id)
+
         logging.info("Building test dataset for TFT prediction using saved template...")
         train_template = load_dataset_template(run_id)
+
         try:
-            test_dataset = from_train_template(train_template, test_data_truncated, mode="eval")
+            test_dataset = from_train_template(
+                train_template,
+                test_data,
+                mode="predict"  # This creates predict=True dataset
+            )
         except Exception as e:
             raise RuntimeError(
-                "Failed to build test dataset from saved template. Ensure column/dtype schema matches: "
+                "Failed to build test dataset from saved template. Ensure test_data columns and dtypes match the training schema: "
                 f"{e}"
             )
 
-        time_idx_name = getattr(train_template, "time_idx", None)
-        group_id_fields = list(getattr(train_template, "group_ids", []))
-        if not time_idx_name or not group_id_fields:
-            raise ValueError("Dataset template missing time_idx or group_ids")
+        template_time_idx = getattr(train_template, "time_idx", None)
+        template_group_ids = getattr(train_template, "group_ids", None)
+        if not template_time_idx or not template_group_ids:
+            raise ValueError("Saved dataset template is missing time_idx or group_ids; cannot align predictions.")
+        logging.info("Loaded dataset template for prediction.")
 
-        # DataLoader
+        from configs.models import TFTTrainerConfig
+        trainer_cfg = TFTTrainerConfig()
         test_loader = test_dataset.to_dataloader(
             train=False,
-            batch_size=64,
-            num_workers=1,
-            persistent_workers=False,
+            batch_size=trainer_cfg.batch_size,
+            num_workers=4,
+            persistent_workers=True,
         )
 
-        trainer = create_final_trainer(TFTTrainerConfig())
-        # Use model.predict which (in PF) returns list of tensors when return_index isn't specified.
-        # We replicate old behavior by capturing decoder-only horizon predictions.
-        raw_preds = trainer.predict(model, test_loader)
+        logging.info("Predicting with TFT model (forecast horizon only)...")
+        returns = model.predict(test_loader, return_index=True)
 
-        # Flatten prediction batches into single numpy array
-        batch_arrays = []
-        for arr in raw_preds:
-            if torch.is_tensor(arr):
-                batch_arrays.append(arr.detach().cpu().numpy())
-            elif isinstance(arr, np.ndarray):
-                batch_arrays.append(arr)
+        from pytorch_forecasting.models.base._base_model import Prediction as _PFPrediction
+        if not isinstance(returns, _PFPrediction):
+            raise RuntimeError(f"Unexpected predict() return type: {type(returns)}; expected pytorch_forecasting Prediction.")
+
+        outputs = returns.output
+        if isinstance(outputs, list):
+            if len(outputs) == 0:
+                raise RuntimeError("Prediction.output list is empty.")
+            if not all(torch.is_tensor(o) for o in outputs):
+                raise RuntimeError("All elements in Prediction.output list must be tensors.")
+            preds_tensor = outputs[0] if len(outputs) == 1 else torch.stack(outputs, dim=-1)
+        elif torch.is_tensor(outputs):
+            preds_tensor = outputs
+        else:
+            raise RuntimeError(f"Unsupported Prediction.output type: {type(outputs)}")
+
+        index_attr = getattr(returns, 'index', None)
+        if isinstance(index_attr, list):
+            dfs = [d for d in index_attr if isinstance(d, pd.DataFrame) and not d.empty]
+            if not dfs:
+                raise RuntimeError("Prediction.index list is empty or has no valid DataFrames.")
+            index_df = pd.concat(dfs, ignore_index=True)
+        elif isinstance(index_attr, pd.DataFrame):
+            if index_attr.empty:
+                raise RuntimeError("Prediction.index DataFrame is empty.")
+            index_df = index_attr.copy()
+        else:
+            raise RuntimeError(f"Unsupported Prediction.index type: {type(index_attr)}")
+
+        preds_flat = None  # will set below after optional expansion
+        time_idx_name = template_time_idx
+        group_ids = list(template_group_ids)
+
+        # Normalize index dataframe
+        if "time_idx" in index_df.columns and time_idx_name not in index_df.columns:
+            index_df = index_df.rename(columns={"time_idx": time_idx_name})
+
+        # If predictions are 3D (n_samples, pred_len, out_size) but index_df only has n_samples rows,
+        # expand the index so each horizon step has its own row with incremented time index.
+        if torch.is_tensor(preds_tensor) and preds_tensor.ndim == 3:
+            n_samples, pred_len, out_size = preds_tensor.shape
+            if len(index_df) == n_samples and pred_len > 1:
+                logging.info(
+                    "Expanding index_df for multi-step horizon: samples=%d, pred_len=%d", n_samples, pred_len
+                )
+                # Build expanded index
+                expanded_rows = []
+                base_cols = index_df.columns.tolist()
+                if time_idx_name not in base_cols:
+                    raise KeyError(
+                        f"Time index column '{time_idx_name}' not found in prediction index DataFrame columns: {base_cols}"
+                    )
+                for i in range(n_samples):
+                    base_row = index_df.iloc[i]
+                    base_time = base_row[time_idx_name]
+                    for h in range(pred_len):
+                        new_row = base_row.copy()
+                        # Assumption: decoder steps are consecutive increments
+                        new_row[time_idx_name] = base_time + h
+                        expanded_rows.append(new_row)
+                index_df = pd.DataFrame(expanded_rows).reset_index(drop=True)
+                # Flatten predictions accordingly
+                preds_flat = preds_tensor.detach().cpu().numpy().reshape(n_samples * pred_len, out_size)
             else:
-                raise RuntimeError(f"Unexpected prediction batch type: {type(arr)}")
-        if not batch_arrays:
-            raise RuntimeError("No prediction outputs returned.")
-        preds = np.concatenate(batch_arrays, axis=0)
-
-        # Multi-target tensor shape handling
-        if preds.ndim == 3:  # (batch, horizon, targets)
-            b, horizon, out = preds.shape
-            logging.info("Expanding multi-step horizon predictions: batch=%d horizon=%d targets=%d", b, horizon, out)
-            preds_flat = preds.reshape(b * horizon, out)
-        elif preds.ndim == 2:
-            preds_flat = preds
-            out = preds_flat.shape[1]
-            horizon = 1
-        elif preds.ndim == 1:
-            preds_flat = preds.reshape(-1, 1)
-            out = 1
-            horizon = 1
+                preds_flat = preds_tensor.detach().cpu().numpy()
+                if preds_flat.ndim == 3:
+                    n_samples, pred_len, out_size = preds_flat.shape
+                    preds_flat = preds_flat.reshape(n_samples * pred_len, out_size)
         else:
-            raise RuntimeError(f"Unsupported prediction tensor shape: {preds.shape}")
+            preds_flat = preds_tensor.detach().cpu().numpy()
+            if preds_flat.ndim == 3:
+                n_samples, pred_len, out_size = preds_flat.shape
+                preds_flat = preds_flat.reshape(n_samples * pred_len, out_size)
 
-        # Build index for alignment: replicate approach using group ids + time_idx from test_data_truncated
-        key_cols = group_id_fields + [time_idx_name]
-        if not all(k in test_data_truncated.columns for k in key_cols):
-            missing = [k for k in key_cols if k not in test_data_truncated.columns]
-            raise RuntimeError(f"Test data missing required key columns for alignment: {missing}")
-
-        # Extract horizon portion (predict=True should already restrict to decoder steps)
-        horizon_df = test_data_truncated[key_cols + targets].drop_duplicates(key_cols).copy()
+        # Evaluate only the forecast horizon rows returned by predict=True.
+        key_cols = group_ids + [time_idx_name]
+        # Collect reference columns (ensure presence in test_data)
+        ref_cols = [c for c in key_cols + ['Year'] + targets if c in test_data.columns]
+        horizon_df = index_df[key_cols].merge(
+            test_data[ref_cols].drop_duplicates(key_cols),
+            on=key_cols,
+            how='left'
+        )
         if preds_flat.shape[0] != len(horizon_df):
-            logging.warning(
-                "Prediction rows (%d) != horizon rows (%d). Proceeding best-effort alignment.",
-                preds_flat.shape[0], len(horizon_df)
+            logging.error(
+                "After expansion attempt: preds_flat rows=%d, horizon_df rows=%d. First few time_idx in index_df: %s",
+                preds_flat.shape[0], len(horizon_df), index_df[time_idx_name].head().tolist()
             )
-            min_len = min(preds_flat.shape[0], len(horizon_df))
-            horizon_df = horizon_df.iloc[:min_len].reset_index(drop=True)
-            preds_flat = preds_flat[:min_len]
-        else:
-            horizon_df = horizon_df.reset_index(drop=True)
+            raise RuntimeError(
+                f"Prediction rows ({preds_flat.shape[0]}) != horizon_df rows ({len(horizon_df)})."
+            )
 
         y_true = horizon_df[targets].values
-        y_pred = preds_flat[:, : len(targets)] if preds_flat.shape[1] >= len(targets) else preds_flat
 
-        # Valid mask: both sides finite & non-NaN
+        # Handle RMSE predictions (standard case)
+        y_pred = preds_flat
         valid_mask = (~np.isnan(y_true).any(axis=1)) & (~np.isnan(y_pred).any(axis=1))
         if valid_mask.any():
-            save_metrics(run_id, y_true[valid_mask], y_pred[valid_mask], targets)
+            save_metrics(run_id, y_true[valid_mask], y_pred[valid_mask])
         else:
-            logging.warning("No valid rows for metric computation (all rows have NaNs).")
+            logging.warning("No valid rows to compute metrics (all targets or predictions contain NaNs).")
 
-        # Store horizon info for plotting consistency
+        # Expose horizon dataframe and y_true for downstream plotting
         session_state['horizon_df'] = horizon_df
         session_state['horizon_y_true'] = y_true
 
+        # Return predictions matrix
         return y_pred
 
 

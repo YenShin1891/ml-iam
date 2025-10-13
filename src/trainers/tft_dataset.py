@@ -34,17 +34,20 @@ def _build_union_encoders(session_state: Dict, categorical_cols: List[str], add_
         logging.warning("NaNLabelEncoder unavailable; skipping pretrained categorical encoders.")
         return {}
     dfs = [session_state.get("train_data"), session_state.get("val_data"), session_state.get("test_data")]
-    df_all = pd.concat([d for d in dfs if isinstance(d, pd.DataFrame)], axis=0, ignore_index=True)
+    df_all = pd.concat([df for df in dfs if df is not None], axis=0, ignore_index=True)
     encoders: Dict[str, Any] = {}
+    # ensure deterministic iteration order
     for col in categorical_cols:
-        if col not in df_all.columns:
-            series = pd.Series(["__NA__"], name=col)
+        if col in df_all.columns:
+            s_raw = df_all[col].astype(str).fillna("__NA__")
+            # Explicit, deterministic category order
+            categories = sorted(pd.unique(s_raw))
+            s = pd.Series(pd.Categorical(s_raw, categories=categories, ordered=True))
         else:
-            raw = df_all[col].astype(str).fillna("__NA__")
-            categories = sorted(pd.unique(raw))
-            series = pd.Series(pd.Categorical(raw, categories=categories, ordered=True), name=col)
+            # if column is entirely missing in some split, still create a closed-vocab encoder
+            s = pd.Series(pd.Categorical(["__NA__"], categories=["__NA__"], ordered=True))
         enc = NaNLabelEncoder(add_nan=add_nan)
-        enc.fit(series)
+        enc.fit(s)
         encoders[col] = enc
     return encoders
 
