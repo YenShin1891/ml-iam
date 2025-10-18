@@ -114,6 +114,19 @@ def create_final_trainer(trainer_cfg: TFTTrainerConfig) -> Trainer:
     )
 
 
+def create_inference_trainer() -> Trainer:
+    """Create single-device trainer for inference to preserve index ordering."""
+    accelerator = "gpu" if torch.cuda.is_available() else "cpu"
+    return Trainer(
+        accelerator=accelerator,
+        devices=1,
+        strategy="auto",
+        logger=False,
+        enable_progress_bar=False,
+        enable_checkpointing=False,
+    )
+
+
 def load_tft_checkpoint(run_id: str) -> TemporalFusionTransformer:
     """Load TFT model from checkpoint."""
     final_dir = os.path.join(RESULTS_PATH, run_id, "final")

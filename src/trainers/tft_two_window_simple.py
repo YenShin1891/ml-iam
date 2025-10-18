@@ -13,7 +13,7 @@ from configs.models.tft import TFTTrainerConfig
 from configs.paths import RESULTS_PATH
 from .tft_trainer import predict_tft
 from .tft_dataset import from_train_template, load_dataset_template
-from .tft_model import load_tft_checkpoint, create_final_trainer
+from .tft_model import load_tft_checkpoint, create_inference_trainer
 from .tft_utils import single_gpu_env, teardown_distributed, get_default_num_workers
 
 
@@ -76,7 +76,7 @@ def _predict_early_window(session_state: dict, run_id: str) -> Tuple[np.ndarray,
             persistent_workers=False
         )
 
-        trainer = create_final_trainer(trainer_cfg)
+        trainer = create_inference_trainer()
         returns = model.predict(test_loader, return_index=True)
 
         from pytorch_forecasting.models.base._base_model import Prediction as _PFPrediction  # type: ignore
@@ -116,6 +116,8 @@ def _predict_early_window(session_state: dict, run_id: str) -> Tuple[np.ndarray,
         targets = session_state["targets"]
         template_time_idx = getattr(train_template, "time_idx", None)
         template_group_ids = getattr(train_template, "group_ids", None)
+        if template_time_idx is None or template_group_ids is None:
+            raise ValueError("Dataset template is missing time_idx or group_ids; cannot align early window predictions")
 
         index_attr = returns.index
         if hasattr(index_attr, '__iter__') and not isinstance(index_attr, (str, pd.DataFrame)):
@@ -269,7 +271,7 @@ def _predict_late_window(session_state: dict, run_id: str) -> tuple[np.ndarray, 
             persistent_workers=False
         )
 
-        trainer = create_final_trainer(trainer_cfg)
+        trainer = create_inference_trainer()
         returns = model.predict(test_loader, return_index=True)
 
         from pytorch_forecasting.models.base._base_model import Prediction as _PFPrediction  # type: ignore
@@ -309,6 +311,8 @@ def _predict_late_window(session_state: dict, run_id: str) -> tuple[np.ndarray, 
         targets = session_state["targets"]
         template_time_idx = getattr(train_template, "time_idx", None)
         template_group_ids = getattr(train_template, "group_ids", None)
+        if template_time_idx is None or template_group_ids is None:
+            raise ValueError("Dataset template is missing time_idx or group_ids; cannot align late window predictions")
 
         index_attr = returns.index
         if hasattr(index_attr, '__iter__') and not isinstance(index_attr, (str, pd.DataFrame)):
@@ -429,8 +433,13 @@ def _combine_predictions_weighted(
     combined_data = []
 
     # Get all unique trajectories
-    early_trajectories = set(early_df.groupby(['Model', 'Scenario', 'Region']).groups.keys())
-    late_trajectories = set(late_df.groupby(['Model', 'Scenario', 'Region']).groups.keys())
+    trajectory_keys = ['Model', 'Scenario', 'Region']
+    early_trajectories = set(
+        map(tuple, early_df[trajectory_keys].drop_duplicates().itertuples(index=False, name=None))
+    ) if len(early_df) > 0 else set()
+    late_trajectories = set(
+        map(tuple, late_df[trajectory_keys].drop_duplicates().itertuples(index=False, name=None))
+    ) if len(late_df) > 0 else set()
     all_trajectories = early_trajectories.union(late_trajectories)
 
     for (model, scenario, region) in all_trajectories:

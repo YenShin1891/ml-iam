@@ -88,9 +88,9 @@ def from_train_template(
 ) -> TimeSeriesDataSet:
     """Create dataset from training template."""
     return TimeSeriesDataSet.from_dataset(
-        train_dataset, 
-        data, 
-        stop_randomization=(mode == "eval"),
+        train_dataset,
+        data,
+        stop_randomization=(mode in {"eval", "test", "predict"}),
         predict=(mode == "predict")
     )
 
@@ -169,6 +169,8 @@ def create_dataset_with_custom_encoders(
     Returns:
         TimeSeriesDataSet configured with the custom encoders
     """
+    from configs.models.tft import TFTDatasetConfig
+
     train_data = session_state["train_data"].copy()
     features = session_state["features"]
     targets = session_state["targets"]
