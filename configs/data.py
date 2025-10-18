@@ -48,6 +48,9 @@ RAW_FILENAMES = [
 MIN_COUNT = 10100
 COMPLETENESS_RATIO = 0.4
 
+# Deterministic splitting seed to stabilize train/val/test cohorts
+SPLIT_SEED = 42
+
 # Versioning / naming
 NAME_PREFIX = "pipeline"
 INCLUDE_DATE = True

@@ -1,5 +1,6 @@
 """TFT trainer with main orchestration functions."""
 
+import json
 import logging
 import os
 from typing import Dict, List, Optional
@@ -26,7 +27,7 @@ from .tft_model import (
     create_trial_checkpoint,
     load_tft_checkpoint,
 )
-from .tft_utils import single_gpu_env, teardown_distributed
+from .tft_utils import get_default_num_workers, single_gpu_env, teardown_distributed
 
 
 def hyperparameter_search_tft(
@@ -63,6 +64,8 @@ def hyperparameter_search_tft(
             best_params = params
 
     logging.info(f"Best TFT Params: {best_params} with Val Loss: {best_score:.4f}")
+    if best_params is None:
+        raise RuntimeError("TFT hyperparameter search did not identify a best parameter set.")
     return best_params
 
 
@@ -100,19 +103,72 @@ def train_final_tft(
     # Create combined dataset
     combined_dataset = create_combined_dataset(train_dataset, train_df, val_df)
 
+    train_len = len(train_dataset)
+    val_len = len(val_dataset)
+    combined_len = len(combined_dataset)
+    train_df_rows = len(train_df)
+    val_df_rows = len(val_df)
+    logging.info(
+        "TFT final training dataset sizes -> train=%d (rows=%d) val=%d (rows=%d) combined=%d",
+        train_len,
+        train_df_rows,
+        val_len,
+        val_df_rows,
+        combined_len,
+    )
+
     # Save dataset template
     save_dataset_template(combined_dataset, run_id)
 
     combined_loader = combined_dataset.to_dataloader(
         train=True,
         batch_size=trainer_cfg.batch_size,
-        num_workers=4,
+        num_workers=get_default_num_workers(),
         persistent_workers=True,
     )
 
     final_trainer = create_final_trainer(trainer_cfg)
     final_trainer.fit(model=tft_final, train_dataloaders=combined_loader)
     final_trainer.save_checkpoint(final_ckpt_path)
+
+    callback_metrics = final_trainer.callback_metrics if hasattr(final_trainer, "callback_metrics") else {}
+
+    def _metric_to_float(value):
+        if isinstance(value, torch.Tensor):
+            return float(value.detach().cpu().item())
+        if isinstance(value, (int, float)):
+            return float(value)
+        try:
+            return float(value)
+        except Exception:
+            return None
+
+    train_loss = _metric_to_float(callback_metrics.get("train_loss"))
+    val_loss = _metric_to_float(callback_metrics.get("val_loss"))
+    logging.info(
+        "TFT final training losses -> train_loss=%s val_loss=%s",
+        f"{train_loss:.6f}" if train_loss is not None else "NA",
+        f"{val_loss:.6f}" if val_loss is not None else "NA",
+    )
+
+    summary = {
+        "best_params": best_params,
+        "train_set_rows": train_len,
+        "val_set_rows": val_len,
+        "combined_rows": combined_len,
+        "train_dataframe_rows": train_df_rows,
+        "val_dataframe_rows": val_df_rows,
+        "train_loss": train_loss,
+        "val_loss": val_loss,
+    }
+    # Persist summary alongside checkpoint for post-run inspection
+    summary_path = os.path.join(final_dir, "training_summary.json")
+    try:
+        with open(summary_path, "w", encoding="utf-8") as fp:
+            json.dump(summary, fp, indent=2)
+        logging.info("Saved TFT training summary to %s", summary_path)
+    except Exception as exc:
+        logging.warning("Failed to write TFT training summary: %s", exc)
 
 
 def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
@@ -158,7 +214,7 @@ def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
         test_loader = test_dataset.to_dataloader(
             train=False,
             batch_size=trainer_cfg.batch_size,
-            num_workers=4,
+            num_workers=get_default_num_workers(),
             persistent_workers=True,
         )
 
@@ -248,6 +304,15 @@ def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
             on=key_cols,
             how='left'
         )
+        horizon_len = len(horizon_df)
+        horizon_groups = horizon_df[group_ids].drop_duplicates().shape[0]
+        test_group_total = test_data[group_ids].drop_duplicates().shape[0]
+        logging.info(
+            "TFT horizon coverage -> rows=%d unique_groups=%d (test_groups=%d)",
+            horizon_len,
+            horizon_groups,
+            test_group_total,
+        )
         if preds_flat.shape[0] != len(horizon_df):
             logging.error(
                 "After expansion attempt: preds_flat rows=%d, horizon_df rows=%d. First few time_idx in index_df: %s",
@@ -267,9 +332,42 @@ def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
         else:
             logging.warning("No valid rows to compute metrics (all targets or predictions contain NaNs).")
 
+        removed_groups = None
+        try:
+            test_groups = set(map(tuple, test_data[group_ids].drop_duplicates().itertuples(index=False, name=None)))
+            horizon_groups = set(map(tuple, horizon_df[group_ids].drop_duplicates().itertuples(index=False, name=None)))
+            removed_groups = sorted(test_groups - horizon_groups)
+            if removed_groups:
+                preview = removed_groups[:5]
+                logging.warning(
+                    "TFT prediction dropped %d groups due to window constraints. Sample: %s",
+                    len(removed_groups),
+                    preview,
+                )
+        except Exception as exc:
+            logging.warning("Failed to compute removed groups for TFT prediction: %s", exc)
+
+        removed_count = len(removed_groups) if removed_groups else 0
+        summary = {
+            "horizon_rows": horizon_len,
+            "horizon_unique_groups": horizon_df[group_ids].drop_duplicates().shape[0],
+            "test_unique_groups": test_group_total,
+            "removed_groups_count": removed_count,
+            "removed_groups_sample": removed_groups[:5] if removed_groups else [],
+        }
+        prediction_summary_path = os.path.join(RESULTS_PATH, run_id, "final", "prediction_summary.json")
+        try:
+            os.makedirs(os.path.dirname(prediction_summary_path), exist_ok=True)
+            with open(prediction_summary_path, "w", encoding="utf-8") as fp:
+                json.dump(summary, fp, indent=2)
+            logging.info("Saved TFT prediction summary to %s", prediction_summary_path)
+        except Exception as exc:
+            logging.warning("Failed to write TFT prediction summary: %s", exc)
+
         # Expose horizon dataframe and y_true for downstream plotting
         session_state['horizon_df'] = horizon_df
         session_state['horizon_y_true'] = y_true
+        session_state['removed_groups'] = removed_groups
 
         # Return predictions matrix
         return y_pred
