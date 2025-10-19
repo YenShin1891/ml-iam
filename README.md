@@ -1,5 +1,7 @@
 ## IAM Emulation with Machine Learning
 
+[![DOI](https://zenodo.org/badge/974767132.svg)](https://doi.org/10.5281/zenodo.17390677)
+
 This repository provides a reproducible pipeline for emulating Integrated Assessment Model (IAM) scenario time‑series using multiple ML approaches:
 
 * Gradient Boosted Trees (XGBoost)
