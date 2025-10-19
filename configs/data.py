@@ -48,6 +48,9 @@ RAW_FILENAMES = [
 MIN_COUNT = 10100
 COMPLETENESS_RATIO = 0.4
 
+# Deterministic splitting seed to stabilize train/val/test cohorts
+SPLIT_SEED = 42
+
 # Versioning / naming
 NAME_PREFIX = "pipeline"
 INCLUDE_DATE = True
@@ -63,7 +66,7 @@ NON_FEATURE_COLUMNS = ['Model', 'Scenario', 'Scenario_Category', 'Year']
 CATEGORICAL_COLUMNS = ['Region', 'Model_Family']
 
 # Feature engineering knobs for downstream (kept here for single stop)
-MAX_SERIES_LENGTH = 10
+MAX_SERIES_LENGTH = 15  # try not to exceed average length(=17) for tft
 N_LAG_FEATURES = 2
 MAX_YEAR = 2100  # Upper inclusive cutoff for usable year columns
 

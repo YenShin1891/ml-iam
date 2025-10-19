@@ -69,14 +69,8 @@ def search_tft(session_state, run_id):
     return best_params
 
 
-def train_tft(session_state, run_id):
+def train_tft(session_state, run_id, dataset_version=None):
     """Final training using best_params already present in session_state."""
-    # If session state is empty, process data
-    if not session_state or "train_data" not in session_state:
-        logging.info("Session state incomplete. Processing data for training...")
-        data_state = process_data()
-        session_state.update(data_state)
-
     if "best_params" not in session_state:
         from configs.models.tft_search import TFTDefaultParams
         default_config = TFTDefaultParams()
@@ -93,7 +87,7 @@ def train_tft(session_state, run_id):
     return best_params
 
 
-def test_tft(session_state, run_id, use_two_window=False):
+def test_tft(session_state, run_id, use_two_window=False, dataset_version=None):
     if use_two_window:
         from src.trainers.tft_two_window_simple import predict_tft_two_window
         logging.info("Using two-window prediction approach...")
@@ -113,7 +107,14 @@ def plot_tft(session_state, run_id):
     features = session_state["features"]
 
     if preds is None:
-        raise ValueError("No predictions found in session state. Please run the test step first.")
+        logging.info("Predictions missing from current session_state; attempting to reload saved state.")
+        reloaded_state = load_session_state(run_id) or {}
+        for key in ("preds", "horizon_df", "horizon_y_true"):
+            if key in reloaded_state and key not in session_state:
+                session_state[key] = reloaded_state[key]
+        preds = session_state.get("preds")
+        if preds is None:
+            raise ValueError("No predictions found in session state. Please run the test step first.")
 
     horizon_df = session_state.get('horizon_df')
     horizon_y_true = session_state.get('horizon_y_true')
@@ -196,27 +197,39 @@ def main():
         save_session_state(session_state, run_id)
         search_tft(session_state, run_id)
         save_session_state(session_state, run_id)
-        train_tft(session_state, run_id)
+        train_tft(session_state, run_id, dataset_version=dataset_version)
         save_session_state(session_state, run_id)
-        test_tft(session_state, run_id, use_two_window=use_two_window)
+        test_tft(session_state, run_id, use_two_window=use_two_window, dataset_version=dataset_version)
         save_session_state(session_state, run_id)
         plot_tft(session_state, run_id)
         return
     else:
         setup_logging(run_id)
-        session_state = load_session_state(run_id)
+        # Load prior session to preserve artifacts (e.g., predictions) before refreshing data
+        session_state = load_session_state(run_id) or {}
+        if not session_state:
+            logging.info("No existing session state found for %s; creating a new one before resuming.", run_id)
+        else:
+            logging.info("Loaded existing session state for %s and refreshing dataset-dependent entries.", run_id)
+        data_state = process_data(dataset_version=dataset_version)
+        session_state.update(data_state)
+        save_session_state(session_state, run_id)
 
     # Step-wise execution when resuming - each phase runs independently
     if resume == "search":
         search_tft(session_state, run_id)
         save_session_state(session_state, run_id)
     elif resume == "train":
-        train_tft(session_state, run_id)
+        train_tft(session_state, run_id, dataset_version=dataset_version)
         save_session_state(session_state, run_id)
     elif resume == "test":
-        test_tft(session_state, run_id, use_two_window=use_two_window)
+        test_tft(session_state, run_id, use_two_window=use_two_window, dataset_version=dataset_version)
         save_session_state(session_state, run_id)
     elif resume == "plot":
+        if session_state.get("preds") is None:
+            logging.info("Predictions not present in session state; rerunning test step before plotting.")
+            test_tft(session_state, run_id, use_two_window=use_two_window, dataset_version=dataset_version)
+            save_session_state(session_state, run_id)
         plot_tft(session_state, run_id)
 
 
