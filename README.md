@@ -95,7 +95,7 @@ Place raw files under a directory you configure (see `configs/paths.py` or envir
 Central configuration modules:
 * `configs/data.py` – variable selection (`OUTPUT_VARIABLES`), filtering thresholds, naming/version knobs.
 * `configs/paths.py` – path constants (generic placeholders recommended). Replace hard‑coded defaults or export environment variables.
-* `configs/models/*.py` – model‑specific hyperparameter search spaces (TFT / XGB).
+* `configs/models/*.py` – model‑specific hyperparameter configurations and search spaces (XGBoost / LSTM / TFT).
 
 Override paths without editing code by exporting (evaluated early through Python in the Makefile):
 ```bash
@@ -188,24 +188,48 @@ nohup streamlit run scripts/dashboard.py --logger.level=info --server.runOnSave=
 ## 10. Project Layout
 ```
 ├── configs/
-│   ├── data.py            # Data selection & feature engineering knobs
-│   ├── paths.py           # Centralized path placeholders
-│   └── models/            # Model-specific search configs (tft/xgb)
+│   ├── data.py                    # Data selection & feature engineering knobs
+│   ├── paths.py                   # Centralized path placeholders
+│   └── models/
+│       ├── __init__.py
+│       ├── xgb.py                 # XGBoost hyperparameter configurations
+│       ├── xgb_search.py          # XGBoost search space definitions
+│       ├── lstm.py                # LSTM hyperparameter configurations
+│       ├── tft.py                 # TFT hyperparameter configurations
+│       └── tft_search.py          # TFT search space definitions
 ├── scripts/
-│   ├── train_xgb.py       # XGBoost pipeline driver
-│   ├── train_tft.py       # TFT pipeline driver
-│   ├── train_lstm.py      # LSTM pipeline driver
-│   └── dashboard.py       # Streamlit dashboard (exploration)
+│   ├── dashboard.py               # Streamlit dashboard (exploration)
+│   ├── get_run_id.py              # Utility to retrieve run IDs
+│   ├── train_xgb.py               # XGBoost pipeline driver
+│   ├── train_lstm.py              # LSTM pipeline driver
+│   └── train_tft.py               # TFT pipeline driver
 ├── src/
-│   ├── data/              # Preprocessing, feature engineering, dataset builders
-│   ├── trainers/          # Training loops, search routines, evaluation helpers
-│   ├── visualization/     # Plotting & SHAP (trajectories, xgb shap, nn shap, helpers)
-│   ├── utils/             # General utilities
-├── lightning_logs/        # PyTorch Lightning run artifacts (TFT)
-├── metadata/              # Auxiliary classification / scenario metadata
-├── requirements.txt       # Python dependencies
-├── Makefile               # Data processing convenience target
-└── README.md
+│   ├── data/
+│   │   ├── preprocess.py          # Data preprocessing utilities
+│   │   └── process_data.py        # Main data processing pipeline
+│   ├── trainers/
+│   │   ├── evaluation.py          # Evaluation metrics & autoregressive testing
+│   │   ├── xgb_trainer.py         # XGBoost training & search routines
+│   │   ├── lstm_trainer.py        # LSTM training & search routines
+│   │   ├── tft_dataset.py         # TFT dataset builder
+│   │   ├── tft_model.py           # TFT model architecture
+│   │   ├── tft_trainer.py         # TFT training & search routines
+│   │   ├── tft_two_window_simple.py  # TFT dual-window utilities
+│   │   └── tft_utils.py           # TFT helper functions
+│   ├── utils/
+│   │   └── utils.py               # General utilities
+│   └── visualization/
+│       ├── __init__.py
+│       ├── helpers.py             # Shared plotting helpers
+│       ├── shap_nn.py             # SHAP for neural networks (TFT/LSTM)
+│       ├── shap_xgb.py            # SHAP for XGBoost
+│       └── trajectories.py        # Trajectory & scatter plot functions
+├── .gitignore
+├── Makefile                       # Data processing convenience target
+├── requirements.txt               # Python dependencies
+├── train_test_lstm.sh             # LSTM training shell script
+├── train_test_lstm_no_search.sh   # LSTM training without search
+└── train_test_tft.sh              # TFT training shell script
 ```
 
 ---
