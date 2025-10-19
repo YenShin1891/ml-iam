@@ -33,9 +33,9 @@ from src.utils.utils import setup_console_logging
 REPO_ROOT = Path(__file__).resolve().parents[2]
 METADATA_DIR = REPO_ROOT / "metadata"
 
-VAR_CLASSIFICATION_CSV = METADATA_DIR / "variable_classification_0327.csv"
+VAR_CLASSIFICATION_CSV = METADATA_DIR / "variable_classification_1019.csv"
 SCENARIO_CATEGORY_CSV = METADATA_DIR / "scenario_category.csv"
-MODEL_BASE_YEAR_CSV = METADATA_DIR / "unique_models_all_with_base_year.csv"
+MODEL_BASE_YEAR_CSV = METADATA_DIR / "iam_base_years.csv"
 
 
 # ---------- Utilities ----------

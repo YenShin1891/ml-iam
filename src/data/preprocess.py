@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import logging
+from typing import List, Optional
 from sklearn.preprocessing import StandardScaler
 
 from configs.paths import DATA_PATH, RESULTS_PATH
@@ -13,6 +14,7 @@ from configs.data import (
     NON_FEATURE_COLUMNS,
     CATEGORICAL_COLUMNS,
     MAX_YEAR,
+    SPLIT_SEED,
 )
 
 def split_data(prepared, test_size=0.1, val_size=0.1):
@@ -22,7 +24,8 @@ def split_data(prepared, test_size=0.1, val_size=0.1):
     n_val_groups = int(n_groups * val_size)
     n_train_groups = n_groups - n_test_groups - n_val_groups
     
-    np.random.shuffle(groups)
+    rng = np.random.RandomState(SPLIT_SEED)
+    rng.shuffle(groups)
 
     train_groups = groups[:n_train_groups]
     val_groups = groups[n_train_groups:n_train_groups + n_val_groups]
@@ -45,34 +48,70 @@ def encode_categorical_columns(data, columns):
     return data
 
 
-def add_missingness_indicators(df: pd.DataFrame, features: list):
-    """Add binary _is_missing indicators for the given feature columns.
-
-    Returns updated (df, features) where features includes the new indicator columns.
+def add_missingness_indicators(
+    prepared: pd.DataFrame,
+    features: list,
+    time_known: Optional[List[str]] = None,
+    categorical_columns: Optional[List[str]] = None,
+):
+    """Add <feature>_is_missing indicators before splitting the dataset.
     """
-    indicators = df[features].isna().astype(int)
-    indicators.columns = [f"{c}_is_missing" for c in indicators.columns]
+    if time_known is None:
+        time_known = ["Year", "DeltaYears"]
+    if categorical_columns is None:
+        categorical_columns = CATEGORICAL_COLUMNS
 
-    # Convert indicators to strings for TFT compatibility
-    # TFT expects categorical columns to be strings, not numeric
-    indicators = indicators.astype(str)
+    updated_features = list(features)
+    excluded = set(categorical_columns) | set(time_known)
 
-    df = pd.concat([df, indicators], axis=1)
-    return df, features + list(indicators.columns)
+    for col in features:
+        if col in excluded or col.endswith("_is_missing"):
+            continue
+        if col not in prepared.columns:
+            continue
+        indicator_name = f"{col}_is_missing"
+        if indicator_name not in prepared.columns:
+            prepared[indicator_name] = (
+                prepared[col]
+                .isna()
+                .map({True: "1", False: "0"})
+                .astype("category")
+            )
+        if indicator_name not in updated_features:
+            updated_features.append(indicator_name)
+
+    return prepared, updated_features
 
 
-def impute_with_train_medians(train_df: pd.DataFrame, val_df: pd.DataFrame, test_df: pd.DataFrame, features: list):
-    """Impute NaNs in features using medians computed on the training split.
+def impute_with_train_medians(
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    features: list,
+    time_known: Optional[List[str]] = None,
+    categorical_columns: Optional[List[str]] = None,
+):
+    """Impute continuous features with train medians to mirror legacy TFT runs."""
+    if time_known is None:
+        time_known = ["Year", "DeltaYears"]
+    if categorical_columns is None:
+        categorical_columns = CATEGORICAL_COLUMNS
 
-    Returns (train_df_imputed, val_df_imputed, test_df_imputed).
-    """
-    medians = train_df[features].median(numeric_only=True)
-    train_df = train_df.copy()
-    val_df = val_df.copy()
-    test_df = test_df.copy()
-    train_df[features] = train_df[features].fillna(medians)
-    val_df[features] = val_df[features].fillna(medians)
-    test_df[features] = test_df[features].fillna(medians)
+    excluded = set(categorical_columns) | set(time_known)
+
+    for col in features:
+        if col in excluded or col.endswith("_is_missing"):
+            continue
+        if col not in train_df.columns:
+            continue
+        median_value = pd.to_numeric(train_df[col], errors="coerce").median()
+        if pd.isna(median_value):
+            logging.warning("Column '%s' has all-NaN in train; filling with 0.0", col)
+            median_value = 0.0
+        for frame in (train_df, val_df, test_df):
+            if col in frame.columns:
+                frame[col] = frame[col].fillna(median_value)
+
     return train_df, val_df, test_df
 
 
@@ -269,4 +308,9 @@ def remove_rows_with_missing_outputs(X, y, X2=None):
 
     if X2 is not None:
         if isinstance(X2, pd.DataFrame):
-            y = y[mask].reset_index(drop=True)
+            X2 = X2[mask].reset_index(drop=True)
+        else:
+            X2 = X2[mask]
+        return X, y, X2
+
+    return X, y

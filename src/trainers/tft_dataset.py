@@ -9,7 +9,7 @@ import torch
 from pytorch_forecasting import TimeSeriesDataSet
 
 from configs.paths import RESULTS_PATH
-from configs.models.tft import TFTDatasetConfig
+# TFTDatasetConfig imported locally in functions to match original pattern
 from configs.data import CATEGORICAL_COLUMNS, INDEX_COLUMNS
 
 
@@ -34,32 +34,37 @@ def _build_union_encoders(session_state: Dict, categorical_cols: List[str], add_
         logging.warning("NaNLabelEncoder unavailable; skipping pretrained categorical encoders.")
         return {}
     dfs = [session_state.get("train_data"), session_state.get("val_data"), session_state.get("test_data")]
-    df_all = pd.concat([d for d in dfs if isinstance(d, pd.DataFrame)], axis=0, ignore_index=True)
+    df_all = pd.concat([df for df in dfs if df is not None], axis=0, ignore_index=True)
     encoders: Dict[str, Any] = {}
+    # ensure deterministic iteration order
     for col in categorical_cols:
-        if col not in df_all.columns:
-            series = pd.Series(["__NA__"], name=col)
+        if col in df_all.columns:
+            s_raw = df_all[col].astype(str).fillna("__NA__")
+            # Explicit, deterministic category order
+            categories = sorted(pd.unique(s_raw))
+            s = pd.Series(pd.Categorical(s_raw, categories=categories, ordered=True))
         else:
-            raw = df_all[col].astype(str).fillna("__NA__")
-            categories = sorted(pd.unique(raw))
-            series = pd.Series(pd.Categorical(raw, categories=categories, ordered=True), name=col)
+            # if column is entirely missing in some split, still create a closed-vocab encoder
+            s = pd.Series(pd.Categorical(["__NA__"], categories=["__NA__"], ordered=True))
         enc = NaNLabelEncoder(add_nan=add_nan)
-        enc.fit(series)
+        enc.fit(s)
         encoders[col] = enc
     return encoders
 
 
 def build_datasets(session_state: Dict) -> Tuple[TimeSeriesDataSet, TimeSeriesDataSet]:
     """Build train/val TimeSeriesDataSet objects using shared template logic (encoders handle categoricals)."""
-    val_data = session_state["val_data"].copy()
+    val_data = session_state["val_data"]
     train_dataset, _ = create_train_dataset(session_state)
     val_dataset = from_train_template(train_dataset, val_data, mode="eval")
     return train_dataset, val_dataset
 
 
-def create_train_dataset(session_state: Dict) -> Tuple[TimeSeriesDataSet, TFTDatasetConfig]:
+def create_train_dataset(session_state: Dict) -> Tuple[TimeSeriesDataSet, Any]:
     """Create training dataset with configuration, coercing categorical-like columns first."""
-    train_data = session_state["train_data"].copy()
+    from configs.models.tft import TFTDatasetConfig
+
+    train_data = session_state["train_data"]
     features = session_state["features"]
     targets = session_state["targets"]
 
@@ -83,9 +88,9 @@ def from_train_template(
 ) -> TimeSeriesDataSet:
     """Create dataset from training template."""
     return TimeSeriesDataSet.from_dataset(
-        train_dataset, 
-        data, 
-        stop_randomization=(mode == "eval"),
+        train_dataset,
+        data,
+        stop_randomization=(mode in {"eval", "test", "predict"}),
         predict=(mode == "predict")
     )
 
@@ -164,6 +169,8 @@ def create_dataset_with_custom_encoders(
     Returns:
         TimeSeriesDataSet configured with the custom encoders
     """
+    from configs.models.tft import TFTDatasetConfig
+
     train_data = session_state["train_data"].copy()
     features = session_state["features"]
     targets = session_state["targets"]
