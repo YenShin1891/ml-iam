@@ -225,8 +225,14 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[s
     y_plot = None if y_test is None else np.array(y_test, copy=True)
     preds_plot = None if preds is None else np.array(preds, copy=True)
     scaler_key = None
-    # Only apply inverse scaling for xgb (or other non-lstm models)
+    model_name_norm = (model_name or "").lower()
+    should_apply_inverse = False
     if model_type and ("xgb" in model_type or "xgboost" in model_type):
+        should_apply_inverse = True
+    elif "xgb" in model_name_norm or "xgboost" in model_name_norm:
+        should_apply_inverse = True
+    # Only apply inverse scaling for models we know use scaled targets
+    if should_apply_inverse:
         y_plot, preds_plot, scaler_key = apply_inverse_scaling(y_plot, preds_plot, run_id)
         if scaler_key:
             logging.info(f"Scatter: applied inverse scaling using scaler key '{scaler_key}'")
