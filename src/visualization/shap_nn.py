@@ -660,9 +660,6 @@ def plot_nn_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], t
         plot_tft_shap(run_id, X_test_with_index, features, targets, max_encoder_length)
         sequence_length = kwargs.get("sequence_length", 1)
         plot_lstm_shap(run_id, X_test_with_index, features, targets, sequence_length)
-    elif model_type == "tft":
-        max_encoder_length = kwargs.get("max_encoder_length", 12)
-        plot_tft_shap(run_id, X_test_with_index, features, targets, max_encoder_length)
     else:
         raise ValueError(f"Unsupported model type: {model_type}")
 
