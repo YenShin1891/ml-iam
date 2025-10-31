@@ -546,7 +546,7 @@ def predict_tft_two_window(session_state: Dict, run_id: str) -> np.ndarray:
     )
 
     # Check coverage and add fallback for missing trajectories
-    test_data = session_state["test_data"]
+    test_data = session_state.get("test_data_trimmed", session_state["test_data"])
     all_test_trajectories = set(test_data.apply(lambda x: f"{x['Model']}|{x['Scenario']}|{x['Region']}", axis=1).unique())
     combined_trajectories = set(combined_horizon.apply(lambda x: f"{x['Model']}|{x['Scenario']}|{x['Region']}", axis=1).unique())
     missing_trajectories = all_test_trajectories - combined_trajectories

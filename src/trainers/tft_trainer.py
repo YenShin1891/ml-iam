@@ -12,6 +12,7 @@ from sklearn.model_selection import ParameterSampler
 
 from configs.paths import RESULTS_PATH
 from configs.models import TFTSearchSpace, TFTTrainerConfig
+from configs.data import INDEX_COLUMNS, MAX_SERIES_LENGTH
 from .tft_dataset import (
     build_datasets,
     create_combined_dataset,
@@ -171,11 +172,91 @@ def train_final_tft(
         logging.warning("Failed to write TFT training summary: %s", exc)
 
 
+def prepare_prediction_test_data(session_state: Dict, dataset_template) -> pd.DataFrame:
+    """Return test data trimmed to the maximum usable sequence length for prediction."""
+    cache_key = "_trimmed_test_data"
+    cache_meta_key = f"{cache_key}_meta"
+
+    test_data = session_state.get("test_data")
+    if test_data is None:
+        raise ValueError("session_state missing 'test_data' required for prediction")
+
+    template_time_idx = getattr(dataset_template, "time_idx", None)
+    if template_time_idx is None:
+        raise ValueError("Dataset template missing time_idx; cannot prepare test data for prediction")
+
+    template_group_ids = list(getattr(dataset_template, "group_ids", INDEX_COLUMNS))
+
+    # Validate required columns exist in the raw test data
+    required_cols = [template_time_idx] + template_group_ids
+    missing_cols = [col for col in required_cols if col not in test_data.columns]
+    if missing_cols:
+        raise ValueError(
+            "Test data missing required columns for prediction truncation: "
+            + ", ".join(missing_cols)
+        )
+
+    max_encoder_length = int(getattr(dataset_template, "max_encoder_length", 0) or 0)
+    max_prediction_length = int(getattr(dataset_template, "max_prediction_length", 0) or 0)
+    target_length = max_encoder_length + max_prediction_length
+
+    if target_length <= 0:
+        target_length = MAX_SERIES_LENGTH
+    elif MAX_SERIES_LENGTH:
+        target_length = min(target_length, MAX_SERIES_LENGTH)
+
+    if target_length <= 0:
+        raise ValueError("Unable to determine a positive target_length for prediction truncation")
+
+    cache_meta = session_state.get(cache_meta_key, {})
+    if (
+        cache_key in session_state
+        and cache_meta.get("time_idx") == template_time_idx
+        and cache_meta.get("max_length") == target_length
+    ):
+        cached_df = session_state[cache_key]
+        if isinstance(cached_df, pd.DataFrame):
+            return cached_df
+
+    truncated_groups: List[pd.DataFrame] = []
+    truncated_count = 0
+    dropped_rows = 0
+
+    for _, group in test_data.groupby(template_group_ids, sort=False):
+        group_sorted = group.sort_values(template_time_idx)
+        if len(group_sorted) > target_length:
+            truncated_groups.append(group_sorted.iloc[-target_length:].copy())
+            truncated_count += 1
+            dropped_rows += len(group_sorted) - target_length
+        else:
+            truncated_groups.append(group_sorted.copy())
+
+    if truncated_groups:
+        trimmed_df = pd.concat(truncated_groups, ignore_index=True)
+    else:
+        trimmed_df = test_data.copy()
+
+    if truncated_count > 0:
+        logging.info(
+            "Trimmed %d test trajectories to last %d steps (removed %d rows in total)",
+            truncated_count,
+            target_length,
+            dropped_rows,
+        )
+    else:
+        logging.info("Test trajectories already within %d-step limit; no truncation applied", target_length)
+
+    session_state[cache_key] = trimmed_df
+    session_state[cache_meta_key] = {"time_idx": template_time_idx, "max_length": target_length}
+    session_state.setdefault("test_data_trimmed", trimmed_df)
+
+    return trimmed_df
+
+
 def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
     """Make predictions following the exact original tft_trajectory_plotting logic."""
     from src.trainers.evaluation import save_metrics
 
-    test_data = session_state["test_data"]
     targets = session_state["targets"]
 
     # Follow original pattern exactly
@@ -190,6 +271,8 @@ def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
 
         logging.info("Building test dataset for TFT prediction using saved template...")
         train_template = load_dataset_template(run_id)
+
+        test_data = prepare_prediction_test_data(session_state, train_template)
 
         try:
             test_dataset = from_train_template(
