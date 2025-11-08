@@ -468,6 +468,7 @@ def plot_lstm_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str],
     try:
         temporal_shap, averaged, X_proc, test_seq = get_lstm_shap_values(run_id, X_test, sequence_length)
         draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, features, targets, sequence_length, model_type="lstm")
+        draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, features, targets, sequence_length, model_type="lstm", xlim_range=(-0.3, 0.5))
         draw_temporal_shap_plot(run_id, temporal_shap, X_proc, features, targets, sequence_length, model_type="lstm")
     except Exception as e:
         logging.error("Failed to create LSTM SHAP plots: %s", e)
@@ -514,12 +515,13 @@ def plot_tft_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], 
         temporal_shap, averaged, X_proc, test_seq, feature_names = get_tft_shap_values(run_id, X_test, max_encoder_length)
         sequence_length = test_seq.shape[1]  # Get actual sequence length from TFT data
         draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, feature_names, targets, sequence_length, model_type="tft")
+        draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, feature_names, targets, sequence_length, model_type="tft", xlim_range=(-0.3, 0.5))
         draw_temporal_shap_plot(run_id, temporal_shap, X_proc, feature_names, targets, sequence_length, model_type="tft")
     except Exception as e:
         logging.error("Failed to create TFT SHAP plots: %s", e)
         logging.exception("Full error traceback:")
 
-def draw_shap_all_timesteps_plot(run_id: str, temporal_shap_values, test_sequences_np, features: List[str], targets: List[str], sequence_length: int, model_type: str = "lstm") -> None:
+def draw_shap_all_timesteps_plot(run_id: str, temporal_shap_values, test_sequences_np, features: List[str], targets: List[str], sequence_length: int, model_type: str = "lstm", xlim_range: Optional[tuple] = None) -> None:
     import numpy as _np
     if sequence_length <= 0:
         logging.warning("Invalid sequence_length=%d; skipping all-timesteps SHAP plot", sequence_length)
@@ -537,6 +539,11 @@ def draw_shap_all_timesteps_plot(run_id: str, temporal_shap_values, test_sequenc
     plt.rcParams.update({'font.size': 12})
     num_targets = len(targets)
     fig, axes = make_grid(num_targets, base_figsize=(20, 20))
+
+    # Create directory for individual plots
+    indiv_plots_dir = os.path.join(RESULTS_PATH, run_id, 'plots', 'indiv_plots', 'shap')
+    os.makedirs(indiv_plots_dir, exist_ok=True)
+
     for i, ax in enumerate(axes):
         if i >= num_targets:
             ax.axis('off')
@@ -552,12 +559,37 @@ def draw_shap_all_timesteps_plot(run_id: str, temporal_shap_values, test_sequenc
                 plot_type='violin',
                 show=False,
             )
+            # Set x-axis limits to zoom into configured range if specified
+            if xlim_range is not None:
+                plt.xlim(xlim_range[0], xlim_range[1])
             fig_local.tight_layout()
         render_external_plot(ax, _plot)
         ax.set_title(f"Impact on {targets[i]} ({OUTPUT_UNITS[i]})")
+
+        # Save individual plot for this target
+        fig_indiv = plt.figure(figsize=(10, 8))
+        shap_flat_parts = [temporal_shap_values[:, t, :, i] for t in range(sequence_length)]
+        shap_flat = _np.concatenate(shap_flat_parts, axis=1)
+        shap.summary_plot(
+            shap_flat,
+            X_flat,
+            feature_names=display_names,
+            max_display=8,
+            plot_type='violin',
+            show=False,
+        )
+        if xlim_range is not None:
+            plt.xlim(xlim_range[0], xlim_range[1])
+        plt.title(f"Impact on {targets[i]} ({OUTPUT_UNITS[i]})")
+        plt.tight_layout()
+        indiv_filename = f'{targets[i]}_match_xgb_range.png' if xlim_range is not None else f'{targets[i]}.png'
+        fig_indiv.savefig(os.path.join(indiv_plots_dir, indiv_filename), dpi=300, bbox_inches='tight')
+        plt.close(fig_indiv)
+
     fig.tight_layout()
     os.makedirs(os.path.join(RESULTS_PATH, run_id, 'plots'), exist_ok=True)
-    fig.savefig(os.path.join(RESULTS_PATH, run_id, 'plots', f'{model_type}_shap_plot.png'))
+    filename = f'{model_type}_shap_plot_match_xgb_range.png' if xlim_range is not None else f'{model_type}_shap_plot.png'
+    fig.savefig(os.path.join(RESULTS_PATH, run_id, 'plots', filename))
     plt.close(fig)
 
 def draw_temporal_shap_plot(run_id: str, temporal_shap_values, X_test: pd.DataFrame, features: List[str], targets: List[str], sequence_length: int, model_type: str = "lstm") -> None:
@@ -664,9 +696,9 @@ def plot_nn_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], t
         raise ValueError(f"Unsupported model type: {model_type}")
 
 # Legacy function name for backward compatibility
-def draw_lstm_all_timesteps_shap_plot(run_id: str, temporal_shap_values, test_sequences_np, features: List[str], targets: List[str], sequence_length: int) -> None:
+def draw_lstm_all_timesteps_shap_plot(run_id: str, temporal_shap_values, test_sequences_np, features: List[str], targets: List[str], sequence_length: int, xlim_range: Optional[tuple] = None) -> None:
     """Legacy function - use draw_shap_all_timesteps_plot instead."""
-    draw_shap_all_timesteps_plot(run_id, temporal_shap_values, test_sequences_np, features, targets, sequence_length, model_type="lstm")
+    draw_shap_all_timesteps_plot(run_id, temporal_shap_values, test_sequences_np, features, targets, sequence_length, model_type="lstm", xlim_range=xlim_range)
 
 # Helper functions for TFT SHAP with older models
 def _extract_categorical_encoders_from_model(model):
