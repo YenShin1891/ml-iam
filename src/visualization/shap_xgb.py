@@ -68,6 +68,11 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=F
     for c in cat_cols:
         X_proc[c] = X_proc[c].astype('category').cat.codes
     X_values = X_proc.values.astype(np.float64)
+
+    # Create directory for individual plots
+    indiv_plots_dir = os.path.join(RESULTS_PATH, run_id, 'plots', 'indiv_plots', 'shap')
+    os.makedirs(indiv_plots_dir, exist_ok=True)
+
     for i, ax in enumerate(axes):
         if i >= num_targets:
             ax.axis('off')
@@ -106,6 +111,43 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=F
         render_external_plot(ax, _plot)
         title_suffix = " (excluding top feature)" if exclude_top else ""
         ax.set_title(f"Impact on {targets[i]} ({OUTPUT_UNITS[i]}){title_suffix}")
+
+        # Save individual plot for this target
+        fig_indiv = plt.figure(figsize=(10, 8))
+        if exclude_top:
+            target_abs = np.abs(shap_values[:, :, i])
+            mean_abs = target_abs.mean(axis=0)
+            top_idx = int(np.argmax(mean_abs))
+            mask = np.ones(len(features), dtype=bool)
+            mask[top_idx] = False
+            filtered_features = [f for j, f in enumerate(features) if mask[j]]
+            filtered_display = build_feature_display_names(filtered_features)
+            shap.summary_plot(
+                shap_values[:, mask, i],
+                X_values[:, mask],
+                feature_names=filtered_display,
+                max_display=n_display,
+                plot_type='violin',
+                show=False,
+            )
+        else:
+            display_names = build_feature_display_names(features)
+            shap.summary_plot(
+                shap_values[:, :, i],
+                X_values,
+                feature_names=display_names,
+                max_display=n_display,
+                plot_type='violin',
+                show=False,
+            )
+        if xlim_range is not None:
+            plt.xlim(xlim_range[0], xlim_range[1])
+        plt.title(f"Impact on {targets[i]} ({OUTPUT_UNITS[i]}){title_suffix}")
+        plt.tight_layout()
+        indiv_filename = f"{targets[i]}_no_top.png" if exclude_top else f"{targets[i]}.png"
+        fig_indiv.savefig(os.path.join(indiv_plots_dir, indiv_filename), dpi=300, bbox_inches='tight')
+        plt.close(fig_indiv)
+
     fig.tight_layout()
     os.makedirs(os.path.join(RESULTS_PATH, run_id, 'plots'), exist_ok=True)
     prefix = f"{model_prefix}_" if model_prefix else ""
