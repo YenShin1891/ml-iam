@@ -74,8 +74,8 @@ def add_missingness_indicators(
             prepared[indicator_name] = (
                 prepared[col]
                 .isna()
-                .map({True: "1", False: "0"})
-                .astype("category")
+                .map({True: 1, False: 0})
+                .astype("float32")
             )
         if indicator_name not in updated_features:
             updated_features.append(indicator_name)
@@ -212,10 +212,10 @@ def load_and_process_data(version=None) -> pd.DataFrame:
     return var_pivoted
 
 
-def add_prev_features(group: pd.DataFrame, output_variables: list, n_lags: int = N_LAG_FEATURES) -> pd.DataFrame:
+def add_prev_features(group: pd.DataFrame, output_variables: list, n_lags: int = N_LAG_FEATURES, drop_na_rows: bool = True) -> pd.DataFrame:
     # Create configurable number of lagged features for output variables
     lagged_dfs = [group]  # Start with original data
-    
+
     for lag in range(1, n_lags + 1):
         lagged_df = group[output_variables].shift(lag)
         if lag == 1:
@@ -223,36 +223,62 @@ def add_prev_features(group: pd.DataFrame, output_variables: list, n_lags: int =
         else:
             lagged_df.columns = [f'prev{lag}_' + col for col in lagged_df.columns]
         lagged_dfs.append(lagged_df)
-    
-    # Combine original data with all lagged features, drop first n_lags rows (NaN due to shifts)
-    combined = pd.concat(lagged_dfs, axis=1).iloc[n_lags:]
+
+    # Combine original data with all lagged features
+    combined = pd.concat(lagged_dfs, axis=1)
+
+    # Mode selection: drop NaN rows (warm start) or keep them (cold start)
+    if drop_na_rows:
+        # Original behavior: drop first n_lags rows (NaN due to shifts)
+        combined = combined.iloc[n_lags:]
+    # If drop_na_rows=False, keep all rows including those with NaN lag features
+
     return combined
 
 
-def prepare_features_and_targets(data: pd.DataFrame) -> tuple:
-    logging.info("Preparing features and targets...")
+def prepare_features_and_targets(data: pd.DataFrame, start_mode: str = "warm_start") -> tuple:
+    """
+    Prepare features and targets for XGBoost model.
+
+    Args:
+        data: Input data DataFrame
+        start_mode: "warm_start" (original behavior, drop NaN lag rows) or "cold_start" (keep NaN lag rows)
+    """
+    logging.info("Preparing features and targets for XGBoost in %s start_mode...", start_mode)
+
+    drop_na_rows = (start_mode == "warm_start")
     prepared = data.groupby(INDEX_COLUMNS).apply(
-        add_prev_features, output_variables = OUTPUT_VARIABLES
+        add_prev_features, output_variables=OUTPUT_VARIABLES, drop_na_rows=drop_na_rows
     ).reset_index(drop=True)
     prepared['Year'] = prepared['Year'].astype(int)
-    
+
     targets = OUTPUT_VARIABLES
     features = [col for col in prepared.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
-    
+
+    # Only drop rows with missing targets, not lag features
     prepared.dropna(subset=targets, inplace=True)
-    
+
+    if start_mode == "cold_start":
+        logging.info("Cold start mode: kept %d rows with NaN lag features",
+                    prepared[features].isna().any(axis=1).sum())
+
     return prepared, features, targets
 
 
-def prepare_features_and_targets_sequence(data: pd.DataFrame) -> tuple:
+def prepare_features_and_targets_sequence(data: pd.DataFrame, start_mode: str = "cold_start", min_context_length: int = 0) -> tuple:
     """
     Prepare features and targets for sequence models (TFT, LSTM, etc.).
+
+    Args:
+        data: Input data DataFrame
+        start_mode: "cold_start" (predict from Step=0) or "warm_start" (require min_context_length)
+        min_context_length: Minimum historical context required for warm_start mode
 
     This function does NOT add lagged features as sequence models handle
     temporal dependencies internally. It adds Step and DeltaYears for
     time series indexing.
     """
-    logging.info("Preparing features and targets for sequence models...")
+    logging.info("Preparing features and targets for sequence models in %s start_mode...", start_mode)
     prepared = data.copy()
     # Do not need lagging for sequence models as they use autoregressive prediction
     prepared['Year'] = prepared['Year'].astype(int)
@@ -273,16 +299,24 @@ def prepare_features_and_targets_sequence(data: pd.DataFrame) -> tuple:
         prepared.groupby(group_cols)['Year'].diff().fillna(0).astype(int)
     )
 
+    # Mode 2: Warm start - filter out early steps without sufficient context
+    if start_mode == "warm_start" and min_context_length > 0:
+        original_len = len(prepared)
+        prepared = prepared[prepared['Step'] >= min_context_length].copy()
+        filtered_len = len(prepared)
+        logging.info("Warm start mode: filtered out %d early steps, kept %d rows with Step >= %d",
+                    original_len - filtered_len, filtered_len, min_context_length)
+
     return prepared, features, targets
 
 
-def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
+def prepare_features_and_targets_tft(data: pd.DataFrame, start_mode: str = "cold_start", min_context_length: int = 0) -> tuple:
     """
     Legacy function for TFT. Now calls prepare_features_and_targets_sequence.
     Kept for backward compatibility.
     """
     logging.info("Preparing features and targets for TFT (using sequence preprocessing)...")
-    return prepare_features_and_targets_sequence(data)
+    return prepare_features_and_targets_sequence(data, start_mode=start_mode, min_context_length=min_context_length)
 
 
 def remove_rows_with_missing_outputs(X, y, X2=None):

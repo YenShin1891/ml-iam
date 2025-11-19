@@ -11,21 +11,29 @@ from src.visualization import plot_scatter, plot_xgb_shap
 
 np.random.seed(0)
 
-def preprocessing(run_id, dataset=None):
+def preprocessing(run_id, dataset=None, start_mode="warm_start"):
+    """
+    Preprocessing for XGBoost with configurable start mode.
+
+    Args:
+        run_id: Run identifier
+        dataset: Dataset version to use
+        start_mode: "warm_start" (require lag features) or "cold_start" (allow NaN lag features)
+    """
     data = load_and_process_data(version=dataset)
-    prepared, features, targets = prepare_features_and_targets(data)
+    prepared, features, targets = prepare_features_and_targets(data, start_mode=start_mode)
     prepared = prepared.dropna(subset=targets)
     (
         X_train, y_train, X_train_index_columns,
         X_val, y_val, X_val_index_columns,
-        X_test_with_index, y_test, 
+        X_test_with_index, y_test,
         test_data,
         x_scaler, y_scaler,
         train_groups, val_groups
     ) = prepare_data(prepared, targets, features)
     save_session_state(x_scaler, run_id, "x_scaler.pkl")
     save_session_state(y_scaler, run_id, "y_scaler.pkl")
-    
+
     return {
         "features": features,
         "targets": targets,
@@ -39,7 +47,8 @@ def preprocessing(run_id, dataset=None):
         "y_test": y_test,
         "test_data": test_data,
         "train_groups": train_groups,
-        "val_groups": val_groups
+        "val_groups": val_groups,
+        "start_mode": start_mode
     }
 
 
@@ -120,7 +129,9 @@ def plot_xgb(session_state, run_id):
     test_data = session_state["test_data"]
 
     plot_scatter(run_id, test_data, y_test, preds, targets, model_name="XGBoost")
-    plot_xgb_shap(run_id, X_test_with_index, features, targets)
+    # Pass raw Region labels aligned to X_test rows for filtering inside SHAP plotting
+    index_region = test_data['Region'] if isinstance(test_data, pd.DataFrame) and 'Region' in test_data.columns else None
+    plot_xgb_shap(run_id, X_test_with_index, features, targets, region="World", index_region=index_region)
 
 
 def parse_arguments():
@@ -151,27 +162,35 @@ def parse_arguments():
         help="Dataset subdirectory name to use for processed_series.csv. Falls back to DEFAULT_DATASET if not specified.",
         required=False,
     )
+    parser.add_argument(
+        "--start_mode",
+        type=str,
+        choices=["warm_start", "cold_start"],
+        default="warm_start",
+        help="Start mode: warm_start (require lag features, start from Step=2) or cold_start (allow NaN lag features, start from Step=0)",
+        required=False,
+    )
     args = parser.parse_args()
-    
+
     # Validation: if resume is specified, run_id must be provided
     if args.resume and not args.run_id:
         parser.error("--run_id is required when --resume is specified")
-    
+
     # Validation: if resume is not specified, run_id should not be provided
     if not args.resume and args.run_id:
         parser.error("--run_id should only be specified when using --resume")
-    
-    return args.run_id, args.resume, args.note, args.skip_search, args.dataset
+
+    return args.run_id, args.resume, args.note, args.skip_search, args.dataset, args.start_mode
 
 
 def main():
-    run_id, resume, note, skip_search, dataset = parse_arguments()
+    run_id, resume, note, skip_search, dataset, start_mode = parse_arguments()
 
     if resume is None:
         # Full pipeline: process -> search -> train -> test -> plot
         run_id = get_next_run_id()
         setup_logging(run_id)
-        session_state = preprocessing(run_id, dataset)
+        session_state = preprocessing(run_id, dataset, start_mode)
         save_session_state(session_state, run_id)
         resume = "train" if skip_search else "search"  # Start from train step if skipping search
     else:
@@ -181,6 +200,10 @@ def main():
     if note:
         session_state["note"] = note
         logging.info("Run note: %s", note)
+
+    # Log the prediction start mode
+    used_start_mode = session_state.get("start_mode", "warm_start")
+    logging.info("XGBoost start mode: %s", used_start_mode)
 
     pipeline_steps = ["search", "train", "test", "plot"]
     step_functions = {
