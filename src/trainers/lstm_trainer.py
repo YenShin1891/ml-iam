@@ -48,15 +48,7 @@ class LSTMDataset(Dataset):
         X = data[features].copy()
         y = data[targets].values.copy()
 
-        # Handle categorical columns first (before NaN filling)
-        from configs.data import CATEGORICAL_COLUMNS
-        categorical_cols_in_features = [col for col in CATEGORICAL_COLUMNS if col in X.columns]
-
-        # Encode categorical columns like XGB does
-        for col in categorical_cols_in_features:
-            X[col] = X[col].astype('category').cat.codes
-
-        # Handle NaN values
+        # Handle NaN values directly - let LSTM handle categorical features as-is
         X_filled = X.fillna(mask_value).astype(np.float32)
 
         # Ensure y is 2D
