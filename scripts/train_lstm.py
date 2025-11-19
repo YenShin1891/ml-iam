@@ -31,10 +31,12 @@ np.random.seed(0)
 seed_everything(42, workers=True)
 
 
-def process_data(dataset_version=None, start_mode="cold_start"):
+def process_data(dataset_version=None):
     """Load and process data for LSTM training."""
     data = load_and_process_data(version=dataset_version)
-    prepared, features, targets = prepare_features_and_targets_sequence(data, start_mode=start_mode)
+    # For sequence models (LSTM), we do NOT rely on pipeline-level start_mode.
+    # Warm-start behavior is controlled by the model/dataset via `target_offset` and `sequence_length`.
+    prepared, features, targets = prepare_features_and_targets_sequence(data, start_mode="cold_start", min_context_length=0)
     prepared, features = add_missingness_indicators(prepared, features)
 
     # Convert categorical columns to numeric codes for LSTM (for fair comparison with other models)
@@ -55,8 +57,7 @@ def process_data(dataset_version=None, start_mode="cold_start"):
         "train_data": train_data,
         "val_data": val_data,
         "test_data": test_data,
-        "start_mode": start_mode,
-        "dataset_version": dataset_version
+        "dataset_version": dataset_version,
     }
 
 
@@ -70,10 +71,9 @@ def search_lstm(session_state, run_id):
             "Session state missing keys %s for search; running preprocessing now...",
             missing,
         )
-        # Use stored dataset and mode parameters if available, otherwise use defaults
+        # Use stored dataset parameter if available
         stored_dataset = session_state.get("dataset_version", None)
-        stored_start_mode = session_state.get("start_mode", "cold_start")
-        data_bundle = process_data(dataset_version=stored_dataset, start_mode=stored_start_mode)
+        data_bundle = process_data(dataset_version=stored_dataset)
         # Merge freshly processed data into session state
         session_state.update(data_bundle)
         save_session_state(session_state, run_id)
@@ -83,9 +83,8 @@ def search_lstm(session_state, run_id):
     targets = session_state["targets"]
     features = session_state["features"]
 
-    start_mode = session_state.get("start_mode", "cold_start")
     best_params = hyperparameter_search_lstm(
-        train_data, val_data, targets, run_id, features, start_mode
+        train_data, val_data, targets, run_id, features
     )
     session_state["best_params"] = best_params
     logging.info("Hyperparameter search complete. Best params: %s", best_params)
@@ -112,9 +111,8 @@ def train_lstm(session_state, run_id):
     targets = session_state["targets"]
     features = session_state["features"]
 
-    start_mode = session_state.get("start_mode", "cold_start")
     train_final_lstm(
-        train_data, val_data, targets, run_id, best_params, session_state=session_state, features=features, start_mode=start_mode
+        train_data, val_data, targets, run_id, best_params, session_state=session_state, features=features
     )
     logging.info("Final LSTM training complete.")
     return best_params
@@ -193,14 +191,6 @@ def parse_arguments():
         help="Dataset version to use (subdirectory under data/). If not specified, uses default.",
         required=False,
     )
-    parser.add_argument(
-        "--start_mode",
-        type=str,
-        choices=["cold_start", "warm_start"],
-        default="cold_start",
-        help="Start mode: cold_start (predict from Step=0) or warm_start (require sequence_length context)",
-        required=False,
-    )
     args = parser.parse_args()
 
     # Validation: if resume is specified, run_id must be provided
@@ -211,12 +201,12 @@ def parse_arguments():
     if not args.resume and args.run_id:
         parser.error("--run_id should only be specified when using --resume")
 
-    return args.run_id, args.resume, args.skip_search, args.note, args.dataset, args.start_mode
+    return args.run_id, args.resume, args.skip_search, args.note, args.dataset
 
 
 def main():
     """Main training pipeline."""
-    run_id, resume, skip_search, note, dataset_version, start_mode = parse_arguments()
+    run_id, resume, skip_search, note, dataset_version = parse_arguments()
 
     if resume is None:
         # New full run still performs preprocessing once, then executes chosen steps.
@@ -224,7 +214,7 @@ def main():
         # Only primary rank initializes logging to avoid duplication
         if os.getenv("PL_TRAINER_GLOBAL_RANK") in (None, "0") and os.getenv("GLOBAL_RANK") in (None, "0") and os.getenv("RANK") in (None, "0"):
             setup_logging(run_id)
-        session_state = process_data(dataset_version=dataset_version, start_mode=start_mode)
+        session_state = process_data(dataset_version=dataset_version)
         save_session_state(session_state, run_id)
         resume = "train" if skip_search else "search"
         if skip_search:
@@ -241,6 +231,7 @@ def main():
                 "batch_size": default_config.batch_size,
                 "weight_decay": default_config.weight_decay,
                 "sequence_length": default_config.sequence_length,
+                "target_offset": default_config.target_offset,
             }
             logging.info("Using default LSTM parameters (search skipped): %s", session_state["best_params"])
             save_session_state(session_state, run_id)
@@ -250,6 +241,12 @@ def main():
             setup_logging(run_id)
         # Always load existing session state for any resume phase; preprocessing is never redone implicitly.
         session_state = load_session_state(run_id)
+        # If a dataset version is provided via CLI during resume, persist it
+        if dataset_version is not None:
+            session_state["dataset_version"] = dataset_version
+            logging.info("Overriding dataset_version for resumed run: %s", dataset_version)
+        # Persist any overrides immediately so subsequent phases see them
+        save_session_state(session_state, run_id)
 
     if note:
         session_state["note"] = note
