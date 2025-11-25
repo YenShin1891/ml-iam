@@ -315,6 +315,8 @@ def prepare_features_and_targets_tft(data: pd.DataFrame, start_mode: str = "cold
     Legacy function for TFT. Now calls prepare_features_and_targets_sequence.
     Kept for backward compatibility.
     """
+    if min_context_length > 0 and start_mode == "cold_start":
+        start_mode = "warm_start"
     logging.info("Preparing features and targets for TFT (using sequence preprocessing)...")
     return prepare_features_and_targets_sequence(data, start_mode=start_mode, min_context_length=min_context_length)
 
