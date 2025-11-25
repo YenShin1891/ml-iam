@@ -7,6 +7,7 @@ import torch
 
 from lightning.pytorch import seed_everything
 
+from configs.models import TFTDatasetConfig
 from src.data.preprocess import (
     add_missingness_indicators,
     impute_with_train_medians,
@@ -34,7 +35,20 @@ seed_everything(42, workers=True)
 
 def process_data(dataset_version=None):
     data = load_and_process_data(version=dataset_version)
-    prepared, features, targets = prepare_features_and_targets_tft(data)
+    dataset_cfg = TFTDatasetConfig()
+    context_length = max(0, dataset_cfg.target_offset)
+
+    prepared, features, targets = prepare_features_and_targets_tft(
+        data,
+        start_mode="cold_start",
+        min_context_length=0,
+    )
+    dataset_cfg.resolve_encoder_lengths()
+    if context_length > 0:
+        logging.info(
+            "Warm start enabled for TFT: target_offset=%d (retaining early steps for encoder context).",
+            context_length,
+        )
     prepared, features = add_missingness_indicators(prepared, features)
     train_data, val_data, test_data = split_data(prepared)
     train_data, val_data, test_data = impute_with_train_medians(
@@ -46,7 +60,11 @@ def process_data(dataset_version=None):
         "targets": targets,
         "train_data": train_data,
         "val_data": val_data,
-        "test_data": test_data
+        "test_data": test_data,
+        "tft_target_offset": context_length,
+        "tft_min_encoder_length": dataset_cfg.effective_min_encoder_length,
+        "tft_max_encoder_length": dataset_cfg.effective_max_encoder_length,
+        "tft_time_idx_column": dataset_cfg.time_idx,
     }
 
 
