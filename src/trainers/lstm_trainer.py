@@ -106,14 +106,10 @@ class LSTMDataset(Dataset):
                 y_seq = self.y_scaled[target_pos]
 
                 # Create previous targets for teacher forcing
-                # Previous targets are the ground truth targets from the sequence
-                if start_pos > 0:
-                    prev_targets_seq = self.y_scaled[start_pos-1:start_pos+sequence_length-1]  # Shifted by 1
-                else:
-                    # For the first sequence, pad with zeros
-                    prev_targets_seq = np.zeros((sequence_length, self.y_scaled.shape[1]))
-                    if sequence_length > 1:
-                        prev_targets_seq[1:] = self.y_scaled[start_pos:start_pos+sequence_length-1]
+                # We want previous_targets[t] to contain the true target at the input timestep t
+                # so that during unrolling previous_targets[:, t-1] provides y_{t-1} for step t.
+                # Therefore, take the in-window targets (length == sequence_length).
+                prev_targets_seq = self.y_scaled[start_pos:start_pos + sequence_length]
 
                 # Create mask for padded values
                 mask_data = X_filled.iloc[start_pos:start_pos + sequence_length]
@@ -162,7 +158,8 @@ class LSTMModel(LightningModule):
         weight_decay: float = 0.0,
         scheduler: Optional[str] = None,
         scheduler_params: Optional[Dict] = None,
-        mask_value: float = -1.0
+        mask_value: float = -1.0,
+        target_offset: int = 1,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -174,6 +171,7 @@ class LSTMModel(LightningModule):
         self.include_previous_target = include_previous_target
         self.learning_rate = learning_rate
         self.mask_value = mask_value
+        self.target_offset = target_offset
 
         # LSTM layer - input size = exogenous (u_t) + (previous target y_{t-1} if enabled)
         lstm_input_size = exogenous_size + (output_size if include_previous_target else 0)
@@ -226,7 +224,7 @@ class LSTMModel(LightningModule):
                 mask_expanded = mask.unsqueeze(-1).expand_as(x)
                 x = x * mask_expanded
 
-            lstm_out, _ = self.lstm(x)
+            lstm_out, (hidden, cell) = self.lstm(x)
 
             if mask is not None:
                 valid_lengths = (~mask).sum(dim=1) - 1
@@ -235,7 +233,15 @@ class LSTMModel(LightningModule):
             else:
                 last_output = lstm_out[:, -1, :]
 
-            return self.dense(last_output)
+            # If forecasting offset is requested but no previous target is included,
+            # we can optionally run one extra step using repeated last exogenous only.
+            if getattr(self, "target_offset", 0) and self.target_offset > 0:
+                u_forecast = x[:, -1, :]
+                v_t = u_forecast.unsqueeze(1)
+                lstm_out2, _ = self.lstm(v_t, (hidden, cell))
+                return self.dense(lstm_out2[:, 0, :])
+            else:
+                return self.dense(last_output)
 
         # Step-by-step unrolling with teacher forcing
         hidden = None
@@ -274,8 +280,23 @@ class LSTMModel(LightningModule):
             predictions.append(current_pred)
             prev_target = current_pred  # Update for next timestep
 
-        # Return only the last prediction (or all predictions if needed)
-        return predictions[-1]  # [batch_size, output_size]
+        # Optional dedicated forecast step when predicting future offset
+        if getattr(self, "target_offset", 0) and self.target_offset > 0:
+            # Determine y_{t-1}: use last ground-truth target in context when teacher forcing is enabled
+            if teacher_forcing and previous_targets is not None:
+                y_prev = previous_targets[:, -1, :]
+            else:
+                y_prev = prev_target  # last predicted target from in-window unroll
+
+            # Exogenous at forecast time: repeat last exogenous as a simple policy
+            u_forecast = exogenous_seq[:, -1, :]
+            v_t = torch.cat([u_forecast, y_prev], dim=-1).unsqueeze(1)
+            lstm_out2, (hidden, cell) = self.lstm(v_t, (hidden, cell) if hidden is not None else None)
+            forecast_pred = self.dense(lstm_out2[:, 0, :])
+            return forecast_pred
+
+        # Return only the last in-window prediction when no offset
+        return predictions[-1]
 
     def training_step(self, batch, batch_idx):
         x, y, mask = batch['x'], batch['y'], batch['mask']
@@ -459,7 +480,8 @@ def create_lstm_model(
         weight_decay=config.weight_decay,
         scheduler=config.scheduler,
         scheduler_params=config.scheduler_params,
-        mask_value=config.mask_value
+        mask_value=config.mask_value,
+        target_offset=config.target_offset,
     )
 
 
