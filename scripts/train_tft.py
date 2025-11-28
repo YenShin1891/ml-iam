@@ -33,14 +33,14 @@ np.random.seed(0)
 seed_everything(42, workers=True)
 
 
-def process_data(dataset_version=None):
+def process_data(dataset_version=None, lag_required=True):
     data = load_and_process_data(version=dataset_version)
     dataset_cfg = TFTDatasetConfig()
     context_length = max(0, dataset_cfg.target_offset)
 
     prepared, features, targets = prepare_features_and_targets_tft(
         data,
-        start_mode="cold_start",
+        lag_required=lag_required,
         min_context_length=0,
     )
     dataset_cfg.resolve_encoder_lengths()
@@ -65,6 +65,7 @@ def process_data(dataset_version=None):
         "tft_min_encoder_length": dataset_cfg.effective_min_encoder_length,
         "tft_max_encoder_length": dataset_cfg.effective_max_encoder_length,
         "tft_time_idx_column": dataset_cfg.time_idx,
+        "lag_required": lag_required,
     }
 
 
@@ -183,6 +184,12 @@ def parse_arguments():
         required=False,
     )
     parser.add_argument(
+        "--lag-required",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Require complete lag features (use --no-lag-required to allow missing lag history).",
+    )
+    parser.add_argument(
         "--two-window",
         action="store_true",
         help="Use two-window prediction approach (early + late windows with weighted averaging).",
@@ -197,11 +204,11 @@ def parse_arguments():
     if not args.resume and args.run_id:
         parser.error("--run_id should only be specified when using --resume")
 
-    return args.run_id, args.resume, args.dataset, args.two_window
+    return args.run_id, args.resume, args.dataset, args.two_window, args.lag_required
 
 
 def main():
-    run_id, resume, dataset_version, use_two_window = parse_arguments()
+    run_id, resume, dataset_version, use_two_window, lag_required_arg = parse_arguments()
 
     if resume is None:
         # Full pipeline: process -> search -> train -> test -> plot
@@ -211,7 +218,8 @@ def main():
         if use_two_window:
             logging.info("Using two-window prediction approach")
 
-        session_state = process_data(dataset_version=dataset_version)
+        lag_required = True if lag_required_arg is None else lag_required_arg
+        session_state = process_data(dataset_version=dataset_version, lag_required=lag_required)
         save_session_state(session_state, run_id)
         search_tft(session_state, run_id)
         save_session_state(session_state, run_id)
@@ -229,7 +237,13 @@ def main():
             logging.info("No existing session state found for %s; creating a new one before resuming.", run_id)
         else:
             logging.info("Loaded existing session state for %s and refreshing dataset-dependent entries.", run_id)
-        data_state = process_data(dataset_version=dataset_version)
+        if lag_required_arg is None:
+            lag_required = session_state.get("lag_required", True)
+        else:
+            lag_required = lag_required_arg
+            session_state["lag_required"] = lag_required
+            logging.info("Overriding lag_required for resumed run: %s", lag_required)
+        data_state = process_data(dataset_version=dataset_version, lag_required=lag_required)
         session_state.update(data_state)
         save_session_state(session_state, run_id)
 

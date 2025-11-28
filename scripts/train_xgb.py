@@ -11,17 +11,17 @@ from src.visualization import plot_scatter, plot_xgb_shap
 
 np.random.seed(0)
 
-def preprocessing(run_id, dataset=None, start_mode="warm_start"):
+def preprocessing(run_id, dataset=None, lag_required=True):
     """
-    Preprocessing for XGBoost with configurable start mode.
+    Preprocessing for XGBoost with configurable lag requirement.
 
     Args:
         run_id: Run identifier
         dataset: Dataset version to use
-        start_mode: "warm_start" (require lag features) or "cold_start" (allow NaN lag features)
+        lag_required: When True, drop rows without a full history of lag features.
     """
     data = load_and_process_data(version=dataset)
-    prepared, features, targets = prepare_features_and_targets(data, start_mode=start_mode)
+    prepared, features, targets = prepare_features_and_targets(data, lag_required=lag_required)
     prepared = prepared.dropna(subset=targets)
     (
         X_train, y_train, X_train_index_columns,
@@ -48,7 +48,7 @@ def preprocessing(run_id, dataset=None, start_mode="warm_start"):
         "test_data": test_data,
         "train_groups": train_groups,
         "val_groups": val_groups,
-        "start_mode": start_mode
+        "lag_required": lag_required,
     }
 
 
@@ -163,12 +163,10 @@ def parse_arguments():
         required=False,
     )
     parser.add_argument(
-        "--start_mode",
-        type=str,
-        choices=["warm_start", "cold_start"],
-        default="warm_start",
-        help="Start mode: warm_start (require lag features, start from Step=2) or cold_start (allow NaN lag features, start from Step=0)",
-        required=False,
+        "--lag-required",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Require complete lag features (use --no-lag-required to allow missing lag history).",
     )
     args = parser.parse_args()
 
@@ -180,30 +178,39 @@ def parse_arguments():
     if not args.resume and args.run_id:
         parser.error("--run_id should only be specified when using --resume")
 
-    return args.run_id, args.resume, args.note, args.skip_search, args.dataset, args.start_mode
+    return args.run_id, args.resume, args.note, args.skip_search, args.dataset, args.lag_required
 
 
 def main():
-    run_id, resume, note, skip_search, dataset, start_mode = parse_arguments()
+    run_id, resume, note, skip_search, dataset, lag_required_arg = parse_arguments()
 
     if resume is None:
         # Full pipeline: process -> search -> train -> test -> plot
         run_id = get_next_run_id()
         setup_logging(run_id)
-        session_state = preprocessing(run_id, dataset, start_mode)
+        lag_required = True if lag_required_arg is None else lag_required_arg
+        session_state = preprocessing(run_id, dataset, lag_required)
         save_session_state(session_state, run_id)
         resume = "train" if skip_search else "search"  # Start from train step if skipping search
     else:
         setup_logging(run_id)
         session_state = load_session_state(run_id)
+        if session_state is None:
+            session_state = {}
+        if lag_required_arg is None:
+            lag_required = session_state.get("lag_required", True)
+        else:
+            lag_required = lag_required_arg
+            session_state["lag_required"] = lag_required
+            save_session_state(session_state, run_id)
 
     if note:
         session_state["note"] = note
         logging.info("Run note: %s", note)
 
     # Log the prediction start mode
-    used_start_mode = session_state.get("start_mode", "warm_start")
-    logging.info("XGBoost start mode: %s", used_start_mode)
+    used_lag_required = session_state.get("lag_required", True)
+    logging.info("XGBoost lag_required: %s", used_lag_required)
 
     pipeline_steps = ["search", "train", "test", "plot"]
     step_functions = {

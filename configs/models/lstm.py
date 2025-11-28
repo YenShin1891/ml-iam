@@ -62,7 +62,7 @@ class LSTMTrainerConfig:
 
     # Data processing
     sequence_length: int = 1  # Number of historical timesteps fed into the model
-    target_offset: int = 1  # Default warm start: predict next step after sequence end (set 0 to revert)
+    target_offset: int = 0  # Set 1 for warm start: reserves encoder context for future predictions (set 0 for cold start)
     mask_value: float = -1.0
 
     # Early stopping

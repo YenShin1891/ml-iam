@@ -26,8 +26,8 @@ if [ -z "$DATASET" ]; then
 	python ./scripts/train_tft.py --resume=plot --run_id=$run_id --two-window
 else
 	echo "Using dataset override: $DATASET"
-	# echo "Phase 1: Running hyperparameter search..."
-	# python ./scripts/train_tft.py --resume=search --run_id=$run_id --dataset=$DATASET --two-window
+	echo "Phase 1: Running hyperparameter search..."
+	python ./scripts/train_tft.py --resume=search --run_id=$run_id --dataset=$DATASET --two-window
 
 	echo "Phase 2: Running final training..."
 	python ./scripts/train_tft.py --resume=train --run_id=$run_id --dataset=$DATASET --two-window
