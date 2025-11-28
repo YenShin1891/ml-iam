@@ -22,7 +22,7 @@ class TFTDatasetConfig:
     add_target_scales: bool = True
     allow_missing_timesteps: bool = False
     pretrained_categorical_encoders: Dict[str, Any] = field(default_factory=dict)
-    target_offset: int = 0
+    target_offset: int = 0  # Set 1 for warm start: reserves encoder context for future predictions (set 0 for cold start)
     _effective_min_encoder_length: int = field(init=False, default=0)
     _effective_max_encoder_length: int = field(init=False, default=0)
 
@@ -106,4 +106,3 @@ class TFTTrainerConfig:
     patience: int = 3
     # Use Union for flexibility: -1 for all, int count, list of device indices, or "auto"
     devices: Union[int, List[int], str] = "auto"
-    target_offset: int = 0
