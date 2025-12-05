@@ -10,6 +10,7 @@ import argparse
 
 from src.visualization import plot_trajectories, get_saved_plots_metadata
 from src.utils.utils import setup_logging, load_session_state
+from configs.data import REGION_CODE_TO_LABEL
 import datetime
 
 # Apply global styling for wider sidebar
@@ -31,7 +32,15 @@ def get_unique_values(test_data):
     """Cache unique values for filters."""
     scenario_categories = test_data['Scenario_Category'].unique()
     
-    regions = test_data['Region'].unique()
+    region_series = test_data['Region']
+    if pd.api.types.is_numeric_dtype(region_series):
+        # Map encoded region codes back to their labels when older session states saved integers
+        codes = region_series.astype('Int64')
+        region_series = codes.map(
+            lambda code: REGION_CODE_TO_LABEL.get(int(code), str(code))
+            if pd.notna(code) and int(code) >= 0 else None
+        )
+    regions = [region for region in region_series.dropna().astype(str).unique()]
     R10 = [region for region in regions if region.startswith('R10')]
     R6 = [region for region in regions if region.startswith('R6')]
     R5 = [region for region in regions if region.startswith('R5')]
@@ -176,7 +185,7 @@ def filter_and_plot(run_id):
 
     # Get environment variables for individual plot saving
     # If you want to save individual plots, use the following command:
-    # nohup bash -c "export SAVE_INDIVIDUAL_PLOTS=true && export INDIVIDUAL_PLOT_INDICES='[0]' && streamlit run scripts/dashboard.py --logger.level=info --server.runOnSave=false" &
+    # nohup bash -c "export SAVE_INDIVIDUAL_PLOTS=true && export INDIVIDUAL_PLOT_INDICES='[0]' && streamlit run scripts/dashboard.py --logger.level=info --server.runOnSave=false -- --run_id=run_37" &
     import os
     save_individual = os.getenv('SAVE_INDIVIDUAL_PLOTS', 'false').lower() == 'true'
     logging.info(f"DEBUG: save_individual = {save_individual}")

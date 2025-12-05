@@ -3,11 +3,15 @@ import json
 import logging
 import os
 import pickle
-from typing import Optional
 from datetime import datetime, timezone, timedelta
+from typing import Optional
+
+import pandas as pd
 from dask.distributed import Client
+from pandas.api.types import is_numeric_dtype
 
 from configs.paths import RESULTS_PATH
+from configs.data import REGION_CODE_TO_LABEL
 
 # constants
 CHECKPOINT_FILE_NAME = "session_state.pkl"
@@ -142,11 +146,50 @@ def load_session_state(run_id, checkpoint_file_name=CHECKPOINT_FILE_NAME):
     file_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", checkpoint_file_name)
     try:
         with open(file_path, "rb") as f:
-            return DowngradeUnpickler(f).load()
+            session_state = DowngradeUnpickler(f).load()
+        _decode_saved_categoricals(session_state)
+        return session_state
         
     except FileNotFoundError:
         logging.error("No saved session state found at %s.", file_path)
         return {}
+
+
+def _decode_saved_categoricals(session_state: dict) -> None:
+    """Restore categorical label columns (e.g., Region) that may have been encoded as integers."""
+    if not isinstance(session_state, dict):
+        return
+
+    def _decode_region_column(df: pd.DataFrame) -> None:
+        if not isinstance(df, pd.DataFrame):
+            return
+        if 'Region' not in df.columns:
+            return
+        region_series = df['Region']
+        if not is_numeric_dtype(region_series):
+            return
+        try:
+            codes = region_series.astype('Int64')
+        except Exception:
+            return
+
+        def _map_code(value):
+            if pd.isna(value):
+                return None
+            try:
+                code_int = int(value)
+            except (TypeError, ValueError):
+                return None
+            if code_int < 0:
+                return None
+            return REGION_CODE_TO_LABEL.get(code_int)
+
+        decoded = codes.map(_map_code)
+        df.loc[:, 'Region'] = decoded.astype('object')
+
+    for key, value in list(session_state.items()):
+        if isinstance(value, pd.DataFrame):
+            _decode_region_column(value)
     
 def load_model(run_id):
     run_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints")
