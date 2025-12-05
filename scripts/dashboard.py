@@ -13,16 +13,20 @@ from src.utils.utils import setup_logging, load_session_state
 from configs.data import REGION_CODE_TO_LABEL
 import datetime
 
+st.set_page_config(layout="wide")
+
 # Apply global styling for wider sidebar
 st.markdown("""
 <style>
-    .css-1d391kg, [data-testid="stSidebar"] {
-        width: 25rem !important;
-        min-width: 25rem !important;
-    }
-    .css-1d391kg > div {
-        width: 25rem !important;
-        min-width: 25rem !important;
+    @media (min-width: 769px) {
+        .css-1d391kg, [data-testid="stSidebar"] {
+            width: 25rem !important;
+            min-width: 25rem !important;
+        }
+        .css-1d391kg > div {
+            width: 25rem !important;
+            min-width: 25rem !important;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
