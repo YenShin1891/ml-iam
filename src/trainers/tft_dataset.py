@@ -55,7 +55,11 @@ def _build_union_encoders(session_state: Dict, categorical_cols: List[str], add_
 def build_datasets(session_state: Dict) -> Tuple[TimeSeriesDataSet, TimeSeriesDataSet]:
     """Build train/val TimeSeriesDataSet objects using shared template logic (encoders handle categoricals)."""
     val_data = session_state["val_data"]
-    train_dataset, _ = create_train_dataset(session_state)
+    train_dataset, config = create_train_dataset(session_state)
+    session_state["tft_target_offset"] = config.target_offset
+    session_state["tft_min_encoder_length"] = config.effective_min_encoder_length
+    session_state["tft_max_encoder_length"] = config.effective_max_encoder_length
+    session_state["tft_time_idx_column"] = config.time_idx
     val_dataset = from_train_template(train_dataset, val_data, mode="eval")
     return train_dataset, val_dataset
 
@@ -69,6 +73,9 @@ def create_train_dataset(session_state: Dict) -> Tuple[TimeSeriesDataSet, Any]:
     targets = session_state["targets"]
 
     config = TFTDatasetConfig()
+    target_offset = session_state.get("tft_target_offset")
+    if target_offset is not None:
+        config.target_offset = int(target_offset)
 
     # Build union encoders (include group ids to stabilize mapping) then inject
     categorical_cols = _ordered_categorical_cols(features)

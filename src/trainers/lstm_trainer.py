@@ -30,14 +30,15 @@ class LSTMDataset(Dataset):
         time_idx: str = "Step",
         group_ids: List[str] = None,
         sequence_length: int = 1,
+        target_offset: int = 0,
         mask_value: float = -1.0,
         scaler_X: Optional[StandardScaler] = None,
         scaler_y: Optional[StandardScaler] = None,
         fit_scalers: bool = True
     ):
         from configs.data import INDEX_COLUMNS
-
         self.sequence_length = sequence_length
+        self.target_offset = target_offset
         self.mask_value = mask_value
         self.features = features
         self.targets = targets
@@ -48,15 +49,7 @@ class LSTMDataset(Dataset):
         X = data[features].copy()
         y = data[targets].values.copy()
 
-        # Handle categorical columns first (before NaN filling)
-        from configs.data import CATEGORICAL_COLUMNS
-        categorical_cols_in_features = [col for col in CATEGORICAL_COLUMNS if col in X.columns]
-
-        # Encode categorical columns like XGB does
-        for col in categorical_cols_in_features:
-            X[col] = X[col].astype('category').cat.codes
-
-        # Handle NaN values
+        # Handle NaN values directly - let LSTM handle categorical features as-is
         X_filled = X.fillna(mask_value).astype(np.float32)
 
         # Ensure y is 2D
@@ -92,30 +85,31 @@ class LSTMDataset(Dataset):
             group_indices = group_data.index
             group_size = len(group_data)
 
-            # Create sequences within this group only
-            for i in range(group_size - sequence_length + 1):
-                # Get global indices for this group
+            # Number of possible sequences respecting target_offset
+            max_start = group_size - (sequence_length + target_offset) + 1
+            if max_start < 1:
+                # Not enough data in this group for a single sequence with given offset; skip
+                continue
+
+            for i in range(max_start):
                 start_idx = group_indices[i]
-                end_idx = group_indices[i + sequence_length - 1]
+                seq_end_idx = group_indices[i + sequence_length - 1]
+                target_idx = group_indices[i + sequence_length - 1 + target_offset]
 
-                # Find positions in scaled arrays
                 start_pos = data.index.get_loc(start_idx)
-                end_pos = data.index.get_loc(end_idx)
+                seq_end_pos = data.index.get_loc(seq_end_idx)
+                target_pos = data.index.get_loc(target_idx)
 
-                # Extract sequence from scaled data
+                # Extract sequence (historical context)
                 x_seq = self.X_scaled[start_pos:start_pos + sequence_length]
-                y_seq = self.y_scaled[end_pos]  # Predict the last item in sequence
+                # Target is offset ahead of sequence end
+                y_seq = self.y_scaled[target_pos]
 
                 # Create previous targets for teacher forcing
-                # Previous targets are the ground truth targets from the sequence
-                if start_pos > 0:
-                    # Get previous targets for the entire sequence
-                    prev_targets_seq = self.y_scaled[start_pos-1:start_pos+sequence_length-1]  # Shifted by 1
-                else:
-                    # For the first sequence, pad with zeros
-                    prev_targets_seq = np.zeros((sequence_length, self.y_scaled.shape[1]))
-                    if sequence_length > 1:
-                        prev_targets_seq[1:] = self.y_scaled[start_pos:start_pos+sequence_length-1]
+                # We want previous_targets[t] to contain the true target at the input timestep t
+                # so that during unrolling previous_targets[:, t-1] provides y_{t-1} for step t.
+                # Therefore, take the in-window targets (length == sequence_length).
+                prev_targets_seq = self.y_scaled[start_pos:start_pos + sequence_length]
 
                 # Create mask for padded values
                 mask_data = X_filled.iloc[start_pos:start_pos + sequence_length]
@@ -164,7 +158,8 @@ class LSTMModel(LightningModule):
         weight_decay: float = 0.0,
         scheduler: Optional[str] = None,
         scheduler_params: Optional[Dict] = None,
-        mask_value: float = -1.0
+        mask_value: float = -1.0,
+        target_offset: int = 1,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -176,6 +171,7 @@ class LSTMModel(LightningModule):
         self.include_previous_target = include_previous_target
         self.learning_rate = learning_rate
         self.mask_value = mask_value
+        self.target_offset = target_offset
 
         # LSTM layer - input size = exogenous (u_t) + (previous target y_{t-1} if enabled)
         lstm_input_size = exogenous_size + (output_size if include_previous_target else 0)
@@ -228,7 +224,7 @@ class LSTMModel(LightningModule):
                 mask_expanded = mask.unsqueeze(-1).expand_as(x)
                 x = x * mask_expanded
 
-            lstm_out, _ = self.lstm(x)
+            lstm_out, (hidden, cell) = self.lstm(x)
 
             if mask is not None:
                 valid_lengths = (~mask).sum(dim=1) - 1
@@ -237,7 +233,15 @@ class LSTMModel(LightningModule):
             else:
                 last_output = lstm_out[:, -1, :]
 
-            return self.dense(last_output)
+            # If forecasting offset is requested but no previous target is included,
+            # we can optionally run one extra step using repeated last exogenous only.
+            if getattr(self, "target_offset", 0) and self.target_offset > 0:
+                u_forecast = x[:, -1, :]
+                v_t = u_forecast.unsqueeze(1)
+                lstm_out2, _ = self.lstm(v_t, (hidden, cell))
+                return self.dense(lstm_out2[:, 0, :])
+            else:
+                return self.dense(last_output)
 
         # Step-by-step unrolling with teacher forcing
         hidden = None
@@ -276,8 +280,23 @@ class LSTMModel(LightningModule):
             predictions.append(current_pred)
             prev_target = current_pred  # Update for next timestep
 
-        # Return only the last prediction (or all predictions if needed)
-        return predictions[-1]  # [batch_size, output_size]
+        # Optional dedicated forecast step when predicting future offset
+        if getattr(self, "target_offset", 0) and self.target_offset > 0:
+            # Determine y_{t-1}: use last ground-truth target in context when teacher forcing is enabled
+            if teacher_forcing and previous_targets is not None:
+                y_prev = previous_targets[:, -1, :]
+            else:
+                y_prev = prev_target  # last predicted target from in-window unroll
+
+            # Exogenous at forecast time: repeat last exogenous as a simple policy
+            u_forecast = exogenous_seq[:, -1, :]
+            v_t = torch.cat([u_forecast, y_prev], dim=-1).unsqueeze(1)
+            lstm_out2, (hidden, cell) = self.lstm(v_t, (hidden, cell) if hidden is not None else None)
+            forecast_pred = self.dense(lstm_out2[:, 0, :])
+            return forecast_pred
+
+        # Return only the last in-window prediction when no offset
+        return predictions[-1]
 
     def training_step(self, batch, batch_idx):
         x, y, mask = batch['x'], batch['y'], batch['mask']
@@ -379,6 +398,7 @@ def create_lstm_datasets(
     features: List[str],
     targets: List[str],
     sequence_length: int = 1,
+    target_offset: int = 0,
     mask_value: float = -1.0
 ) -> Tuple[LSTMDataset, LSTMDataset]:
     """Create LSTM datasets for training and validation with proper group handling."""
@@ -386,6 +406,7 @@ def create_lstm_datasets(
     train_dataset = LSTMDataset(
         train_data, features, targets,
         sequence_length=sequence_length,
+        target_offset=target_offset,
         mask_value=mask_value,
         fit_scalers=True
     )
@@ -393,6 +414,7 @@ def create_lstm_datasets(
     val_dataset = LSTMDataset(
         val_data, features, targets,
         sequence_length=sequence_length,
+        target_offset=target_offset,
         mask_value=mask_value,
         scaler_X=train_dataset.scaler_X,
         scaler_y=train_dataset.scaler_y,
@@ -458,7 +480,8 @@ def create_lstm_model(
         weight_decay=config.weight_decay,
         scheduler=config.scheduler,
         scheduler_params=config.scheduler_params,
-        mask_value=config.mask_value
+        mask_value=config.mask_value,
+        target_offset=config.target_offset,
     )
 
 
@@ -601,7 +624,7 @@ def hyperparameter_search_lstm_parallel(
                 # Create datasets
                 sequence_length = params.get("sequence_length", LSTMTrainerConfig().sequence_length)
                 train_dataset, val_dataset = create_lstm_datasets(
-                    train_data, val_data, features, targets, sequence_length=sequence_length
+                    train_data, val_data, features, targets, sequence_length=sequence_length, target_offset=LSTMTrainerConfig().target_offset
                 )
 
                 # Create data loaders
@@ -767,7 +790,7 @@ def hyperparameter_search_lstm_sequential(
         # Create datasets
         sequence_length = params.get("sequence_length", LSTMTrainerConfig().sequence_length)
         train_dataset, val_dataset = create_lstm_datasets(
-            train_data, val_data, features, targets, sequence_length=sequence_length
+            train_data, val_data, features, targets, sequence_length=sequence_length, target_offset=LSTMTrainerConfig().target_offset
         )
 
         # Create data loaders
@@ -871,8 +894,12 @@ def train_final_lstm(
 
     # Create dataset with combined data
     sequence_length = best_params.get("sequence_length", LSTMTrainerConfig().sequence_length)
+    target_offset = best_params.get("target_offset", LSTMTrainerConfig().target_offset)
     combined_dataset = LSTMDataset(
-        combined_data, features, targets, sequence_length=sequence_length, fit_scalers=True
+        combined_data, features, targets,
+        sequence_length=sequence_length,
+        target_offset=target_offset,
+        fit_scalers=True
     )
 
     # Create data loader
@@ -896,7 +923,8 @@ def train_final_lstm(
         learning_rate=best_params.get("learning_rate", 0.001),
         batch_size=batch_size,
         weight_decay=best_params.get("weight_decay", 0.0),
-        sequence_length=sequence_length
+        sequence_length=sequence_length,
+        target_offset=target_offset
     )
 
     output_size = len(targets)
@@ -928,7 +956,8 @@ def train_final_lstm(
         session_state["lstm_scaler_X"] = combined_dataset.scaler_X
         session_state["lstm_scaler_y"] = combined_dataset.scaler_y
         session_state["lstm_config"] = config
-        session_state["lstm_sequence_length"] = sequence_length
+    session_state["lstm_sequence_length"] = sequence_length
+    session_state["lstm_target_offset"] = target_offset
 
 
 def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
@@ -952,6 +981,7 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
     scaler_X = session_state.get("lstm_scaler_X")
     scaler_y = session_state.get("lstm_scaler_y")
     sequence_length = session_state.get("lstm_sequence_length", LSTMTrainerConfig().sequence_length)
+    target_offset = session_state.get("lstm_target_offset", LSTMTrainerConfig().target_offset)
 
     if config is None or scaler_X is None or scaler_y is None:
         raise ValueError("LSTM config and scalers not found in session state")
@@ -965,6 +995,7 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
     test_dataset = LSTMDataset(
         test_data, features, targets,
         sequence_length=sequence_length,
+        target_offset=target_offset,
         scaler_X=scaler_X,
         scaler_y=scaler_y,
         fit_scalers=False
@@ -1014,16 +1045,12 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
         group_size = len(group_data)
         group_indices = group_data.index
 
-        # Number of valid sequences in this group
-        num_sequences = max(0, group_size - sequence_length + 1)
+        num_sequences = max(0, group_size - (sequence_length + target_offset) + 1)
 
-        # Align predictions for this group
         for i in range(num_sequences):
             if pred_idx < len(predictions_unscaled):
-                # The prediction corresponds to the last item of the sequence
-                target_row_idx = group_indices[i + sequence_length - 1]
+                target_row_idx = group_indices[i + sequence_length - 1 + target_offset]
                 data_row_idx = test_data.index.get_loc(target_row_idx)
-
                 aligned_preds[data_row_idx] = predictions_unscaled[pred_idx]
                 pred_idx += 1
 

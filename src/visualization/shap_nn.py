@@ -3,7 +3,7 @@ import os, logging, numpy as np, pandas as pd, shap, torch
 from typing import List, Optional, Dict, Iterable
 from configs.paths import RESULTS_PATH
 from configs.data import NON_FEATURE_COLUMNS, OUTPUT_UNITS
-from .helpers import make_grid, render_external_plot, build_feature_display_names
+from .helpers import make_grid, render_external_plot, build_feature_display_names, draw_shap_beeswarm, filter_by_region
 
 __all__ = [
     'get_lstm_shap_values','plot_lstm_shap','draw_lstm_all_timesteps_shap_plot','draw_temporal_shap_plot','create_timestep_comparison_plots',
@@ -454,12 +454,16 @@ def get_tft_shap_values(run_id, X_test: pd.DataFrame, max_encoder_length=12):
 
     return original_temporal_shap, averaged, X_processed, test_inputs_np, features
 
-def plot_lstm_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], targets: List[str], sequence_length=1):
+def plot_lstm_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], targets: List[str], sequence_length=1, region: Optional[str] = "World"):
     logging.info("Creating LSTM SHAP plots...")
     model_path = os.path.join(RESULTS_PATH, run_id, "final", "best.ckpt")
     if not os.path.exists(model_path):
         logging.warning("Skipping LSTM SHAP plots: model checkpoint not found at %s", model_path)
         return
+    # Optional region filter before dropping non-feature columns (robust)
+    X_test_with_index, pre_rows, post_rows, matched = filter_by_region(
+        X_test_with_index, region, log_prefix="Applied region filter"
+    )
     X_test = X_test_with_index.drop(columns=NON_FEATURE_COLUMNS, errors="ignore" ).reset_index(drop=True)
     import numpy as _np
     if X_test.shape[0] > 100:
@@ -469,12 +473,12 @@ def plot_lstm_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str],
         temporal_shap, averaged, X_proc, test_seq = get_lstm_shap_values(run_id, X_test, sequence_length)
         draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, features, targets, sequence_length, model_type="lstm")
         draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, features, targets, sequence_length, model_type="lstm", xlim_range=(-0.3, 0.5))
-        draw_temporal_shap_plot(run_id, temporal_shap, X_proc, features, targets, sequence_length, model_type="lstm")
+        draw_temporal_shap_plot(run_id, temporal_shap, pd.DataFrame(X_proc), features, targets, sequence_length, model_type="lstm")
     except Exception as e:
         logging.error("Failed to create LSTM SHAP plots: %s", e)
         logging.exception("Full error traceback:")
 
-def plot_tft_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], targets: List[str], max_encoder_length=12):
+def plot_tft_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], targets: List[str], max_encoder_length=12, region: Optional[str] = "World"):
     logging.info("Creating TFT SHAP plots...")
     model_path = os.path.join(RESULTS_PATH, run_id, "final", "best.ckpt")
     if not os.path.exists(model_path):
@@ -490,6 +494,10 @@ def plot_tft_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], 
     # Include all columns that TFT needs: features, targets, group_ids, categoricals, time_idx, and time-varying columns
     time_known = ["Year", "DeltaYears"]  # From TFT config
     required_columns = set(features + targets + config.group_ids + CATEGORICAL_COLUMNS + [config.time_idx] + time_known)
+    # Optional region filter prior to selecting available columns (robust)
+    X_test_with_index, pre_rows, post_rows, matched = filter_by_region(
+        X_test_with_index, region, log_prefix="Applied region filter"
+    )
     available_columns = [col for col in required_columns if col in X_test_with_index.columns]
     X_test = X_test_with_index[available_columns].reset_index(drop=True)
 
@@ -549,37 +557,38 @@ def draw_shap_all_timesteps_plot(run_id: str, temporal_shap_values, test_sequenc
             ax.axis('off')
             continue
         def _plot(fig_local):
+            # Flatten SHAP values across timesteps for this target
             shap_flat_parts = [temporal_shap_values[:, t, :, i] for t in range(sequence_length)]
-            shap_flat = _np.concatenate(shap_flat_parts, axis=1)
-            shap.summary_plot(
+            shap_flat = _np.concatenate(shap_flat_parts, axis=1)  # [samples, features*time]
+
+            ax_local = fig_local.add_subplot(111)
+            draw_shap_beeswarm(
+                ax_local,
                 shap_flat,
                 X_flat,
-                feature_names=display_names,
+                display_names,
                 max_display=8,
-                plot_type='violin',
-                show=False,
+                xlim_range=xlim_range,
             )
-            # Set x-axis limits to zoom into configured range if specified
-            if xlim_range is not None:
-                plt.xlim(xlim_range[0], xlim_range[1])
             fig_local.tight_layout()
         render_external_plot(ax, _plot)
         ax.set_title(f"Impact on {targets[i]} ({OUTPUT_UNITS[i]})")
 
         # Save individual plot for this target
         fig_indiv = plt.figure(figsize=(10, 8))
+        # Recompute flattened SHAP for this target
         shap_flat_parts = [temporal_shap_values[:, t, :, i] for t in range(sequence_length)]
         shap_flat = _np.concatenate(shap_flat_parts, axis=1)
-        shap.summary_plot(
+
+        ax_indiv = fig_indiv.add_subplot(111)
+        draw_shap_beeswarm(
+            ax_indiv,
             shap_flat,
             X_flat,
-            feature_names=display_names,
+            display_names,
             max_display=8,
-            plot_type='violin',
-            show=False,
+            xlim_range=xlim_range,
         )
-        if xlim_range is not None:
-            plt.xlim(xlim_range[0], xlim_range[1])
         plt.title(f"Impact on {targets[i]} ({OUTPUT_UNITS[i]})")
         plt.tight_layout()
         indiv_filename = f'{targets[i]}_match_xgb_range.png' if xlim_range is not None else f'{targets[i]}.png'
@@ -683,15 +692,21 @@ def plot_nn_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], t
     """Plot SHAP values for any supported model type (auto-detects if not specified)."""
     if model_type == "lstm":
         sequence_length = kwargs.get("sequence_length", 1)
-        temporal_shap, averaged, X_proc, test_seq = get_lstm_shap_values(run_id, X_test_with_index, sequence_length)
+        region = kwargs.get("region", "World")
+        # Apply region filter if provided (robust)
+        X_input, _, _, _ = filter_by_region(
+            X_test_with_index, region, log_prefix="Applied region filter"
+        )
+        temporal_shap, averaged, X_proc, test_seq = get_lstm_shap_values(run_id, X_input, sequence_length)
         sequence_length = test_seq.shape[1]
         draw_lstm_all_timesteps_shap_plot(run_id, temporal_shap, test_seq, features, targets, sequence_length)
-        draw_temporal_shap_plot(run_id, temporal_shap, X_proc, features, targets, sequence_length)
+        draw_temporal_shap_plot(run_id, temporal_shap, pd.DataFrame(X_proc), features, targets, sequence_length)
     elif model_type == "tft":
         max_encoder_length = kwargs.get("max_encoder_length", 12)
-        plot_tft_shap(run_id, X_test_with_index, features, targets, max_encoder_length)
+        region = kwargs.get("region", "World")
+        plot_tft_shap(run_id, X_test_with_index, features, targets, max_encoder_length, region=region)
         sequence_length = kwargs.get("sequence_length", 1)
-        plot_lstm_shap(run_id, X_test_with_index, features, targets, sequence_length)
+        plot_lstm_shap(run_id, X_test_with_index, features, targets, sequence_length, region=region)
     else:
         raise ValueError(f"Unsupported model type: {model_type}")
 

@@ -10,22 +10,24 @@ import numpy as np
 import pandas as pd
 
 from configs.models.tft import TFTTrainerConfig
-from configs.paths import RESULTS_PATH
 from .tft_trainer import predict_tft
 from .tft_dataset import from_train_template, load_dataset_template
 from .tft_model import load_tft_checkpoint, create_inference_trainer
 from .tft_utils import single_gpu_env, teardown_distributed, get_default_num_workers
 
 
-def _create_early_window_test_data(test_data: pd.DataFrame, window_length: int) -> pd.DataFrame:
+TRAJECTORY_COLS = ['Model', 'Scenario', 'Region']
+
+
+def _create_early_window_test_data(test_data: pd.DataFrame, window_length: int, time_idx_col: str) -> pd.DataFrame:
     """Filter test data to early window for each trajectory."""
     filtered_groups = []
 
     for (model, scenario), group in test_data.groupby(['Model', 'Scenario']):
-        steps = sorted(group['Step'].unique())
+        steps = sorted(group[time_idx_col].unique())
         if len(steps) >= window_length:  # Need at least window_length steps for early window
             early_steps = steps[:window_length]  # First window_length steps
-            early_group = group[group['Step'].isin(early_steps)].copy()
+            early_group = group[group[time_idx_col].isin(early_steps)].copy()
             filtered_groups.append(early_group)
 
     result = pd.concat(filtered_groups, ignore_index=True) if filtered_groups else pd.DataFrame()
@@ -48,14 +50,19 @@ def _predict_early_window(session_state: dict, run_id: str) -> Tuple[np.ndarray,
         # Load dataset template
         train_template = load_dataset_template(run_id)
 
+        # Determine time index and warm-start offset
+        raw_time_idx = getattr(train_template, "time_idx", None)
+        time_idx_col = raw_time_idx or session_state.get("tft_time_idx_column", "Step")
+        target_offset = int(session_state.get("tft_target_offset", 0) or 0)
+
         # Get window lengths from template
         max_encoder_length = getattr(train_template, 'max_encoder_length', 2)
         max_prediction_length = getattr(train_template, 'max_prediction_length', 13)
         early_window_length = max_encoder_length + max_prediction_length
 
-        # Create early window test data
+        # Create early window test data (keep early steps for encoder context)
         test_data = session_state["test_data"]
-        early_test_data = _create_early_window_test_data(test_data, early_window_length)
+        early_test_data = _create_early_window_test_data(test_data, early_window_length, time_idx_col)
 
         if len(early_test_data) == 0:
             logging.warning("No early window test data available")
@@ -188,21 +195,33 @@ def _predict_early_window(session_state: dict, run_id: str) -> Tuple[np.ndarray,
         key_cols = list(template_group_ids) + [template_time_idx]
         ref_cols = [c for c in key_cols + ['Year'] + targets if c in early_test_data.columns]
         horizon_df = idx_df[key_cols].merge(
-            early_test_data[ref_cols].drop_duplicates(key_cols),
+            early_test_data.drop_duplicates(subset=key_cols)[ref_cols],
             on=key_cols,
             how='left'
         )
+
+        if target_offset > 0 and template_time_idx in horizon_df.columns:
+            horizon_mask = horizon_df[template_time_idx] >= target_offset
+            dropped = int((~horizon_mask).sum())
+            if dropped > 0:
+                logging.info(
+                    "Warm start offset %d: early-window horizon filter removed %d rows",
+                    target_offset,
+                    dropped,
+                )
+                horizon_df = horizon_df.loc[horizon_mask].reset_index(drop=True)
+                preds_flat = preds_flat[horizon_mask.to_numpy()]
 
         logging.info(f"Early window predictions: {preds_flat.shape}, horizon_df: {horizon_df.shape}")
         return preds_flat, horizon_df
 
 
-def _create_late_window_test_data(test_data: pd.DataFrame, window_length: int, prediction_length: int) -> pd.DataFrame:
+def _create_late_window_test_data(test_data: pd.DataFrame, window_length: int, prediction_length: int, time_idx_col: str) -> pd.DataFrame:
     """Create late window test data positioned to end at each trajectory's last step."""
     filtered_groups = []
 
     for (model, scenario, region), group in test_data.groupby(['Model', 'Scenario', 'Region']):
-        steps = sorted(group['Step'].unique())
+        steps = sorted(group[time_idx_col].unique())
         if len(steps) >= window_length:
             # Position window to end at last step, but ensure we get exactly prediction_length prediction steps
             last_step = max(steps)
@@ -213,7 +232,7 @@ def _create_late_window_test_data(test_data: pd.DataFrame, window_length: int, p
             if len(late_steps) >= window_length:
                 # Take exactly window_length steps ending at last_step
                 late_steps = late_steps[-window_length:]
-                late_group = group[group['Step'].isin(late_steps)].copy()
+                late_group = group[group[time_idx_col].isin(late_steps)].copy()
                 filtered_groups.append(late_group)
 
     result = pd.concat(filtered_groups, ignore_index=True) if filtered_groups else pd.DataFrame()
@@ -230,13 +249,16 @@ def _predict_late_window(session_state: dict, run_id: str) -> tuple[np.ndarray, 
 
     # Get actual prediction length from template
     train_template = load_dataset_template(run_id)
+    raw_time_idx = getattr(train_template, "time_idx", None)
+    time_idx_col = raw_time_idx or session_state.get("tft_time_idx_column", "Step")
+    target_offset = int(session_state.get("tft_target_offset", 0) or 0)
     max_encoder_length = getattr(train_template, 'max_encoder_length', 2)
     max_prediction_length = getattr(train_template, 'max_prediction_length', 13)
-    # Use only prediction length for window - this ensures late window ends at trajectory end
-    window_length = max_prediction_length
+    # Need full encoder+decoder span so model sees proper history while window still ends at last step
+    window_length = max_encoder_length + max_prediction_length
     prediction_length = max_prediction_length
 
-    late_test_data = _create_late_window_test_data(test_data, window_length, prediction_length)
+    late_test_data = _create_late_window_test_data(test_data, window_length, prediction_length, time_idx_col)
 
     if len(late_test_data) == 0:
         logging.warning("No late window test data available")
@@ -383,10 +405,22 @@ def _predict_late_window(session_state: dict, run_id: str) -> tuple[np.ndarray, 
         key_cols = list(template_group_ids) + [template_time_idx]
         ref_cols = [c for c in key_cols + ['Year'] + targets if c in late_test_data.columns]
         horizon_df = idx_df[key_cols].merge(
-            late_test_data[ref_cols].drop_duplicates(key_cols),
+            late_test_data.drop_duplicates(subset=key_cols)[ref_cols],
             on=key_cols,
             how='left'
         )
+
+        if target_offset > 0 and template_time_idx in horizon_df.columns:
+            horizon_mask = horizon_df[template_time_idx] >= target_offset
+            dropped = int((~horizon_mask).sum())
+            if dropped > 0:
+                logging.info(
+                    "Warm start offset %d: late-window horizon filter removed %d rows",
+                    target_offset,
+                    dropped,
+                )
+                horizon_df = horizon_df.loc[horizon_mask].reset_index(drop=True)
+                preds_flat = preds_flat[horizon_mask.to_numpy()]
 
         logging.info(f"Late window predictions: {preds_flat.shape}, horizon_df: {horizon_df.shape}")
         return preds_flat, horizon_df
@@ -397,7 +431,8 @@ def _combine_predictions_weighted(
     early_horizon: pd.DataFrame,
     late_preds: np.ndarray,
     late_horizon: pd.DataFrame,
-    targets: list
+    targets: list,
+    time_idx_col: str
 ) -> Tuple[np.ndarray, pd.DataFrame]:
     """Combine early and late predictions with weighted averaging in overlap."""
 
@@ -433,7 +468,7 @@ def _combine_predictions_weighted(
     combined_data = []
 
     # Get all unique trajectories
-    trajectory_keys = ['Model', 'Scenario', 'Region']
+    trajectory_keys = TRAJECTORY_COLS
     early_trajectories = set(
         map(tuple, early_df[trajectory_keys].drop_duplicates().itertuples(index=False, name=None))
     ) if len(early_df) > 0 else set()
@@ -456,8 +491,8 @@ def _combine_predictions_weighted(
         ].copy()
 
         # Determine steps for each window
-        early_steps = set(early_group['Step'].unique()) if len(early_group) > 0 else set()
-        late_steps = set(late_group['Step'].unique()) if len(late_group) > 0 else set()
+        early_steps = set(early_group[time_idx_col].unique()) if len(early_group) > 0 else set()
+        late_steps = set(late_group[time_idx_col].unique()) if len(late_group) > 0 else set()
         overlap_steps = early_steps.intersection(late_steps)
 
         trajectory_combined = []
@@ -466,8 +501,8 @@ def _combine_predictions_weighted(
         all_steps = sorted(early_steps.union(late_steps))
 
         for step in all_steps:
-            early_row = early_group[early_group['Step'] == step]
-            late_row = late_group[late_group['Step'] == step]
+            early_row = early_group[early_group[time_idx_col] == step]
+            late_row = late_group[late_group[time_idx_col] == step]
 
             if step in overlap_steps and len(early_row) > 0 and len(late_row) > 0:
                 # Overlap region: weighted average
@@ -541,14 +576,19 @@ def predict_tft_two_window(session_state: Dict, run_id: str) -> np.ndarray:
         raise ValueError("Late window predictions failed or returned empty results")
 
     # Combine predictions with weighted averaging
+    time_idx_col = session_state.get("tft_time_idx_column", "Step")
     combined_preds, combined_horizon = _combine_predictions_weighted(
-        early_preds, early_horizon, late_preds, late_horizon, session_state["targets"]
+        early_preds, early_horizon, late_preds, late_horizon, session_state["targets"], time_idx_col
     )
 
     # Check coverage and add fallback for missing trajectories
     test_data = session_state["test_data"]
-    all_test_trajectories = set(test_data.apply(lambda x: f"{x['Model']}|{x['Scenario']}|{x['Region']}", axis=1).unique())
-    combined_trajectories = set(combined_horizon.apply(lambda x: f"{x['Model']}|{x['Scenario']}|{x['Region']}", axis=1).unique())
+    all_test_trajectories = set(
+        map(tuple, test_data[TRAJECTORY_COLS].drop_duplicates().itertuples(index=False, name=None))
+    )
+    combined_trajectories = set(
+        map(tuple, combined_horizon[TRAJECTORY_COLS].drop_duplicates().itertuples(index=False, name=None))
+    )
     missing_trajectories = all_test_trajectories - combined_trajectories
 
     logging.info(f"Two-window coverage: {len(combined_trajectories)}/{len(all_test_trajectories)} trajectories")
@@ -564,7 +604,9 @@ def predict_tft_two_window(session_state: Dict, run_id: str) -> np.ndarray:
 
             if fallback_horizon is not None and len(fallback_horizon) > 0:
                 # Get trajectories that are in fallback but not in combined
-                fallback_trajectories = set(fallback_horizon.apply(lambda x: f"{x['Model']}|{x['Scenario']}|{x['Region']}", axis=1).unique())
+                fallback_trajectories = set(
+                    map(tuple, fallback_horizon[TRAJECTORY_COLS].drop_duplicates().itertuples(index=False, name=None))
+                )
                 additional_trajectories = fallback_trajectories - combined_trajectories
 
                 if len(additional_trajectories) > 0:
@@ -572,14 +614,14 @@ def predict_tft_two_window(session_state: Dict, run_id: str) -> np.ndarray:
 
                     # Extract the missing trajectories from fallback
                     additional_rows = []
-                    for traj in additional_trajectories:
-                        model, scenario, region = traj.split('|')
+                    for model, scenario, region in additional_trajectories:
                         traj_rows = fallback_horizon[
                             (fallback_horizon['Model'] == model) &
                             (fallback_horizon['Scenario'] == scenario) &
                             (fallback_horizon['Region'] == region)
                         ]
-                        additional_rows.append(traj_rows)
+                        if len(traj_rows) > 0:
+                            additional_rows.append(traj_rows)
 
                     if additional_rows:
                         additional_df = pd.concat(additional_rows, ignore_index=True)
