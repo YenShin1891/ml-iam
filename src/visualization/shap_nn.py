@@ -2,7 +2,7 @@
 import os, logging, numpy as np, pandas as pd, shap, torch
 from typing import List, Optional, Dict, Iterable
 from configs.paths import RESULTS_PATH
-from configs.data import NON_FEATURE_COLUMNS, OUTPUT_UNITS
+from configs.data import CATEGORICAL_COLUMNS, NON_FEATURE_COLUMNS, OUTPUT_UNITS
 from .helpers import make_grid, render_external_plot, build_feature_display_names, draw_shap_beeswarm, filter_by_region
 
 __all__ = [
@@ -15,71 +15,88 @@ def _derive_tft_feature_names(
     train_template,
     session_features: Optional[List[str]],
     available_columns: Optional[Iterable[str]] = None,
+    sample_batch: Optional[dict] = None,
 ) -> List[str]:
     """Build an encoder-aligned feature list from a saved TFT dataset template."""
+
     base_features = list(session_features or [])
     available_list = list(available_columns) if available_columns is not None else None
-    available_set = set(available_list) if available_list is not None else None
-    if train_template is None:
-        if available_list is not None and not base_features:
-            return available_list
-        return base_features
 
-    try:
-        attr_names = [
-            "reals",
-            "time_varying_known_reals",
-            "time_varying_unknown_reals",
-            "static_reals",
-            "flat_categoricals",
-            "categoricals",
-        ]
-        derived_features: List[str] = []
-        for attr in attr_names:
-            values = getattr(train_template, attr, None)
-            if values:
-                derived_features.extend(list(values))
+    def _feature_count(batch: Optional[dict], key: str) -> Optional[int]:
+        if not isinstance(batch, dict):
+            return None
+        tensor = batch.get(key)
+        if tensor is None:
+            return None
+        if hasattr(tensor, "numel") and tensor.numel() == 0:
+            return 0
+        if hasattr(tensor, "shape") and len(tensor.shape) >= 3:
+            return int(tensor.shape[-1])
+        return None
 
-        if not derived_features:
-            if available_list is not None and not base_features:
-                return available_list
-            return base_features
+    cont_len = _feature_count(sample_batch, "encoder_cont")
+    cat_len = _feature_count(sample_batch, "encoder_cat")
 
-        aligned_features: List[str] = []
-        seen = set()
-        for name in derived_features:
+    def _unique(names: Iterable[str]) -> List[str]:
+        seen: set[str] = set()
+        ordered: List[str] = []
+        for name in names:
+            if name is None:
+                continue
             if name not in seen:
                 seen.add(name)
-                aligned_features.append(name)
+                ordered.append(name)
+        return ordered
 
-        if available_set is not None:
-            filtered_features = [name for name in aligned_features if name in available_set]
-            dropped = len(aligned_features) - len(filtered_features)
-            if dropped > 0:
-                logging.info(
-                    "Dropping %d template features not present in SHAP dataframe columns.",
-                    dropped,
-                )
-            if filtered_features:
-                aligned_features = filtered_features
-            elif available_list is not None:
-                logging.warning(
-                    "No template-derived features present in SHAP dataframe columns; falling back to dataframe column order."
-                )
-                aligned_features = available_list
+    cont_names: List[str] = []
+    cat_names: List[str] = []
 
-        if base_features and len(base_features) != len(aligned_features):
-            logging.info(
-                "Replacing TFT feature list from session state (len=%d) with template-derived list (len=%d) to match encoders.",
-                len(base_features),
-                len(aligned_features),
+    if train_template is not None:
+        try:
+            cont_names = _unique(getattr(train_template, "reals", []))
+        except Exception as exc:  # noqa: BLE001
+            logging.warning(
+                "Failed to derive continuous feature names from TFT template: %s",
+                exc,
             )
-        return aligned_features
-    except Exception as exc:  # noqa: BLE001
-        logging.warning("Failed to derive feature names from TFT template: %s", exc)
-        if available_list is not None and not base_features:
-            return available_list
-        return base_features
+            cont_names = []
+        try:
+            cat_names = _unique(getattr(train_template, "categoricals", []))
+        except Exception as exc:  # noqa: BLE001
+            logging.warning(
+                "Failed to derive categorical feature names from TFT template: %s",
+                exc,
+            )
+            cat_names = []
+
+    fallback_cont = [f for f in base_features if f not in CATEGORICAL_COLUMNS]
+    fallback_cat = [f for f in base_features if f in CATEGORICAL_COLUMNS]
+
+    def _coerce(names: List[str], target_len: Optional[int], fallback: List[str], prefix: str) -> List[str]:
+        if target_len is None:
+            return names
+        trimmed = list(names[: target_len])
+        if len(trimmed) > target_len:
+            trimmed = trimmed[:target_len]
+        if len(trimmed) < target_len:
+            for candidate in fallback:
+                if candidate not in trimmed:
+                    trimmed.append(candidate)
+                if len(trimmed) == target_len:
+                    break
+        while len(trimmed) < target_len:
+            trimmed.append(f"{prefix}_{len(trimmed)}")
+        return trimmed
+
+    cont_names = _coerce(cont_names, cont_len, fallback_cont, "encoder_cont")
+    cat_names = _coerce(cat_names, cat_len, fallback_cat, "encoder_cat")
+
+    derived = cont_names + cat_names
+    if derived:
+        return derived
+    if available_list:
+        return available_list
+    return base_features
 
 
 def _align_feature_names(feature_names: Optional[List[str]], feature_count: int) -> List[str]:
@@ -196,7 +213,13 @@ def get_lstm_shap_values(run_id, X_test: pd.DataFrame, sequence_length=1):
     test_sequences_np = _to_numpy(test_inputs)
     return original_temporal_shap, averaged, X_processed, test_sequences_np
 
-def get_tft_shap_values(run_id, X_test: pd.DataFrame, max_encoder_length=12):
+def get_tft_shap_values(
+    run_id,
+    X_test: pd.DataFrame,
+    max_encoder_length=12,
+    *,
+    use_cached: bool = True,
+):
     from src.trainers.tft_model import load_tft_checkpoint
     from src.trainers.tft_dataset import load_dataset_template, from_train_template
     logging.info("Loading TFT model...")
@@ -209,8 +232,28 @@ def get_tft_shap_values(run_id, X_test: pd.DataFrame, max_encoder_length=12):
 
     from src.utils.utils import load_session_state
     session_state = load_session_state(run_id)
-    features = session_state.get("features") or []
+    session_features = list(session_state.get("features") or [])
     targets = session_state.get("targets") or []
+
+    plots_dir = os.path.join(RESULTS_PATH, run_id, "plots")
+    cache_path = os.path.join(plots_dir, "tft_shap_cache.npz")
+
+    if use_cached and os.path.exists(cache_path):
+        try:
+            with np.load(cache_path, allow_pickle=True) as cached:
+                original_temporal_shap = cached["temporal_shap"]
+                averaged = cached["averaged_shap"]
+                test_inputs_np = cached["test_inputs"]
+                base_matrix = cached["base_matrix"]
+                feature_names = cached["feature_names"].tolist()
+                feature_columns = cached["feature_columns"].tolist()
+            X_processed = pd.DataFrame(base_matrix, columns=feature_columns)
+            logging.info("Loaded cached TFT SHAP data from %s", cache_path)
+            return original_temporal_shap, averaged, X_processed, test_inputs_np, feature_names
+        except Exception as exc:  # noqa: BLE001
+            logging.warning(
+                "Failed to load cached TFT SHAP data from %s: %s", cache_path, exc
+            )
 
     # Load dataset template (create if missing for older runs)
     logging.info("Loading TFT dataset template...")
@@ -243,9 +286,6 @@ def get_tft_shap_values(run_id, X_test: pd.DataFrame, max_encoder_length=12):
 
     # Create test dataset from template
     test_dataset = from_train_template(train_template, X_test_filtered, mode="eval")
-
-    # Derive feature names from dataset to ensure alignment with encoded inputs
-    features = _derive_tft_feature_names(train_template, features, X_test_filtered.columns)
 
     # Create background data (smaller subset for SHAP)
     background_size = min(200, len(X_test_filtered))
@@ -297,6 +337,14 @@ def get_tft_shap_values(run_id, X_test: pd.DataFrame, max_encoder_length=12):
     sample_loader = test_dataset.to_dataloader(train=False, batch_size=1, num_workers=0)
     sample_batch = next(iter(sample_loader))
     sample_x, _ = sample_batch
+
+    # Derive feature names from dataset and encoder structure
+    features = _derive_tft_feature_names(
+        train_template,
+        session_features,
+        available_columns=X_test_filtered.columns,
+        sample_batch=sample_x,
+    )
 
     # Calculate SHAP values for each target separately
     all_temporal_shap = []
@@ -435,9 +483,9 @@ def get_tft_shap_values(run_id, X_test: pd.DataFrame, max_encoder_length=12):
     original_temporal_shap = _np.concatenate(all_temporal_shap, axis=-1)  # [samples, time, features, targets]
     averaged = _np.concatenate(all_averaged_shap, axis=-1)  # [samples, features, targets]
 
-    os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots"), exist_ok=True)
-    _np.save(os.path.join(RESULTS_PATH, run_id, "plots", "tft_shap_values_temporal.npy"), original_temporal_shap)
-    _np.save(os.path.join(RESULTS_PATH, run_id, "plots", "tft_shap_values.npy"), averaged)
+    os.makedirs(plots_dir, exist_ok=True)
+    _np.save(os.path.join(plots_dir, "tft_shap_values_temporal.npy"), original_temporal_shap)
+    _np.save(os.path.join(plots_dir, "tft_shap_values.npy"), averaged)
 
     test_inputs_np = _to_numpy(test_inputs)
     feature_count = test_inputs_np.shape[-1] if test_inputs_np.ndim >= 2 else 0
@@ -451,6 +499,20 @@ def get_tft_shap_values(run_id, X_test: pd.DataFrame, max_encoder_length=12):
         base_matrix = test_inputs_np.reshape(test_inputs_np.shape[0], -1) if test_inputs_np.size else _np.empty((0, feature_count))
 
     X_processed = pd.DataFrame(base_matrix, columns=features)
+
+    try:
+        cache_payload = {
+            "temporal_shap": original_temporal_shap,
+            "averaged_shap": averaged,
+            "test_inputs": test_inputs_np,
+            "base_matrix": base_matrix,
+            "feature_names": np.array(features, dtype=object),
+            "feature_columns": np.array(features, dtype=object),
+        }
+        np.savez_compressed(cache_path, **cache_payload)
+        logging.info("Saved TFT SHAP cache to %s", cache_path)
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("Failed to write TFT SHAP cache to %s: %s", cache_path, exc)
 
     return original_temporal_shap, averaged, X_processed, test_inputs_np, features
 
@@ -478,7 +540,15 @@ def plot_lstm_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str],
         logging.error("Failed to create LSTM SHAP plots: %s", e)
         logging.exception("Full error traceback:")
 
-def plot_tft_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], targets: List[str], max_encoder_length=12, region: Optional[str] = "World"):
+def plot_tft_shap(
+    run_id,
+    X_test_with_index: pd.DataFrame,
+    features: List[str],
+    targets: List[str],
+    max_encoder_length=12,
+    region: Optional[str] = "World",
+    use_cached: bool = True,
+):
     logging.info("Creating TFT SHAP plots...")
     model_path = os.path.join(RESULTS_PATH, run_id, "final", "best.ckpt")
     if not os.path.exists(model_path):
@@ -519,8 +589,18 @@ def plot_tft_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], 
 
         logging.info(f"Sampled {max_sequences} complete sequences from {len(unique_groups)} available sequences")
 
+    if use_cached:
+        cache_path = os.path.join(RESULTS_PATH, run_id, "plots", "tft_shap_cache.npz")
+        if os.path.exists(cache_path):
+            logging.info("Found cached TFT SHAP data at %s; will reuse it for plotting.", cache_path)
+
     try:
-        temporal_shap, averaged, X_proc, test_seq, feature_names = get_tft_shap_values(run_id, X_test, max_encoder_length)
+        temporal_shap, averaged, X_proc, test_seq, feature_names = get_tft_shap_values(
+            run_id,
+            X_test,
+            max_encoder_length,
+            use_cached=use_cached,
+        )
         sequence_length = test_seq.shape[1]  # Get actual sequence length from TFT data
         draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, feature_names, targets, sequence_length, model_type="tft")
         draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, feature_names, targets, sequence_length, model_type="tft", xlim_range=(-0.3, 0.5))
@@ -683,7 +763,13 @@ def get_shap_values(run_id, X_test: pd.DataFrame, model_type: str = "auto", **kw
         return get_lstm_shap_values(run_id, X_test, sequence_length)
     elif model_type == "tft":
         max_encoder_length = kwargs.get("max_encoder_length", 12)
-        results = get_tft_shap_values(run_id, X_test, max_encoder_length)
+        use_cached = kwargs.get("use_cached", True)
+        results = get_tft_shap_values(
+            run_id,
+            X_test,
+            max_encoder_length,
+            use_cached=use_cached,
+        )
         return results
     else:
         raise ValueError(f"Unsupported model type: {model_type}")
@@ -704,7 +790,16 @@ def plot_nn_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], t
     elif model_type == "tft":
         max_encoder_length = kwargs.get("max_encoder_length", 12)
         region = kwargs.get("region", "World")
-        plot_tft_shap(run_id, X_test_with_index, features, targets, max_encoder_length, region=region)
+        use_cached = kwargs.get("use_cached", True)
+        plot_tft_shap(
+            run_id,
+            X_test_with_index,
+            features,
+            targets,
+            max_encoder_length,
+            region=region,
+            use_cached=use_cached,
+        )
         sequence_length = kwargs.get("sequence_length", 1)
         plot_lstm_shap(run_id, X_test_with_index, features, targets, sequence_length, region=region)
     else:
