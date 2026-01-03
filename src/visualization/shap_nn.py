@@ -152,10 +152,16 @@ def get_lstm_shap_values(run_id, X_test: pd.DataFrame, sequence_length=1):
         raise ValueError("LSTM scaler_X not found in session state")
     def preprocess_features(data, features, scaler_X, mask_value=-1.0):
         X = data[features].copy()
-        from configs.data import CATEGORICAL_COLUMNS
+        from configs.data import CATEGORICAL_COLUMNS, REGION_CATEGORIES
         cat_cols = [col for col in CATEGORICAL_COLUMNS if col in X.columns]
         for col in cat_cols:
-            X[col] = X[col].astype('category').cat.codes
+            if col == 'Region':
+                X[col] = (
+                    pd.Categorical(X[col].astype(str), categories=REGION_CATEGORIES, ordered=True)
+                    .codes
+                )
+            else:
+                X[col] = X[col].astype('category').cat.codes
         X_filled = X.fillna(mask_value).astype(np.float32)
         return scaler_X.transform(X_filled)
     def create_sequences(X_scaled, seq_len):

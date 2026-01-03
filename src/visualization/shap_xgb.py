@@ -2,7 +2,7 @@
 import os, logging, numpy as np, pandas as pd, shap, xgboost as xgb
 from typing import List, Optional, Dict
 from configs.paths import RESULTS_PATH
-from configs.data import NON_FEATURE_COLUMNS, OUTPUT_UNITS
+from configs.data import NON_FEATURE_COLUMNS, OUTPUT_UNITS, CATEGORICAL_COLUMNS, REGION_CATEGORIES
 from .helpers import make_grid, render_external_plot, build_feature_display_names, draw_shap_beeswarm
 
 __all__ = ['get_shap_values','transform_outputs_to_former_inputs','draw_shap_plot','plot_shap']
@@ -63,11 +63,16 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=F
     plt.rcParams.update({'font.size': 12})
     num_targets = len(targets)
     fig, axes = make_grid(num_targets, base_figsize=(20, 20))
-    from configs.data import CATEGORICAL_COLUMNS
     X_proc = X_test.copy()
     cat_cols = [c for c in CATEGORICAL_COLUMNS if c in X_proc.columns]
     for c in cat_cols:
-        X_proc[c] = X_proc[c].astype('category').cat.codes
+        if c == 'Region':
+            X_proc[c] = (
+                pd.Categorical(X_proc[c].astype(str), categories=REGION_CATEGORIES, ordered=True)
+                .codes
+            )
+        else:
+            X_proc[c] = X_proc[c].astype('category').cat.codes
     X_values = X_proc.values.astype(np.float64)
 
     # Create directory for individual plots

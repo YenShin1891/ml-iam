@@ -15,6 +15,7 @@ from configs.data import (
     CATEGORICAL_COLUMNS,
     MAX_YEAR,
     SPLIT_SEED,
+    REGION_CATEGORIES,
 )
 
 def split_data(
@@ -48,7 +49,14 @@ def split_data(
 def encode_categorical_columns(data, columns):
     for col in columns:
         if col in data.columns:
-            data[col] = data[col].astype('category').cat.codes
+            if col == 'Region':
+                data[col] = (
+                    pd.Categorical(data[col].astype(str), categories=REGION_CATEGORIES, ordered=True)
+                    .codes
+                    .astype('float32')
+                )
+            else:
+                data[col] = data[col].astype('category').cat.codes
     return data
 
 

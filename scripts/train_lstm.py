@@ -42,10 +42,19 @@ def process_data(dataset_version=None, lag_required=True):
     prepared, features = add_missingness_indicators(prepared, features)
 
     # Convert categorical columns to numeric codes for LSTM (for fair comparison with other models)
-    from configs.data import CATEGORICAL_COLUMNS
+    # NOTE: Region uses a deterministic global ordering to keep codes stable across runs/splits.
+    from configs.data import CATEGORICAL_COLUMNS, REGION_CATEGORIES
     for col in CATEGORICAL_COLUMNS:
-        if col in prepared.columns:
-            prepared[col] = prepared[col].astype('category').cat.codes.astype('float32')
+        if col not in prepared.columns:
+            continue
+        if col == "Region":
+            prepared[col] = (
+                pd.Categorical(prepared[col].astype(str), categories=REGION_CATEGORIES, ordered=True)
+                .codes
+                .astype("float32")
+            )
+        else:
+            prepared[col] = prepared[col].astype("category").cat.codes.astype("float32")
 
     train_data, val_data, test_data = split_data(prepared)
     train_data, val_data, test_data = impute_with_train_medians(
