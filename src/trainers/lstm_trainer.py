@@ -93,11 +93,9 @@ class LSTMDataset(Dataset):
 
             for i in range(max_start):
                 start_idx = group_indices[i]
-                seq_end_idx = group_indices[i + sequence_length - 1]
                 target_idx = group_indices[i + sequence_length - 1 + target_offset]
 
                 start_pos = data.index.get_loc(start_idx)
-                seq_end_pos = data.index.get_loc(seq_end_idx)
                 target_pos = data.index.get_loc(target_idx)
 
                 # Extract sequence (historical context)

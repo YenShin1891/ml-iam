@@ -107,6 +107,15 @@ def draw_shap_beeswarm(
     if len(feature_display_names) != shap_arr.shape[1]:
         raise ValueError("feature_display_names length must match number of columns")
 
+    # Ensure SHAP draws into the provided Axes rather than whatever
+    # happens to be current in the global pyplot state.
+    try:
+        _plt.sca(ax)
+    except Exception:
+        # If we can't set the current axes, fall back to SHAP's default
+        # behaviour (which will use the current pyplot axes).
+        pass
+
     _shap.summary_plot(
         shap_arr,
         X_arr,
@@ -115,14 +124,12 @@ def draw_shap_beeswarm(
         plot_type='dot',  # beeswarm
         show=False,
     )
-    # Reduce dot size by adjusting PathCollections on current axes
+    # Reduce dot size by adjusting PathCollections on the target axes
     try:
-        ax_obj = _plt.gca()
-        for coll in getattr(ax_obj, 'collections', []):
+        for coll in getattr(ax, 'collections', []):
             try:
                 sizes = coll.get_sizes()
                 if sizes is not None and len(sizes) > 0:
-                    import numpy as _np
                     coll.set_sizes(_np.full_like(sizes, point_size, dtype=float))
                 else:
                     coll.set_sizes([point_size])
@@ -131,7 +138,10 @@ def draw_shap_beeswarm(
     except Exception:
         pass
     if xlim_range is not None:
-        _plt.xlim(xlim_range[0], xlim_range[1])
+        try:
+            ax.set_xlim(xlim_range[0], xlim_range[1])
+        except Exception:
+            _plt.xlim(xlim_range[0], xlim_range[1])
 
 
 def filter_by_region(

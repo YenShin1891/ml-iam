@@ -2,7 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import logging
-from typing import List, Optional, cast
+from typing import List, Optional, Tuple, cast
 from sklearn.preprocessing import StandardScaler
 
 from configs.paths import DATA_PATH, RESULTS_PATH
@@ -22,7 +22,7 @@ def split_data(
     prepared: pd.DataFrame,
     test_size: float = 0.1,
     val_size: float = 0.1,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     groups = list(prepared.groupby(INDEX_COLUMNS))
     n_groups = len(groups)
     n_test_groups = int(n_groups * test_size)
