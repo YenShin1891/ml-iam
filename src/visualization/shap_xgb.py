@@ -3,7 +3,7 @@ import os, logging, numpy as np, pandas as pd, shap, xgboost as xgb
 from typing import List, Optional, Dict
 from configs.paths import RESULTS_PATH
 from configs.data import NON_FEATURE_COLUMNS, OUTPUT_UNITS, CATEGORICAL_COLUMNS, REGION_CATEGORIES
-from .helpers import make_grid, render_external_plot, build_feature_display_names, draw_shap_beeswarm
+from .helpers import make_grid, render_external_plot, build_feature_display_names, draw_shap_beeswarm, sample_scenario_groups, DEFAULT_REGION
 
 __all__ = ['get_shap_values','transform_outputs_to_former_inputs','draw_shap_plot','plot_shap']
 
@@ -154,7 +154,7 @@ def plot_xgb_shap(
     features,
     targets,
     xlim_range: Optional[tuple] = None,
-    region: Optional[str] = "World",
+    region: Optional[str] = DEFAULT_REGION,
     index_region: Optional[pd.Series] = None,
 ):
     logging.info("Creating SHAP plots...")
@@ -178,11 +178,27 @@ def plot_xgb_shap(
             logging.info("Applied raw label region filter '%s': %d -> %d rows", region, pre_rows, len(X_test_with_index))
         except Exception as e:
             logging.warning("Failed region filter using raw labels due to: %s; proceeding without filter", e)
-    X_test = X_test_with_index.drop(columns=NON_FEATURE_COLUMNS, errors="ignore").reset_index(drop=True)
-    if X_test.shape[0] > 100:
-        import numpy as np
-        indices = np.random.choice(X_test.shape[0], 100, replace=False)
-        X_test = X_test.iloc[indices]
+    # Scenario-based sampling on the full index frame (Model/Scenario as group keys)
+    X_filtered = X_test_with_index
+    group_keys, total_groups, used_groups, group_cols = sample_scenario_groups(
+        X_filtered,
+        log_prefix="XGB SHAP",
+    )
+
+    if group_cols and not group_keys.empty:
+        X_joined = X_filtered.merge(group_keys, on=group_cols, how="inner")
+    else:
+        X_joined = X_filtered
+
+    X_test = X_joined.drop(columns=NON_FEATURE_COLUMNS, errors="ignore").reset_index(drop=True)
+
+    logging.info(
+        "XGB SHAP: %d rows after region+scenario filtering (%d -> %d groups by %s)",
+        X_test.shape[0],
+        total_groups,
+        used_groups,
+        ",".join(group_cols) if group_cols else "<none>",
+    )
     get_shap_values(run_id, X_test)
     shap_values = np.load(os.path.join(RESULTS_PATH, run_id, "plots", "shap_values.npy"), allow_pickle=True)
     shap_values = transform_outputs_to_former_inputs(run_id, shap_values, targets, features)
@@ -190,5 +206,5 @@ def plot_xgb_shap(
     draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=True, xlim_range=xlim_range)
 
 # Backward-compatible alias
-def plot_shap(run_id, X_test_with_index, features, targets, xlim_range: Optional[tuple] = None, region: Optional[str] = "World", index_region: Optional[pd.Series] = None):
+def plot_shap(run_id, X_test_with_index, features, targets, xlim_range: Optional[tuple] = None, region: Optional[str] = DEFAULT_REGION, index_region: Optional[pd.Series] = None):
     return plot_xgb_shap(run_id, X_test_with_index, features, targets, xlim_range, region=region, index_region=index_region)
