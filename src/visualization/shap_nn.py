@@ -1,6 +1,6 @@
 # Neural network SHAP plotting (migrated from utils.plot_shap_nn)
 import os, logging, numpy as np, pandas as pd, shap, torch
-from typing import List, Optional, Dict, Iterable
+from typing import List, Optional, Dict, Iterable, Set
 from configs.paths import RESULTS_PATH
 from configs.data import CATEGORICAL_COLUMNS, NON_FEATURE_COLUMNS, OUTPUT_UNITS
 from .helpers import make_grid, render_external_plot, build_feature_display_names, draw_shap_beeswarm, filter_by_region, sample_scenario_groups, DEFAULT_REGION
@@ -38,7 +38,7 @@ def _derive_tft_feature_names(
     cat_len = _feature_count(sample_batch, "encoder_cat")
 
     def _unique(names: Iterable[str]) -> List[str]:
-        seen: set[str] = set()
+        seen: Set[str] = set()
         ordered: List[str] = []
         for name in names:
             if name is None:
@@ -76,8 +76,6 @@ def _derive_tft_feature_names(
         if target_len is None:
             return names
         trimmed = list(names[: target_len])
-        if len(trimmed) > target_len:
-            trimmed = trimmed[:target_len]
         if len(trimmed) < target_len:
             for candidate in fallback:
                 if candidate not in trimmed:

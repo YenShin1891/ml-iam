@@ -57,7 +57,7 @@ def transform_outputs_to_former_inputs(run_id: str, shap_values: np.ndarray, tar
     return input_only
 
 def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, model_prefix="", xlim_range: Optional[tuple] = None):
-    # Show 8 features normally, 7 when excluding the top feature
+    # Show 7 features when excluding top (exclude_top=True), 8 features otherwise
     n_display = 7 if exclude_top else 8
     import matplotlib.pyplot as plt
     plt.rcParams.update({'font.size': 12})
