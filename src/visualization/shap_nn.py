@@ -3,7 +3,7 @@ import os, logging, numpy as np, pandas as pd, shap, torch
 from typing import List, Optional, Dict, Iterable
 from configs.paths import RESULTS_PATH
 from configs.data import CATEGORICAL_COLUMNS, NON_FEATURE_COLUMNS, OUTPUT_UNITS
-from .helpers import make_grid, render_external_plot, build_feature_display_names, draw_shap_beeswarm, filter_by_region
+from .helpers import make_grid, render_external_plot, build_feature_display_names, draw_shap_beeswarm, filter_by_region, sample_scenario_groups, DEFAULT_REGION
 
 __all__ = [
     'get_lstm_shap_values','plot_lstm_shap','draw_lstm_all_timesteps_shap_plot','draw_temporal_shap_plot','create_timestep_comparison_plots',
@@ -522,21 +522,41 @@ def get_tft_shap_values(
 
     return original_temporal_shap, averaged, X_processed, test_inputs_np, features
 
-def plot_lstm_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], targets: List[str], sequence_length=1, region: Optional[str] = "World"):
+def plot_lstm_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], targets: List[str], sequence_length=1, region: Optional[str] = DEFAULT_REGION):
     logging.info("Creating LSTM SHAP plots...")
     model_path = os.path.join(RESULTS_PATH, run_id, "final", "best.ckpt")
     if not os.path.exists(model_path):
         logging.warning("Skipping LSTM SHAP plots: model checkpoint not found at %s", model_path)
         return
-    # Optional region filter before dropping non-feature columns (robust)
-    X_test_with_index, pre_rows, post_rows, matched = filter_by_region(
-        X_test_with_index, region, log_prefix="Applied region filter"
+    # Optional region filter before scenario grouping (works on index frame)
+    X_filtered, pre_rows, post_rows, matched = filter_by_region(
+        X_test_with_index,
+        region,
+        log_prefix="Applied region filter",
+        mode="prefix" if isinstance(region, str) and region.startswith(DEFAULT_REGION) else "exact",
     )
-    X_test = X_test_with_index.drop(columns=NON_FEATURE_COLUMNS, errors="ignore" ).reset_index(drop=True)
-    import numpy as _np
-    if X_test.shape[0] > 100:
-        idx = _np.random.choice(X_test.shape[0], 100, replace=False)
-        X_test = X_test.iloc[idx]
+
+    # Scenario-based sampling on the full index frame (Model/Scenario kept as indices)
+    group_keys, total_groups, used_groups, group_cols = sample_scenario_groups(
+        X_filtered,
+        log_prefix="LSTM SHAP",
+    )
+
+    if group_cols and not group_keys.empty:
+        # Inner-join to keep all rows belonging to sampled groups
+        X_joined = X_filtered.merge(group_keys, on=group_cols, how="inner")
+    else:
+        X_joined = X_filtered
+
+    X_test = X_joined.drop(columns=NON_FEATURE_COLUMNS, errors="ignore").reset_index(drop=True)
+
+    logging.info(
+        "LSTM SHAP: %d rows after region+scenario filtering (%d -> %d groups by %s)",
+        X_test.shape[0],
+        total_groups,
+        used_groups,
+        ",".join(group_cols) if group_cols else "<none>",
+    )
     try:
         temporal_shap, averaged, X_proc, test_seq = get_lstm_shap_values(run_id, X_test, sequence_length)
         draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, features, targets, sequence_length, model_type="lstm")
@@ -552,7 +572,7 @@ def plot_tft_shap(
     features: List[str],
     targets: List[str],
     max_encoder_length=12,
-    region: Optional[str] = "World",
+    region: Optional[str] = DEFAULT_REGION,
     use_cached: bool = True,
 ):
     logging.info("Creating TFT SHAP plots...")
@@ -570,30 +590,28 @@ def plot_tft_shap(
     # Include all columns that TFT needs: features, targets, group_ids, categoricals, time_idx, and time-varying columns
     time_known = ["Year", "DeltaYears"]  # From TFT config
     required_columns = set(features + targets + config.group_ids + CATEGORICAL_COLUMNS + [config.time_idx] + time_known)
-    # Optional region filter prior to selecting available columns (robust)
-    X_test_with_index, pre_rows, post_rows, matched = filter_by_region(
-        X_test_with_index, region, log_prefix="Applied region filter"
+    # Optional region filter prior to scenario sampling (robust, on index frame)
+    X_filtered, pre_rows, post_rows, matched = filter_by_region(
+        X_test_with_index,
+        region,
+        log_prefix="Applied region filter",
+        mode="prefix" if isinstance(region, str) and region.startswith(DEFAULT_REGION) else "exact",
     )
-    available_columns = [col for col in required_columns if col in X_test_with_index.columns]
-    X_test = X_test_with_index[available_columns].reset_index(drop=True)
 
-    import numpy as _np
-    # Sample complete sequences instead of random rows to preserve temporal structure
-    group_cols = ['Model', 'Scenario', 'Region']
-    unique_groups = X_test.groupby(group_cols).size()
+    # Scenario-based sampling on the filtered index frame using grouping columns
+    group_keys, total_groups, used_groups, group_cols = sample_scenario_groups(
+        X_filtered,
+        log_prefix="TFT SHAP",
+    )
 
-    # Target around 50-100 complete sequences for SHAP analysis
-    max_sequences = min(100, len(unique_groups))
-    if len(unique_groups) > max_sequences:
-        # Randomly sample complete sequences
-        sampled_groups = _np.random.choice(len(unique_groups), max_sequences, replace=False)
-        selected_group_keys = unique_groups.iloc[sampled_groups].index
+    if group_cols and not group_keys.empty:
+        X_joined = X_filtered.merge(group_keys, on=group_cols, how="inner")
+    else:
+        X_joined = X_filtered
 
-        # Filter data to include only selected sequences
-        mask = X_test.set_index(group_cols).index.isin(selected_group_keys)
-        X_test = X_test[mask].reset_index(drop=True)
-
-        logging.info(f"Sampled {max_sequences} complete sequences from {len(unique_groups)} available sequences")
+    # Now restrict to TFT-required columns and selected rows only
+    available_columns = [col for col in required_columns if col in X_joined.columns]
+    X_test = X_joined[available_columns].reset_index(drop=True)
 
     if use_cached:
         cache_path = os.path.join(RESULTS_PATH, run_id, "plots", "tft_shap_cache.npz")
@@ -784,7 +802,7 @@ def plot_nn_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], t
     """Plot SHAP values for any supported model type (auto-detects if not specified)."""
     if model_type == "lstm":
         sequence_length = kwargs.get("sequence_length", 1)
-        region = kwargs.get("region", "World")
+        region = kwargs.get("region", DEFAULT_REGION)
         # Apply region filter if provided (robust)
         X_input, _, _, _ = filter_by_region(
             X_test_with_index, region, log_prefix="Applied region filter"
@@ -795,7 +813,7 @@ def plot_nn_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], t
         draw_temporal_shap_plot(run_id, temporal_shap, pd.DataFrame(X_proc), features, targets, sequence_length)
     elif model_type == "tft":
         max_encoder_length = kwargs.get("max_encoder_length", 12)
-        region = kwargs.get("region", "World")
+        region = kwargs.get("region", DEFAULT_REGION)
         use_cached = kwargs.get("use_cached", True)
         plot_tft_shap(
             run_id,

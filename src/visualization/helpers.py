@@ -1,11 +1,16 @@
 # Shared plotting helpers (migrated from utils.plot_helpers)
 import io, math
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence, Tuple
+import logging
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from PIL import Image
 
-__all__ = ['make_grid','render_external_plot','build_feature_display_names','filter_by_region']
+__all__ = ['make_grid','render_external_plot','build_feature_display_names','filter_by_region','sample_scenario_groups']
+
+# Central visualization/SHAP configuration (single source of truth)
+DEFAULT_REGION: str = "R10"
+SHAP_MAX_SCENARIO_GROUPS: int = 300
 
 def make_grid(n_items: int, rows: Optional[int] = None, cols: Optional[int] = None, *, base_figsize=(20, 20)):
     if rows is None or cols is None:
@@ -134,14 +139,23 @@ def filter_by_region(
     region: Optional[str],
     *,
     log_prefix: str = "Applied region filter",
+    mode: str = "exact",
 ):
     """Filter a DataFrame by Region with normalization and graceful fallback.
 
-    - Trims whitespace and compares case-insensitively.
-    - If no exact matches, tries substring contains.
-    - If still no matches, returns the original DataFrame unchanged.
+    Parameters
+    ----------
+    df : DataFrame
+        Input data with a 'Region' column.
+    region : str or None
+        Region label or prefix to match.
+    log_prefix : str
+        Prefix for log messages.
+    mode : {"exact","prefix"}
+        - "exact": case-insensitive equality match (with fallback to contains).
+        - "prefix": case-insensitive "starts with" match (no contains fallback).
 
-    Returns (filtered_df, pre_rows, post_rows, matched_values)
+    Returns (filtered_df, pre_rows, post_rows, matched_values).
     """
     try:
         import pandas as _pd  # local import to avoid hard dep at module import time
@@ -157,11 +171,28 @@ def filter_by_region(
     s_lower = s.str.lower()
     target = str(region).strip().lower()
 
+    import logging as _logging
+
+    if mode == "prefix":
+        # Case-insensitive "starts with" match, aligned with dashboard region bucketing
+        prefix_mask = s_lower.str.startswith(target)
+        if prefix_mask.any():
+            filtered = df[prefix_mask]
+            matched = sorted(s[prefix_mask].unique().tolist())
+            _logging.info(
+                f"{log_prefix} prefix '{region}': {pre_rows} -> {len(filtered)} rows (prefix matches: {matched})"
+            )
+            return filtered, pre_rows, len(filtered), matched
+        _logging.warning(
+            f"{log_prefix} prefix '{region}': 0 matches in Region column; proceeding without filter"
+        )
+        return df, pre_rows, pre_rows, []
+
+    # Default: exact-then-contains behaviour
     exact_mask = (s_lower == target)
     if exact_mask.any():
         filtered = df[exact_mask]
         matched = sorted(s[exact_mask].unique().tolist())
-        import logging as _logging
         _logging.info(f"{log_prefix} '{region}': {pre_rows} -> {len(filtered)} rows (exact: {matched})")
         return filtered, pre_rows, len(filtered), matched
 
@@ -170,11 +201,72 @@ def filter_by_region(
     if contains_mask.any():
         filtered = df[contains_mask]
         matched = sorted(s[contains_mask].unique().tolist())
-        import logging as _logging
         _logging.info(f"{log_prefix} '{region}': {pre_rows} -> {len(filtered)} rows (contains: {matched})")
         return filtered, pre_rows, len(filtered), matched
 
-    import logging as _logging
     _logging.warning(f"{log_prefix} '{region}': 0 matches in Region column; proceeding without filter")
     return df, pre_rows, pre_rows, []
+
+
+def sample_scenario_groups(
+    df,
+    *,
+    group_cols: Sequence[str] = ("Model", "Scenario"),
+    max_groups: int = SHAP_MAX_SCENARIO_GROUPS,
+    log_prefix: str = "SHAP scenario sampling",
+) -> Tuple[object, int, int, List[str]]:
+    """Sample complete scenario groups for SHAP while logging totals.
+
+    Returns (group_keys_df, total_groups, used_groups, group_col_list) where
+    group_keys_df has one row per selected group and only the grouping columns.
+    If none of the group columns are present, an empty DataFrame is returned
+    and total/used groups are reported as 0.
+    """
+    try:
+        import pandas as _pd
+    except Exception:  # pragma: no cover
+        return df, 0, 0, []
+
+    if not isinstance(df, _pd.DataFrame):
+        return _pd.DataFrame(), 0, 0, []
+
+    cols = [c for c in group_cols if c in df.columns]
+    if not cols:
+        logging.info(f"{log_prefix}: no scenario grouping columns found; using row-based sample only")
+        return _pd.DataFrame(), 0, 0, []
+
+    group_sizes = df.groupby(cols).size()
+    total_groups = int(len(group_sizes))
+    if total_groups == 0:
+        logging.info(f"{log_prefix}: 0 scenario groups found (by {','.join(cols)})")
+        return _pd.DataFrame(), 0, 0, list(cols)
+
+    max_sequences = min(max_groups, total_groups)
+
+    if total_groups > max_sequences:
+        import numpy as _np
+        sampled_idx = _np.random.choice(total_groups, max_sequences, replace=False)
+        selected_group_keys = group_sizes.iloc[sampled_idx].index
+        # Build a DataFrame of unique selected group keys for joining
+        group_df = _pd.DataFrame(list(selected_group_keys), columns=cols)
+        logging.info(
+            "%s: sampled %d of %d scenario groups (by %s)",
+            log_prefix,
+            max_sequences,
+            total_groups,
+            ",".join(cols),
+        )
+        used_groups = max_sequences
+    else:
+        # All groups are kept; return all unique keys
+        group_df = df[list(cols)].drop_duplicates().reset_index(drop=True)
+        logging.info(
+            "%s: using all %d scenario groups (by %s)",
+            log_prefix,
+            total_groups,
+            ",".join(cols),
+        )
+        used_groups = total_groups
+
+    return group_df, total_groups, used_groups, list(cols)
 
