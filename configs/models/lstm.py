@@ -61,7 +61,8 @@ class LSTMTrainerConfig:
     scheduler_params: Dict[str, Any] = field(default_factory=dict)
 
     # Data processing
-    sequence_length: int = 1
+    sequence_length: int = 1  # Number of historical timesteps fed into the model
+    target_offset: int = 0  # Set 1 for warm start: reserves encoder context for future predictions (set 0 for cold start)
     mask_value: float = -1.0
 
     # Early stopping

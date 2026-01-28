@@ -11,21 +11,29 @@ from src.visualization import plot_scatter, plot_xgb_shap
 
 np.random.seed(0)
 
-def preprocessing(run_id, dataset=None):
+def preprocessing(run_id, dataset=None, lag_required=True):
+    """
+    Preprocessing for XGBoost with configurable lag requirement.
+
+    Args:
+        run_id: Run identifier
+        dataset: Dataset version to use
+        lag_required: When True, drop rows without a full history of lag features.
+    """
     data = load_and_process_data(version=dataset)
-    prepared, features, targets = prepare_features_and_targets(data)
+    prepared, features, targets = prepare_features_and_targets(data, lag_required=lag_required)
     prepared = prepared.dropna(subset=targets)
     (
         X_train, y_train, X_train_index_columns,
         X_val, y_val, X_val_index_columns,
-        X_test_with_index, y_test, 
+        X_test_with_index, y_test,
         test_data,
         x_scaler, y_scaler,
         train_groups, val_groups
     ) = prepare_data(prepared, targets, features)
     save_session_state(x_scaler, run_id, "x_scaler.pkl")
     save_session_state(y_scaler, run_id, "y_scaler.pkl")
-    
+
     return {
         "features": features,
         "targets": targets,
@@ -39,7 +47,8 @@ def preprocessing(run_id, dataset=None):
         "y_test": y_test,
         "test_data": test_data,
         "train_groups": train_groups,
-        "val_groups": val_groups
+        "val_groups": val_groups,
+        "lag_required": lag_required,
     }
 
 
@@ -120,7 +129,9 @@ def plot_xgb(session_state, run_id):
     test_data = session_state["test_data"]
 
     plot_scatter(run_id, test_data, y_test, preds, targets, model_name="XGBoost")
-    plot_xgb_shap(run_id, X_test_with_index, features, targets)
+    # Pass raw Region labels aligned to X_test rows for filtering inside SHAP plotting
+    index_region = test_data['Region'] if isinstance(test_data, pd.DataFrame) and 'Region' in test_data.columns else None
+    plot_xgb_shap(run_id, X_test_with_index, features, targets, region="World", index_region=index_region)
 
 
 def parse_arguments():
@@ -151,36 +162,55 @@ def parse_arguments():
         help="Dataset subdirectory name to use for processed_series.csv. Falls back to DEFAULT_DATASET if not specified.",
         required=False,
     )
+    parser.add_argument(
+        "--lag-required",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Require complete lag features (use --no-lag-required to allow missing lag history).",
+    )
     args = parser.parse_args()
-    
+
     # Validation: if resume is specified, run_id must be provided
     if args.resume and not args.run_id:
         parser.error("--run_id is required when --resume is specified")
-    
+
     # Validation: if resume is not specified, run_id should not be provided
     if not args.resume and args.run_id:
         parser.error("--run_id should only be specified when using --resume")
-    
-    return args.run_id, args.resume, args.note, args.skip_search, args.dataset
+
+    return args.run_id, args.resume, args.note, args.skip_search, args.dataset, args.lag_required
 
 
 def main():
-    run_id, resume, note, skip_search, dataset = parse_arguments()
+    run_id, resume, note, skip_search, dataset, lag_required_arg = parse_arguments()
 
     if resume is None:
         # Full pipeline: process -> search -> train -> test -> plot
         run_id = get_next_run_id()
         setup_logging(run_id)
-        session_state = preprocessing(run_id, dataset)
+        lag_required = True if lag_required_arg is None else lag_required_arg
+        session_state = preprocessing(run_id, dataset, lag_required)
         save_session_state(session_state, run_id)
         resume = "train" if skip_search else "search"  # Start from train step if skipping search
     else:
         setup_logging(run_id)
         session_state = load_session_state(run_id)
+        if session_state is None:
+            session_state = {}
+        if lag_required_arg is None:
+            lag_required = session_state.get("lag_required", True)
+        else:
+            lag_required = lag_required_arg
+            session_state["lag_required"] = lag_required
+            save_session_state(session_state, run_id)
 
     if note:
         session_state["note"] = note
         logging.info("Run note: %s", note)
+
+    # Log the prediction start mode
+    used_lag_required = session_state.get("lag_required", True)
+    logging.info("XGBoost lag_required: %s", used_lag_required)
 
     pipeline_steps = ["search", "train", "test", "plot"]
     step_functions = {

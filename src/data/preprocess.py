@@ -2,7 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import logging
-from typing import List, Optional
+from typing import List, Optional, Tuple, cast
 from sklearn.preprocessing import StandardScaler
 
 from configs.paths import DATA_PATH, RESULTS_PATH
@@ -15,9 +15,14 @@ from configs.data import (
     CATEGORICAL_COLUMNS,
     MAX_YEAR,
     SPLIT_SEED,
+    REGION_CATEGORIES,
 )
 
-def split_data(prepared, test_size=0.1, val_size=0.1):
+def split_data(
+    prepared: pd.DataFrame,
+    test_size: float = 0.1,
+    val_size: float = 0.1,
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     groups = list(prepared.groupby(INDEX_COLUMNS))
     n_groups = len(groups)
     n_test_groups = int(n_groups * test_size)
@@ -44,7 +49,14 @@ def split_data(prepared, test_size=0.1, val_size=0.1):
 def encode_categorical_columns(data, columns):
     for col in columns:
         if col in data.columns:
-            data[col] = data[col].astype('category').cat.codes
+            if col == 'Region':
+                data[col] = (
+                    pd.Categorical(data[col].astype(str), categories=REGION_CATEGORIES, ordered=True)
+                    .codes
+                    .astype('float32')
+                )
+            else:
+                data[col] = data[col].astype('category').cat.codes
     return data
 
 
@@ -74,8 +86,8 @@ def add_missingness_indicators(
             prepared[indicator_name] = (
                 prepared[col]
                 .isna()
-                .map({True: "1", False: "0"})
-                .astype("category")
+                .map({True: 1, False: 0})
+                .astype("float32")
             )
         if indicator_name not in updated_features:
             updated_features.append(indicator_name)
@@ -152,8 +164,8 @@ def prepare_data(prepared, targets, features):
         axis=1
     )
     
-    train_groups = train_data[INDEX_COLUMNS].astype(str).agg('_'.join, axis=1).values
-    val_groups = val_data[INDEX_COLUMNS].astype(str).agg('_'.join, axis=1).values
+    train_groups = np.asarray(train_data[INDEX_COLUMNS].astype(str).agg('_'.join, axis=1))
+    val_groups = np.asarray(val_data[INDEX_COLUMNS].astype(str).agg('_'.join, axis=1))
 
     return (
         X_train_scaled, y_train_scaled, X_train_index_columns, 
@@ -212,60 +224,121 @@ def load_and_process_data(version=None) -> pd.DataFrame:
     return var_pivoted
 
 
-def add_prev_features(group: pd.DataFrame, output_variables: list, n_lags: int = N_LAG_FEATURES) -> pd.DataFrame:
-    # Create configurable number of lagged features for output variables
-    lagged_dfs = [group]  # Start with original data
-    
+def add_prev_features(
+    group: pd.DataFrame,
+    output_variables: list,
+    n_lags: int = N_LAG_FEATURES,
+    lag_required: bool = True,
+) -> pd.DataFrame:
+    """Augment a grouped dataframe with lagged target features."""
+
+    # Ensure chronological order within each group before shifting
+    group_sorted = group.sort_values('Year')
+
+    combined_df: pd.DataFrame = group_sorted.copy()
+
     for lag in range(1, n_lags + 1):
-        lagged_df = group[output_variables].shift(lag)
-        if lag == 1:
-            lagged_df.columns = ['prev_' + col for col in lagged_df.columns]
-        else:
-            lagged_df.columns = [f'prev{lag}_' + col for col in lagged_df.columns]
-        lagged_dfs.append(lagged_df)
-    
-    # Combine original data with all lagged features, drop first n_lags rows (NaN due to shifts)
-    combined = pd.concat(lagged_dfs, axis=1).iloc[n_lags:]
-    return combined
+        shifted = pd.DataFrame(group_sorted[output_variables].shift(lag))
+        rename_map = {}
+        for col in shifted.columns:
+            prefix = 'prev_' if lag == 1 else f'prev{lag}_'
+            rename_map[col] = f"{prefix}{col}"
+        shifted = shifted.rename(columns=rename_map)
+        for col in shifted.columns:
+            combined_df[col] = shifted[col]
+
+    if lag_required:
+        # Drop the initial rows without a complete lag history
+        combined_df = cast(pd.DataFrame, combined_df.iloc[n_lags:])
+
+    return cast(pd.DataFrame, combined_df)
 
 
-def prepare_features_and_targets(data: pd.DataFrame) -> tuple:
-    logging.info("Preparing features and targets...")
+def prepare_features_and_targets(data: pd.DataFrame, lag_required: bool = True) -> tuple:
+    """
+    Prepare features and targets for XGBoost model.
+
+    Args:
+        data: Input data DataFrame
+        lag_required: When True, drop rows without a full history of lag features.
+    """
+    logging.info(
+        "Preparing features and targets for XGBoost (lag_required=%s)...",
+        lag_required,
+    )
+
     prepared = data.groupby(INDEX_COLUMNS).apply(
-        add_prev_features, output_variables = OUTPUT_VARIABLES
+        add_prev_features,
+        output_variables=OUTPUT_VARIABLES,
+        lag_required=lag_required,
     ).reset_index(drop=True)
+    prepared = cast(pd.DataFrame, prepared)
     prepared['Year'] = prepared['Year'].astype(int)
-    
+
     targets = OUTPUT_VARIABLES
     features = [col for col in prepared.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
-    
-    prepared.dropna(subset=targets, inplace=True)
-    
+
+    # Only drop rows with missing targets, not lag features
+    prepared = prepared.dropna(subset=targets)
+
+    if not lag_required:
+        missing_lag_rows = prepared[features].isna().any(axis=1).sum()
+        if missing_lag_rows:
+            logging.info(
+                "Lag requirement disabled: retained %d rows with missing lag features",
+                missing_lag_rows,
+            )
+
     return prepared, features, targets
 
 
-def prepare_features_and_targets_sequence(data: pd.DataFrame) -> tuple:
+def prepare_features_and_targets_sequence(
+    data: pd.DataFrame,
+    lag_required: bool = True,
+    min_context_length: int = 0,
+) -> tuple:
     """
     Prepare features and targets for sequence models (TFT, LSTM, etc.).
 
-    This function does NOT add lagged features as sequence models handle
-    temporal dependencies internally. It adds Step and DeltaYears for
+    Args:
+        data: Input data DataFrame
+        lag_required: When True, drop rows without a full history of lag features.
+        min_context_length: Minimum historical context required when lag features are required.
+
+    This function adds explicit lagged target features for sequence models
+    to mirror tree-based preprocessing. It also adds Step and DeltaYears for
     time series indexing.
     """
-    logging.info("Preparing features and targets for sequence models...")
-    prepared = data.copy()
-    # Do not need lagging for sequence models as they use autoregressive prediction
+    logging.info(
+        "Preparing features and targets for sequence models (lag_required=%s)...",
+        lag_required,
+    )
+
+    prepared = data.groupby(INDEX_COLUMNS).apply(
+        add_prev_features,
+        output_variables=OUTPUT_VARIABLES,
+        lag_required=lag_required,
+    ).reset_index(drop=True)
+    prepared = cast(pd.DataFrame, prepared)
     prepared['Year'] = prepared['Year'].astype(int)
 
     targets = OUTPUT_VARIABLES
     features = [col for col in prepared.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
 
-    prepared.dropna(subset=targets, inplace=True)
+    prepared = prepared.dropna(subset=targets)
+
+    if not lag_required:
+        missing_lag_rows = prepared[features].isna().any(axis=1).sum()
+        if missing_lag_rows:
+            logging.info(
+                "Lag requirement disabled: retained %d rows with missing lag features",
+                missing_lag_rows,
+            )
 
     # Make 'Step' and 'DeltaYears' after dropping NaNs
     # Step must align with group_ids used by sequence models
     group_cols = INDEX_COLUMNS
-    prepared.sort_values(group_cols + ['Year'], inplace=True)
+    prepared = prepared.sort_values(group_cols + ['Year'])
     prepared['Step'] = prepared.groupby(group_cols).cumcount().astype('int64')
 
     # Explicit gap feature: years elapsed since previous observation within each series
@@ -273,16 +346,39 @@ def prepare_features_and_targets_sequence(data: pd.DataFrame) -> tuple:
         prepared.groupby(group_cols)['Year'].diff().fillna(0).astype(int)
     )
 
+    # Filter out early steps when a minimum context is required
+    if lag_required and min_context_length > 0:
+        original_len = len(prepared)
+        prepared = prepared[prepared['Step'] >= min_context_length].copy()
+        filtered_len = len(prepared)
+        logging.info(
+            "Lag requirement enforced: filtered out %d early steps, kept %d rows with Step >= %d",
+            original_len - filtered_len,
+            filtered_len,
+            min_context_length,
+        )
+
     return prepared, features, targets
 
 
-def prepare_features_and_targets_tft(data: pd.DataFrame) -> tuple:
+def prepare_features_and_targets_tft(
+    data: pd.DataFrame,
+    lag_required: bool = True,
+    min_context_length: int = 0,
+) -> tuple:
     """
     Legacy function for TFT. Now calls prepare_features_and_targets_sequence.
     Kept for backward compatibility.
     """
-    logging.info("Preparing features and targets for TFT (using sequence preprocessing)...")
-    return prepare_features_and_targets_sequence(data)
+    logging.info(
+        "Preparing features and targets for TFT (using sequence preprocessing, lag_required=%s)...",
+        lag_required,
+    )
+    return prepare_features_and_targets_sequence(
+        data,
+        lag_required=lag_required,
+        min_context_length=min_context_length,
+    )
 
 
 def remove_rows_with_missing_outputs(X, y, X2=None):

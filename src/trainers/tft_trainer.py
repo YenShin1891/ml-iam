@@ -170,6 +170,9 @@ def train_final_tft(
     except Exception as exc:
         logging.warning("Failed to write TFT training summary: %s", exc)
 
+    if session_state is not None and "tft_time_idx_column" not in session_state:
+        session_state["tft_time_idx_column"] = getattr(train_dataset, "time_idx", "Step")
+
 
 def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
     """Make predictions following the exact original tft_trajectory_plotting logic."""
@@ -313,6 +316,32 @@ def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
             horizon_groups,
             test_group_total,
         )
+        target_offset = int(session_state.get("tft_target_offset", 0) or 0)
+        if target_offset > 0:
+            if time_idx_name in horizon_df.columns:
+                warm_mask = horizon_df[time_idx_name] >= target_offset
+                dropped = int((~warm_mask).sum())
+                if dropped > 0:
+                    logging.info(
+                        "Warm start offset %d: dropping %d horizon rows where %s < offset",
+                        target_offset,
+                        dropped,
+                        time_idx_name,
+                    )
+                    horizon_df = horizon_df.loc[warm_mask].reset_index(drop=True)
+                    preds_flat = preds_flat[warm_mask.to_numpy()]
+                    horizon_len = len(horizon_df)
+                if horizon_len == 0:
+                    logging.warning(
+                        "All TFT prediction rows filtered by warm-start offset %d.",
+                        target_offset,
+                    )
+            else:
+                logging.warning(
+                    "Warm start offset configured (%d) but index column '%s' missing in horizon_df.",
+                    target_offset,
+                    time_idx_name,
+                )
         if preds_flat.shape[0] != len(horizon_df):
             logging.error(
                 "After expansion attempt: preds_flat rows=%d, horizon_df rows=%d. First few time_idx in index_df: %s",
