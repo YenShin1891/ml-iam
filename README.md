@@ -95,9 +95,13 @@ pip install -r requirements.txt
 
 ### Step 2: Configure Paths
 
-Set default data locations by editing `configs/paths.py`.
+First, create your local paths config from the template:
 
-Open `configs/paths.py` and update the paths for:
+```bash
+cp configs/paths-template.py configs/paths.py
+```
+
+Then open `configs/paths.py` and update the paths for:
 - `RAW_DATA_PATH` – where you saved the AR6 CSVs
 - `DATA_PATH` – where you want the processed data saved
 - `RESULTS_PATH` – where you want the model outputs saved
