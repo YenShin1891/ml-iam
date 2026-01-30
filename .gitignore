@@ -180,3 +180,4 @@ processed/
 results/
 .vscode/settings.json
 CLAUDE.md
+configs/paths.py
