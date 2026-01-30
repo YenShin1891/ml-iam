@@ -1,8 +1,10 @@
-"""
-Centralized paths used across the project.
+"""Centralized paths used across the project.
+
+Edit these values to configure where raw data,
+processed data, and results are stored on your system.
 """
 
 # Directories
-RAW_DATA_PATH = "/root/ssd/kcp-yeeun/data/raw"
-DATA_PATH = "/mnt/nas3/kcp-yeeun/data/processed"
-RESULTS_PATH = "/mnt/nas3/kcp-yeeun/results"
+RAW_DATA_PATH = "/path/to/ar6/data"      # Where you saved AR6 CSVs
+DATA_PATH = "./processed"                 # Where processed data will be saved
+RESULTS_PATH = "./results"                # Where model outputs will be saved

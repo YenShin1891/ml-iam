@@ -1,0 +1,1311 @@
+﻿Scenario,Scenario_Category,Category_name
+JPC to 0.8 of asymptote,#N/A,#N/A
+JPC to asymp. with high population projection,#N/A,#N/A
+JPC to asymp. with low population projection,#N/A,#N/A
+JPC to asymptote,#N/A,#N/A
+GB 5CB,#N/A,#N/A
+GB BAU1a,#N/A,#N/A
+GB FNNB,#N/A,#N/A
+GB FOfW,#N/A,#N/A
+WAM-fast,#N/A,#N/A
+WAM-slow,#N/A,#N/A
+WEM,#N/A,#N/A
+ADVANCE_WP2_IND-450-FullTech,no-climate-assessment,no-climate-assessment
+ADVANCE_WP2_IND-Base-FullTech,no-climate-assessment,no-climate-assessment
+ADVANCE_WP2_TRA-450-FullTech,no-climate-assessment,no-climate-assessment
+ADVANCE_WP2_TRA-Base-FullTech,no-climate-assessment,no-climate-assessment
+ADVANCE_WP2_TRA-Ctax-FullTech,no-climate-assessment,no-climate-assessment
+EN_INDCi2030_1000f,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_1200,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_1200f,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_1400,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_1400f,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_1600,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_1600f,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_1800,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_1800f,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_800f,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_900f,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2100,C6,C6: limit warming to 3°C (>50%)
+EN_NPi2020_1000,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_1000f,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_1200,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_1200f,C4,C4: limit warming to 2°C (>50%)
+EN_NPi2020_1400,C4,C4: limit warming to 2°C (>50%)
+EN_NPi2020_1400f,C4,C4: limit warming to 2°C (>50%)
+EN_NPi2020_1600,C5,C5: limit warming to 2.5°C (>50%)
+EN_NPi2020_1600f,C5,C5: limit warming to 2.5°C (>50%)
+EN_NPi2020_1800,C5,C5: limit warming to 2.5°C (>50%)
+EN_NPi2020_1800f,C5,C5: limit warming to 2.5°C (>50%)
+EN_NPi2020_300f,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+EN_NPi2020_400f,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_NPi2020_500f,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_NPi2020_600,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+EN_NPi2020_600f,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_NPi2020_700,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_700f,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_800,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_800f,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_900,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_900f,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2100,C7,C7: limit warming to 4°C (>50%)
+80NPi,#N/A,#N/A
+BaU,C8,C8: exceed warming of 4°C (>=50%)
+NoCCS_80NPi,#N/A,#N/A
+NoCCS_BaU,#N/A,#N/A
+NoNuc_80NPi,#N/A,#N/A
+NoNuc_BaU,#N/A,#N/A
+CO_2Deg2020,C4,C4: limit warming to 2°C (>50%)
+CO_2Deg2030,C4,C4: limit warming to 2°C (>50%)
+CO_BAU,C7,C7: limit warming to 4°C (>50%)
+CO_Bridge,C3,C3: limit warming to 2°C (>67%)
+CO_CurPol,C7,C7: limit warming to 4°C (>50%)
+CO_GPP,C5,C5: limit warming to 2.5°C (>50%)
+CO_LowCarbon,#N/A,#N/A
+CO_NDCMCS,#N/A,#N/A
+CD-LINKS_INDC,#N/A,#N/A
+CD-LINKS_INDC2030_high,#N/A,#N/A
+CD-LINKS_INDC2030_low,#N/A,#N/A
+CD-LINKS_NPi,C7,C7: limit warming to 4°C (>50%)
+CD-LINKS_NPi2020_high,#N/A,#N/A
+CD-LINKS_NPi2020_low,#N/A,#N/A
+CD-LINKS_NPi2020_verylow,#N/A,#N/A
+EN_NP_2025_-402050,#N/A,#N/A
+EN_NP_2025_-502050,#N/A,#N/A
+EN_NP_2025_-702050,#N/A,#N/A
+EN_NP_BL,#N/A,#N/A
+EN_NP_CurPol,#N/A,#N/A
+EN_NP_UNDC,#N/A,#N/A
+BaU_H,#N/A,#N/A
+BaU_L,#N/A,#N/A
+CDLINKS-NDC,#N/A,#N/A
+CDLINKS-NDC1000,#N/A,#N/A
+CDLINKS-NDC1600,#N/A,#N/A
+CDLINKS-NPi,#N/A,#N/A
+CDLINKS-NPi1000,#N/A,#N/A
+CDLINKS-NPi1600,#N/A,#N/A
+CDLINKS-NoPOL,#N/A,#N/A
+CM_BaU,#N/A,#N/A
+CM_NDC80,#N/A,#N/A
+CM_NDCZero,#N/A,#N/A
+CM_NPiZero,#N/A,#N/A
+CO_NDC,#N/A,#N/A
+CO_NDCplus,C6,C6: limit warming to 3°C (>50%)
+EMF35JMIP_16by30+80by50_Def,#N/A,#N/A
+EMF35JMIP_26by30+70by50_Def,#N/A,#N/A
+EMF35JMIP_26by30+80by50_Def,#N/A,#N/A
+EMF35JMIP_26by30+80by50_HiImportCost,#N/A,#N/A
+EMF35JMIP_26by30+80by50_HiVREcost,#N/A,#N/A
+EMF35JMIP_26by30+80by50_HiVREpot,#N/A,#N/A
+EMF35JMIP_26by30+80by50_HighInt,#N/A,#N/A
+EMF35JMIP_26by30+80by50_LimNuc,#N/A,#N/A
+EMF35JMIP_26by30+80by50_LoDem,#N/A,#N/A
+EMF35JMIP_26by30+80by50_LoDemBld,#N/A,#N/A
+EMF35JMIP_26by30+80by50_LoDemInd,#N/A,#N/A
+EMF35JMIP_26by30+80by50_LoDemTra,#N/A,#N/A
+EMF35JMIP_26by30+80by50_LoInt,#N/A,#N/A
+EMF35JMIP_26by30+80by50_LoStorageCost,#N/A,#N/A
+EMF35JMIP_26by30+80by50_LoVREcost,#N/A,#N/A
+EMF35JMIP_26by30+80by50_LoVREpot,#N/A,#N/A
+EMF35JMIP_26by30+80by50_NoCCS,#N/A,#N/A
+EMF35JMIP_26by30+80by50_NoNuc,#N/A,#N/A
+EMF35JMIP_26by30+90by50_Def,#N/A,#N/A
+EMF35JMIP_36by30+80by50_Def,#N/A,#N/A
+EMF35JMIP_Baseline_Def,#N/A,#N/A
+EMF35JMIP_Baseline_HiImportCost,#N/A,#N/A
+EMF35JMIP_Baseline_HiVREcost,#N/A,#N/A
+EMF35JMIP_Baseline_HiVREpot,#N/A,#N/A
+EMF35JMIP_Baseline_HighInt,#N/A,#N/A
+EMF35JMIP_Baseline_LimNuc,#N/A,#N/A
+EMF35JMIP_Baseline_LoDem,#N/A,#N/A
+EMF35JMIP_Baseline_LoDemBld,#N/A,#N/A
+EMF35JMIP_Baseline_LoDemInd,#N/A,#N/A
+EMF35JMIP_Baseline_LoDemTra,#N/A,#N/A
+EMF35JMIP_Baseline_LoInt,#N/A,#N/A
+EMF35JMIP_Baseline_LoStorageCost,#N/A,#N/A
+EMF35JMIP_Baseline_LoVREcost,#N/A,#N/A
+EMF35JMIP_Baseline_LoVREpot,#N/A,#N/A
+EMF35JMIP_Baseline_NoCCS,#N/A,#N/A
+EMF35JMIP_Baseline_NoNuc,#N/A,#N/A
+EN_NP_2025_-1002050,#N/A,#N/A
+EN_NP_2025_-602050,#N/A,#N/A
+EN_NP_2025_-802050,#N/A,#N/A
+EN_NP_2025_-902050,#N/A,#N/A
+MCS_H,#N/A,#N/A
+MCS_L,#N/A,#N/A
+MCS_NoCCSNoNUC_H,#N/A,#N/A
+MCS_NoCCSNoNUC_L,#N/A,#N/A
+MCS_NoCCS_H,#N/A,#N/A
+MCS_NoCCS_L,#N/A,#N/A
+MCS_NoNUC_H,#N/A,#N/A
+MCS_NoNUC_L,#N/A,#N/A
+MILES_INDC80,#N/A,#N/A
+MILES_baseline,#N/A,#N/A
+NDC1000,#N/A,#N/A
+NDC1600,#N/A,#N/A
+NPi,#N/A,#N/A
+NPi1000,#N/A,#N/A
+NPi1600,#N/A,#N/A
+NoPOL,#N/A,#N/A
+EN_NDCUnc2030_-100pc2050,#N/A,#N/A
+EN_NDCUnc2030_-30pc2050,#N/A,#N/A
+EN_NDCUnc2030_-40pc2050,#N/A,#N/A
+EN_NDCUnc2030_-50pc2050,#N/A,#N/A
+EN_NDCUnc2030_-60pc2050,#N/A,#N/A
+EN_NDCUnc2030_-70pc2050,#N/A,#N/A
+EN_NDCUnc2030_-80pc2050,#N/A,#N/A
+EN_NDCUnc2030_-90pc2050,#N/A,#N/A
+EN_NPi,#N/A,#N/A
+NDCUnc2030_-100pc2050,#N/A,#N/A
+NDCUnc2030_-30pc2050,#N/A,#N/A
+NDCUnc2030_-40pc2050,#N/A,#N/A
+NDCUnc2030_-50pc2050,#N/A,#N/A
+NDCUnc2030_-60pc2050,#N/A,#N/A
+NDCUnc2030_-70pc2050,#N/A,#N/A
+NDCUnc2030_-80pc2050,#N/A,#N/A
+NDCUnc2030_-90pc2050,#N/A,#N/A
+Baseline,C7,C7: limit warming to 4°C (>50%)
+CM,#N/A,#N/A
+EMF35JMIP_26by30+100by50_Def,#N/A,#N/A
+EN_NP_2025_-302050,#N/A,#N/A
+EN_NP_CNDC,#N/A,#N/A
+RED1,#N/A,#N/A
+RED2,#N/A,#N/A
+RED3,#N/A,#N/A
+RED4,#N/A,#N/A
+NDCCon2030_-100pc2050,#N/A,#N/A
+NDCCon2030_-30pc2050,#N/A,#N/A
+NDCCon2030_-40pc2050,#N/A,#N/A
+NDCCon2030_-50pc2050,#N/A,#N/A
+NDCCon2030_-60pc2050,#N/A,#N/A
+NDCCon2030_-70pc2050,#N/A,#N/A
+NDCCon2030_-80pc2050,#N/A,#N/A
+NDCCon2030_-90pc2050,#N/A,#N/A
+APS_strong,#N/A,#N/A
+Advanced_tech_high,#N/A,#N/A
+Carbon_pricing,#N/A,#N/A
+Ene_Efficiency_High,#N/A,#N/A
+Mass_transit,#N/A,#N/A
+Occupancy_high,#N/A,#N/A
+SpeedHigh,#N/A,#N/A
+Sustainable development (SD),#N/A,#N/A
+PR_WWH_Electro100,#N/A,#N/A
+PR_WWH_Hydrogen100,#N/A,#N/A
+Conventional,#N/A,#N/A
+Sustainable,#N/A,#N/A
+FD,#N/A,#N/A
+SD,#N/A,#N/A
+CO_Bridge_notax,C4,C4: limit warming to 2°C (>50%)
+CO_GPP_notax,C7,C7: limit warming to 4°C (>50%)
+IEG,#N/A,#N/A
+IEG Extended ,#N/A,#N/A
+IEG_Extended,#N/A,#N/A
+IEG_Extended ,#N/A,#N/A
+SEG,#N/A,#N/A
+SEG_Extended,#N/A,#N/A
+WEG,#N/A,#N/A
+WEG Extended,#N/A,#N/A
+WEG_Extended,#N/A,#N/A
+EN_NP_2025_-102050,#N/A,#N/A
+EN_NP_2025_-202050,#N/A,#N/A
+EN_NP_2025_-252050,#N/A,#N/A
+EN_NP_2025_-752050,#N/A,#N/A
+BAU_IEO,no-climate-assessment,no-climate-assessment
+BAU_WEO,no-climate-assessment,no-climate-assessment
+IEO_NDC2C_ASIA,no-climate-assessment,no-climate-assessment
+IEO_NDC2C_EUR_CHN,no-climate-assessment,no-climate-assessment
+IEO_NDC2C_GLOBAL,no-climate-assessment,no-climate-assessment
+IEO_NDC2C_PARTIAL,no-climate-assessment,no-climate-assessment
+IEO_NDC2C_REF,no-climate-assessment,no-climate-assessment
+IEO_NDC_ASIA,no-climate-assessment,no-climate-assessment
+IEO_NDC_EUR_CHN,no-climate-assessment,no-climate-assessment
+IEO_NDC_GLOBAL,no-climate-assessment,no-climate-assessment
+IEO_NDC_PARTIAL,no-climate-assessment,no-climate-assessment
+IEO_NDC_REF,no-climate-assessment,no-climate-assessment
+IEO_NDCplus_ASIA,no-climate-assessment,no-climate-assessment
+IEO_NDCplus_EUR_CHN,no-climate-assessment,no-climate-assessment
+IEO_NDCplus_GLOBAL,no-climate-assessment,no-climate-assessment
+IEO_NDCplus_PARTIAL,no-climate-assessment,no-climate-assessment
+IEO_NDCplus_REF,no-climate-assessment,no-climate-assessment
+WEO_NDC2C_ASIA,no-climate-assessment,no-climate-assessment
+WEO_NDC2C_EUR_CHN,no-climate-assessment,no-climate-assessment
+WEO_NDC2C_GLOBAL,no-climate-assessment,no-climate-assessment
+WEO_NDC2C_PARTIAL,no-climate-assessment,no-climate-assessment
+WEO_NDC2C_REF,no-climate-assessment,no-climate-assessment
+WEO_NDC_ASIA,no-climate-assessment,no-climate-assessment
+WEO_NDC_EUR_CHN,no-climate-assessment,no-climate-assessment
+WEO_NDC_GLOBAL,no-climate-assessment,no-climate-assessment
+WEO_NDC_PARTIAL,no-climate-assessment,no-climate-assessment
+WEO_NDC_REF,no-climate-assessment,no-climate-assessment
+WEO_NDCplus_ASIA,no-climate-assessment,no-climate-assessment
+WEO_NDCplus_EUR_CHN,no-climate-assessment,no-climate-assessment
+WEO_NDCplus_GLOBAL,no-climate-assessment,no-climate-assessment
+WEO_NDCplus_PARTIAL,no-climate-assessment,no-climate-assessment
+WEO_NDCplus_REF,no-climate-assessment,no-climate-assessment
+F-NPL-25,#N/A,#N/A
+F-TPL-25,#N/A,#N/A
+EN_INDCi2030_1000,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_1000_COV_NDCp,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_1000_NDCp,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_1000f_COV_NDCp,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_1000f_NDCp,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_2000,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_2000f,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_2500,C6,C6: limit warming to 3°C (>50%)
+EN_INDCi2030_2500f,C6,C6: limit warming to 3°C (>50%)
+EN_INDCi2030_400f,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_INDCi2030_500,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_500f,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_INDCi2030_600,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_600_COV_NDCp,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_INDCi2030_600_NDCp,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_600f,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_600f_COV_NDCp,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_INDCi2030_600f_NDCp,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_INDCi2030_700,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_700f,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_800,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_900,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2100_COV_NDCp,C6,C6: limit warming to 3°C (>50%)
+EN_INDCi2100_NDCp,C6,C6: limit warming to 3°C (>50%)
+EN_NPi2020_1000_COV,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_1000f_COV,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_2000,C5,C5: limit warming to 2.5°C (>50%)
+EN_NPi2020_2000f,C5,C5: limit warming to 2.5°C (>50%)
+EN_NPi2020_2500,C6,C6: limit warming to 3°C (>50%)
+EN_NPi2020_2500f,C6,C6: limit warming to 3°C (>50%)
+EN_NPi2020_400,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+EN_NPi2020_400_lowBECCS,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_400f_lowBECCS,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_500,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_600_COV,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+EN_NPi2020_600f_COV,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_NPi2100_COV,C7,C7: limit warming to 4°C (>50%)
+20% abatement (FF&I),no-climate-assessment,no-climate-assessment
+50% abatement (FF&I),no-climate-assessment,no-climate-assessment
+BL,#N/A,#N/A
+Core baseline,no-climate-assessment,no-climate-assessment
+High CO2 price,no-climate-assessment,no-climate-assessment
+Low CO2 price,no-climate-assessment,no-climate-assessment
+OR,#N/A,#N/A
+Policy baseline,no-climate-assessment,no-climate-assessment
+BAU,C8,C8: exceed warming of 4°C (>=50%)
+CO_Baseline,#N/A,#N/A
+High Impact - 2.5th percentile,#N/A,#N/A
+High Impact - 50th percentile,#N/A,#N/A
+High Impact - 97.5th percentile,#N/A,#N/A
+Low Impact - 2.5th percentile,#N/A,#N/A
+Low Impact - 50th percentile,#N/A,#N/A
+Low Impact - 97.5th percentile,#N/A,#N/A
+Medium Impact - 2.5th percentile,#N/A,#N/A
+Medium Impact - 50th percentile,#N/A,#N/A
+Medium Impact - 97.5th percentile,#N/A,#N/A
+CD-LINKS_INDC2030_high_V3,#N/A,#N/A
+CD-LINKS_INDC2030_low_V3,#N/A,#N/A
+CD-LINKS_NPi2020_high_V3,#N/A,#N/A
+CD-LINKS_NPi2020_low_V3,#N/A,#N/A
+CD-LINKS_NPi_V3,#N/A,#N/A
+CD-LINKS_NoPOL_V3,#N/A,#N/A
+Reference Scenario,#N/A,#N/A
+Techno-economic potential scenario,#N/A,#N/A
+PR_WWH_CP,#N/A,#N/A
+BAU-T,#N/A,#N/A
+BAU-TE,#N/A,#N/A
+DDP_High,#N/A,#N/A
+MinC,#N/A,#N/A
+1.5CNow_Gradual,C3,C3: limit warming to 2°C (>67%)
+1.5CNow_OptTax,C3,C3: limit warming to 2°C (>67%)
+2CNow_Gradual,C4,C4: limit warming to 2°C (>50%)
+2CNow_OptTax,C4,C4: limit warming to 2°C (>50%)
+Paris1.5C_OptTax,C3,C3: limit warming to 2°C (>67%)
+Paris2C_Gradual,C4,C4: limit warming to 2°C (>50%)
+Paris2C_OptTax,C4,C4: limit warming to 2°C (>50%)
+ParisFlat,C6,C6: limit warming to 3°C (>50%)
+ParisForever,C7,C7: limit warming to 4°C (>50%)
+Ref,C7,C7: limit warming to 4°C (>50%)
+100% RE,#N/A,#N/A
+100% renewable primary energy,#N/A,#N/A
+central,#N/A,#N/A
+central low RE cost,#N/A,#N/A
+central low fuel price,#N/A,#N/A
+central low re cost,#N/A,#N/A
+"central, low fossil fuel price",#N/A,#N/A
+"central, low renewables cost",#N/A,#N/A
+delayed electrification,#N/A,#N/A
+low demand,#N/A,#N/A
+low land,#N/A,#N/A
+net negative,#N/A,#N/A
+reference,C8,C8: exceed warming of 4°C (>=50%)
+SSP1-26,C3,C3: limit warming to 2°C (>67%)
+SSP1-34,C5,C5: limit warming to 2.5°C (>50%)
+SSP1-45,C6,C6: limit warming to 3°C (>50%)
+SSP2-19,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SSP2-26,C3,C3: limit warming to 2°C (>67%)
+SSP2-34,C5,C5: limit warming to 2.5°C (>50%)
+SSP2-45,C6,C6: limit warming to 3°C (>50%)
+SSP2-60,C7,C7: limit warming to 4°C (>50%)
+SSP4-26,C3,C3: limit warming to 2°C (>67%)
+SSP4-34,C5,C5: limit warming to 2.5°C (>50%)
+SSP4-45,C6,C6: limit warming to 3°C (>50%)
+SSP4-60,C7,C7: limit warming to 4°C (>50%)
+SSP5-19,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP5-26,C4,C4: limit warming to 2°C (>50%)
+SSP5-34,C5,C5: limit warming to 2.5°C (>50%)
+SSP5-45,C6,C6: limit warming to 3°C (>50%)
+SSP5-60,C7,C7: limit warming to 4°C (>50%)
+"NGFS1_Current policies (Hot house world, Rep)",C7,C7: limit warming to 4°C (>50%)
+"NGFS1_Immediate 2C with CDR (Orderly, Rep)",C4,C4: limit warming to 2°C (>50%)
+NGFS2_Below 2째C,#N/A,#N/A
+NGFS2_Current Policies,C7,C7: limit warming to 4°C (>50%)
+NGFS2_Delayed Transition,C4,C4: limit warming to 2°C (>50%)
+NGFS2_Divergent Net Zero Policies,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+NGFS2_Nationally Determined Contributions (NDCs),C5,C5: limit warming to 2.5°C (>50%)
+NGFS2_Net-Zero 2050,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+R_BAU,C7,C7: limit warming to 4°C (>50%)
+R_MAC_30_n0,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+R_MAC_30_n8,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+R_MAC_35_n0,C3,C3: limit warming to 2°C (>67%)
+R_MAC_35_n8,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+R_MAC_40_n0,C3,C3: limit warming to 2°C (>67%)
+R_MAC_40_n8,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+R_MAC_45_n0,C3,C3: limit warming to 2°C (>67%)
+R_MAC_45_n8,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+R_MAC_50_n0,C3,C3: limit warming to 2°C (>67%)
+R_MAC_50_n8,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+R_MAC_55_n0,C3,C3: limit warming to 2°C (>67%)
+R_MAC_55_n8,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+R_MAC_60_n0,C3,C3: limit warming to 2°C (>67%)
+R_MAC_60_n8,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+R_MAC_65_n0,C3,C3: limit warming to 2°C (>67%)
+R_MAC_65_n8,C3,C3: limit warming to 2°C (>67%)
+R_MAC_70_n0,C4,C4: limit warming to 2°C (>50%)
+R_MAC_70_n8,C3,C3: limit warming to 2°C (>67%)
+R_MAC_75_n0,C4,C4: limit warming to 2°C (>50%)
+R_MAC_75_n8,C3,C3: limit warming to 2°C (>67%)
+R_MAC_80_n0,C4,C4: limit warming to 2°C (>50%)
+R_MAC_80_n8,C4,C4: limit warming to 2°C (>50%)
+R_MAC_85_n0,C5,C5: limit warming to 2.5°C (>50%)
+R_MAC_85_n8,C4,C4: limit warming to 2°C (>50%)
+R_MAC_90_n0,C5,C5: limit warming to 2.5°C (>50%)
+R_MAC_90_n8,C4,C4: limit warming to 2°C (>50%)
+R_MAC_95_n0,C5,C5: limit warming to 2.5°C (>50%)
+R_MAC_95_n8,C4,C4: limit warming to 2°C (>50%)
+R_MAC_99_n0,C5,C5: limit warming to 2.5°C (>50%)
+R_MAC_99_n8,C5,C5: limit warming to 2.5°C (>50%)
+SSP1-DACCS-1p9-3pctHR,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SSP1-DACCS-2p6-3pctHR,C4,C4: limit warming to 2°C (>50%)
+SSP1-highcostDACCS-2p6-3pctHR,C3,C3: limit warming to 2°C (>67%)
+SSP1-lowcostDACCS-2p6-3pctHR,C4,C4: limit warming to 2°C (>50%)
+SSP1-noDACCS-1p9-3pctHR,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SSP1-noDACCS-2p6-3pctHR,C4,C4: limit warming to 2°C (>50%)
+SSP2-DACCS-2p6-3pctHR,C5,C5: limit warming to 2.5°C (>50%)
+SSP2-noDACCS-2p6-3pctHR,C4,C4: limit warming to 2°C (>50%)
+SSP4-DACCS-1p9-3pctHR,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP4-DACCS-2p6-3pctHR,C4,C4: limit warming to 2°C (>50%)
+SSP4-highcostDACCS-2p6-3pctHR,C3,C3: limit warming to 2°C (>67%)
+SSP4-medcostDACCS-2p6-3pctHR,C4,C4: limit warming to 2°C (>50%)
+SSP4-noDACCS-1p9-3pctHR,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SSP4-noDACCS-2p6-3pctHR,C3,C3: limit warming to 2°C (>67%)
+SSP5-DACCS-1p9-3pctHR,C5,C5: limit warming to 2.5°C (>50%)
+SSP5-DACCS-2p6-3pctHR,C5,C5: limit warming to 2.5°C (>50%)
+SSP5-noDACCS-2p6-3pctHR,C5,C5: limit warming to 2.5°C (>50%)
+SSP_SSP1,no-climate-assessment,no-climate-assessment
+SSP_SSP2,C3,C3: limit warming to 2°C (>67%)
+SSP_SSP3,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP_SSP4,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP_SSP5,C3,C3: limit warming to 2°C (>67%)
+CD-LINKS_NoPOL,#N/A,#N/A
+GCAM_1.5C_high_os_high-cost-DAC,no-climate-assessment,no-climate-assessment
+GCAM_1.5C_high_os_low-cost-DAC,no-climate-assessment,no-climate-assessment
+GCAM_1.5C_low_os_high-cost-DAC,no-climate-assessment,no-climate-assessment
+GCAM_1.5C_low_os_low-cost-DAC,no-climate-assessment,no-climate-assessment
+GCAM_1.5C_low_os_noDAC,no-climate-assessment,no-climate-assessment
+CD-LINKS_INDCi,C7,C7: limit warming to 4°C (>50%)
+CD-LINKS_INDCi_recGenTaxation,no-climate-assessment,no-climate-assessment
+CD-LINKS_INDCi_recSocialSecurity,no-climate-assessment,no-climate-assessment
+CD-LINKS_NPi2020_1000,C3,C3: limit warming to 2°C (>67%)
+CD-LINKS_NPi2020_1000_recGenTaxation,no-climate-assessment,no-climate-assessment
+CD-LINKS_NPi2020_1000_recSocialSecurity,no-climate-assessment,no-climate-assessment
+CD-LINKS_NPi2020_1600,C5,C5: limit warming to 2.5°C (>50%)
+CD-LINKS_NPi2020_400,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+CD-LINKS_NPi2020_400_recGenTaxation,no-climate-assessment,no-climate-assessment
+CD-LINKS_NPi2020_400_recSocialSecurity,no-climate-assessment,no-climate-assessment
+EN_INDCi2030_1000_COV,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_1000f_COV,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_600f_COV,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_INDCi2100_COV,C6,C6: limit warming to 3°C (>50%)
+CSH,no-climate-assessment,no-climate-assessment
+PCSH,no-climate-assessment,no-climate-assessment
+PR_Baseline,C7,C7: limit warming to 4°C (>50%)
+PR_CP_Intensity,no-climate-assessment,no-climate-assessment
+PR_CP_Price,no-climate-assessment,no-climate-assessment
+PR_CP_PriceOnly,C7,C7: limit warming to 4°C (>50%)
+PR_CurPol_EI,#N/A,#N/A
+PR_NDC_EI,#N/A,#N/A
+PR_NDC_Intensity,no-climate-assessment,no-climate-assessment
+PR_NDC_Price,no-climate-assessment,no-climate-assessment
+R,no-climate-assessment,no-climate-assessment
+SH,no-climate-assessment,no-climate-assessment
+10TPC,#N/A,#N/A
+10TPC_etsDiff,#N/A,#N/A
+10TPC_etsUni,#N/A,#N/A
+15TPC,#N/A,#N/A
+15TPC_etsDiff,#N/A,#N/A
+15TPC_etsUni,#N/A,#N/A
+Directed Transition 1.0,#N/A,#N/A
+Gradual Development 1.0,#N/A,#N/A
+Societal Commitment 1.0,#N/A,#N/A
+Techno-Friendly 1.0,#N/A,#N/A
+Ambitious 1.0,#N/A,#N/A
+Limited Effort 1.0,#N/A,#N/A
+Paris Agreement 1.0,#N/A,#N/A
+100% Renewable 1.0,#N/A,#N/A
+BAU 1.0,#N/A,#N/A
+Climate Goals 1.0,#N/A,#N/A
+National Targets 1.0,#N/A,#N/A
+SSP1RCP2.6,no-climate-assessment,no-climate-assessment
+SSP1REF,no-climate-assessment,no-climate-assessment
+SSP2RCP2.6,no-climate-assessment,no-climate-assessment
+SSP2RCP4.5,no-climate-assessment,no-climate-assessment
+SSP2REF,no-climate-assessment,no-climate-assessment
+SSP3RCP2.6,no-climate-assessment,no-climate-assessment
+SSP3RCP4.5,no-climate-assessment,no-climate-assessment
+SSP3REF,no-climate-assessment,no-climate-assessment
+SSP4RCP2.6,no-climate-assessment,no-climate-assessment
+SSP4RCP4.5,no-climate-assessment,no-climate-assessment
+SSP4REF,no-climate-assessment,no-climate-assessment
+SSP5RCP2.6,no-climate-assessment,no-climate-assessment
+SSP5RCP4.5,no-climate-assessment,no-climate-assessment
+SSP5REF,no-climate-assessment,no-climate-assessment
+ICE Policy Potential,no-climate-assessment,no-climate-assessment
+ICE+EV Policy Potential (AGIS),no-climate-assessment,no-climate-assessment
+ICE+EV Policy Potential (MGIS),no-climate-assessment,no-climate-assessment
+With Currently Adopted Policies,no-climate-assessment,no-climate-assessment
+Deep,no-climate-assessment,no-climate-assessment
+Moderate,no-climate-assessment,no-climate-assessment
+PR_NDC_PriceOnly,C6,C6: limit warming to 3°C (>50%)
+SSP1,no-climate-assessment,no-climate-assessment
+SSP2,no-climate-assessment,no-climate-assessment
+SSP3,no-climate-assessment,no-climate-assessment
+SSP4,no-climate-assessment,no-climate-assessment
+SSP5,no-climate-assessment,no-climate-assessment
+ADVANCE_2020_1.5C-2100_WP6,no-climate-assessment,no-climate-assessment
+ADVANCE_2020_Med2C_WP6,no-climate-assessment,no-climate-assessment
+ADVANCE_2020_WB2C_WP6,no-climate-assessment,no-climate-assessment
+ADVANCE_2030_Med2C_WP6,no-climate-assessment,no-climate-assessment
+ADVANCE_2030_Price1.5C_WP6,no-climate-assessment,no-climate-assessment
+ADVANCE_2030_WB2C_WP6,no-climate-assessment,no-climate-assessment
+ADVANCE_INDC_WP6,no-climate-assessment,no-climate-assessment
+ADVANCE_NoPolicy_WP6,no-climate-assessment,no-climate-assessment
+ADVANCE_Reference_WP6,no-climate-assessment,no-climate-assessment
+SSP1_NoPolicy_TranspBase,no-climate-assessment,no-climate-assessment
+SSP1_NoPolicy_TranspOpt,no-climate-assessment,no-climate-assessment
+SSP1_RCP34_TranspBase,no-climate-assessment,no-climate-assessment
+SSP1_RCP34_TranspOpt,no-climate-assessment,no-climate-assessment
+SSP1_RCP45_TranspBase,no-climate-assessment,no-climate-assessment
+SSP1_RCP45_TranspOpt,no-climate-assessment,no-climate-assessment
+SSP3_NoPolicy_TranspBase,no-climate-assessment,no-climate-assessment
+SSP3_NoPolicy_TranspOpt,no-climate-assessment,no-climate-assessment
+SSP3_NoPolicy_Transp_111,no-climate-assessment,no-climate-assessment
+SSP3_NoPolicy_Transp_112,no-climate-assessment,no-climate-assessment
+SSP3_NoPolicy_Transp_121,no-climate-assessment,no-climate-assessment
+SSP3_NoPolicy_Transp_211,no-climate-assessment,no-climate-assessment
+SSP3_NoPolicy_Transp_222,no-climate-assessment,no-climate-assessment
+SSP3_RCP26_Transp_111,no-climate-assessment,no-climate-assessment
+SSP3_RCP26_Transp_112,no-climate-assessment,no-climate-assessment
+SSP3_RCP26_Transp_121,no-climate-assessment,no-climate-assessment
+SSP3_RCP26_Transp_211,no-climate-assessment,no-climate-assessment
+SSP3_RCP26_Transp_222,no-climate-assessment,no-climate-assessment
+SSP3_RCP34_TranspBase,no-climate-assessment,no-climate-assessment
+SSP3_RCP34_TranspOpt,no-climate-assessment,no-climate-assessment
+SSP3_RCP34_Transp_111,no-climate-assessment,no-climate-assessment
+SSP3_RCP34_Transp_112,no-climate-assessment,no-climate-assessment
+SSP3_RCP34_Transp_121,no-climate-assessment,no-climate-assessment
+SSP3_RCP34_Transp_211,no-climate-assessment,no-climate-assessment
+SSP3_RCP34_Transp_222,no-climate-assessment,no-climate-assessment
+SSP3_RCP45_TranspBase,no-climate-assessment,no-climate-assessment
+SSP3_RCP45_TranspOpt,no-climate-assessment,no-climate-assessment
+SSP3_RCP45_Transp_111,no-climate-assessment,no-climate-assessment
+SSP3_RCP45_Transp_112,no-climate-assessment,no-climate-assessment
+SSP3_RCP45_Transp_121,no-climate-assessment,no-climate-assessment
+SSP3_RCP45_Transp_211,no-climate-assessment,no-climate-assessment
+SSP3_RCP45_Transp_222,no-climate-assessment,no-climate-assessment
+base_DemandHigh_FossilHigh_TechHigh,no-climate-assessment,no-climate-assessment
+base_DemandHigh_FossilLow_TechHigh,no-climate-assessment,no-climate-assessment
+base_DemandHigh_FossilLow_TechLow,no-climate-assessment,no-climate-assessment
+base_DemandLow_FossilHigh_TechHigh,no-climate-assessment,no-climate-assessment
+base_DemandLow_FossilHigh_TechLow,no-climate-assessment,no-climate-assessment
+base_DemandLow_FossilLow_TechHigh,no-climate-assessment,no-climate-assessment
+base_DemandLow_FossilLow_TechLow,no-climate-assessment,no-climate-assessment
+peak2016_DemandHigh_FossilHigh_TechHigh,no-climate-assessment,no-climate-assessment
+peak2016_DemandHigh_FossilLow_TechHigh,no-climate-assessment,no-climate-assessment
+peak2016_DemandHigh_FossilLow_TechLow,no-climate-assessment,no-climate-assessment
+peak2016_DemandLow_FossilHigh_TechHigh,no-climate-assessment,no-climate-assessment
+peak2016_DemandLow_FossilHigh_TechLow,no-climate-assessment,no-climate-assessment
+peak2016_DemandLow_FossilLow_TechHigh,no-climate-assessment,no-climate-assessment
+peak2016_DemandLow_FossilLow_TechLow,no-climate-assessment,no-climate-assessment
+peak2020_DemandHigh_FossilHigh_TechHigh,no-climate-assessment,no-climate-assessment
+peak2020_DemandHigh_FossilLow_TechHigh,no-climate-assessment,no-climate-assessment
+peak2020_DemandHigh_FossilLow_TechLow,no-climate-assessment,no-climate-assessment
+peak2020_DemandLow_FossilHigh_TechHigh,no-climate-assessment,no-climate-assessment
+peak2020_DemandLow_FossilHigh_TechLow,no-climate-assessment,no-climate-assessment
+peak2020_DemandLow_FossilLow_TechHigh,no-climate-assessment,no-climate-assessment
+peak2020_DemandLow_FossilLow_TechLow,no-climate-assessment,no-climate-assessment
+peak2025_DemandHigh_FossilHigh_TechHigh,no-climate-assessment,no-climate-assessment
+peak2025_DemandHigh_FossilLow_TechHigh,no-climate-assessment,no-climate-assessment
+peak2025_DemandHigh_FossilLow_TechLow,no-climate-assessment,no-climate-assessment
+peak2025_DemandLow_FossilHigh_TechHigh,no-climate-assessment,no-climate-assessment
+peak2025_DemandLow_FossilHigh_TechLow,no-climate-assessment,no-climate-assessment
+peak2025_DemandLow_FossilLow_TechHigh,no-climate-assessment,no-climate-assessment
+DD1,#N/A,#N/A
+DD2,#N/A,#N/A
+NDC,no-climate-assessment,no-climate-assessment
+1.5C,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+GPS,#N/A,#N/A
+MA1T,#N/A,#N/A
+MA2T,#N/A,#N/A
+Reference,C8,C8: exceed warming of 4°C (>=50%)
+EMF33_Baseline,C7,C7: limit warming to 4°C (>50%)
+EMF33_tax_hi_none,C5,C5: limit warming to 2.5°C (>50%)
+EMF33_tax_lo_none,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_3000,C6,C6: limit warming to 3°C (>50%)
+EN_INDCi2030_3000f,C6,C6: limit warming to 3°C (>50%)
+EN_NPi2020_3000,C6,C6: limit warming to 3°C (>50%)
+EN_NPi2020_3000f,C6,C6: limit warming to 3°C (>50%)
+EN_NoPolicy,C7,C7: limit warming to 4°C (>50%)
+SSP1-baseline,C7,C7: limit warming to 4°C (>50%)
+SSP1_SPA1_19I_D,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP1_SPA1_19I_D_LB,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SSP1_SPA1_19I_LI,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP1_SPA1_19I_LIRE,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP1_SPA1_19I_LIRE_LB,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SSP1_SPA1_19I_RE,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP1_SPA1_19I_RE_LB,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SSP1_SPA1_26I_D,C3,C3: limit warming to 2°C (>67%)
+SSP1_SPA1_26I_LI,C3,C3: limit warming to 2°C (>67%)
+SSP1_SPA1_26I_LIRE,C3,C3: limit warming to 2°C (>67%)
+SSP1_SPA1_26I_RE,C3,C3: limit warming to 2°C (>67%)
+SSP1_SPA1_34I_D,C5,C5: limit warming to 2.5°C (>50%)
+SSP1_SPA1_34I_LI,C5,C5: limit warming to 2.5°C (>50%)
+SSP1_SPA1_34I_LIRE,C5,C5: limit warming to 2.5°C (>50%)
+SSP1_SPA1_34I_RE,C5,C5: limit warming to 2.5°C (>50%)
+SSP2-baseline,C7,C7: limit warming to 4°C (>50%)
+SSP2_SPA0_26I_D,C3,C3: limit warming to 2°C (>67%)
+SSP2_SPA1_19I_D_LB,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SSP2_SPA1_19I_LIRE_LB,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SSP2_SPA1_19I_RE_LB,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SSP2_SPA2_19I_D,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP2_SPA2_19I_LI,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SSP2_SPA2_19I_LIRE,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP2_SPA2_19I_RE,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP2_SPA2_26I_D,C3,C3: limit warming to 2°C (>67%)
+SSP2_SPA2_26I_LI,C3,C3: limit warming to 2°C (>67%)
+SSP2_SPA2_26I_LIRE,C3,C3: limit warming to 2°C (>67%)
+SSP2_SPA2_26I_RE,C3,C3: limit warming to 2°C (>67%)
+SSP2_SPA2_34I_D,C5,C5: limit warming to 2.5°C (>50%)
+SSP2_SPA2_34I_LI,C5,C5: limit warming to 2.5°C (>50%)
+SSP2_SPA2_34I_LIRE,C5,C5: limit warming to 2.5°C (>50%)
+SSP2_SPA2_34I_RE,C5,C5: limit warming to 2.5°C (>50%)
+SSP2_SPA2_45I_D,C6,C6: limit warming to 3°C (>50%)
+SSP2_SPA2_45I_LI,C6,C6: limit warming to 3°C (>50%)
+SSP2_SPA2_45I_LIRE,C6,C6: limit warming to 3°C (>50%)
+SSP2_SPA2_45I_RE,C6,C6: limit warming to 3°C (>50%)
+SSP3-baseline,C8,C8: exceed warming of 4°C (>=50%)
+SSP4-baseline,C7,C7: limit warming to 4°C (>50%)
+SSP5-baseline,C8,C8: exceed warming of 4°C (>=50%)
+CO_1.5Deg2020,#N/A,#N/A
+CO_1.5Deg2030,#N/A,#N/A
+EN_NP_2025_-652050,#N/A,#N/A
+directed_vision_181015,#N/A,#N/A
+diversification_180904,#N/A,#N/A
+localization_181015,#N/A,#N/A
+national_champions_181011,#N/A,#N/A
+reference_181031,#N/A,#N/A
+Hydrogen_Economy_T95,#N/A,#N/A
+LCEO Baseline,#N/A,#N/A
+LCEO Diversified,#N/A,#N/A
+LCEO ProRES SET Plan,#N/A,#N/A
+LCEO Zero Carbon,#N/A,#N/A
+Open_Baseline,#N/A,#N/A
+Open_Zero_Carbon,#N/A,#N/A
+Open_Zero_Carbon_HighCCS,#N/A,#N/A
+Low-Oil-Price,#N/A,#N/A
+Reformed,#N/A,#N/A
+BPS-Kazakhstan-Energy,#N/A,#N/A
+CO_CD-LINKS-INDC2030_low_V4,#N/A,#N/A
+CO_CD-LINKS-INDC_V4,#N/A,#N/A
+SSP2_RCP2.6,no-climate-assessment,no-climate-assessment
+SSP2_RCP2.6+PeatProt,no-climate-assessment,no-climate-assessment
+SSP2_RCP2.6+PeatRestor,no-climate-assessment,no-climate-assessment
+CO_NDC_2050convergence,C6,C6: limit warming to 3°C (>50%)
+EN_INDCi2030_1200_COV,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_1200_COV_NDCp,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_1200_NDCp,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_1200f_COV,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_1200f_COV_NDCp,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_1200f_NDCp,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_1400_COV,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_1400_COV_NDCp,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_1400_NDCp,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_1400f_COV,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_1400f_COV_NDCp,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_1400f_NDCp,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_1600_COV,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_1600_COV_NDCp,C4,C4: limit warming to 2°C (>50%)
+EN_INDCi2030_1600_NDCp,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_1600f_COV,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_1600f_COV_NDCp,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_1600f_NDCp,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_1800_COV,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_1800_COV_NDCp,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_1800_NDCp,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_1800f_COV,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_1800f_COV_NDCp,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_1800f_NDCp,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_2000_COV,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_2000_COV_NDCp,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_2000_NDCp,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_2000f_COV,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_2000f_COV_NDCp,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_2000f_NDCp,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_2500_COV,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_2500_COV_NDCp,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_2500_NDCp,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_2500f_COV,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_2500f_COV_NDCp,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_2500f_NDCp,C5,C5: limit warming to 2.5°C (>50%)
+EN_INDCi2030_3000_COV,C6,C6: limit warming to 3°C (>50%)
+EN_INDCi2030_3000_COV_NDCp,C6,C6: limit warming to 3°C (>50%)
+EN_INDCi2030_3000_NDCp,C6,C6: limit warming to 3°C (>50%)
+EN_INDCi2030_3000f_COV,C6,C6: limit warming to 3°C (>50%)
+EN_INDCi2030_3000f_COV_NDCp,C6,C6: limit warming to 3°C (>50%)
+EN_INDCi2030_3000f_NDCp,C6,C6: limit warming to 3°C (>50%)
+EN_INDCi2030_700f_COV,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_INDCi2030_700f_COV_NDCp,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_INDCi2030_700f_NDCp,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_INDCi2030_800f_COV,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_800f_COV_NDCp,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_800f_NDCp,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_900f_COV,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_900f_COV_NDCp,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_900f_NDCp,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_950_COV,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_950_COV_NDCp,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_950f_COV,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_950f_COV_NDCp,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_1000_DR10p,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_1000_DR1p,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_1000_DR2p,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_1000_DR3p,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_1000_DR4p,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_1000f_DR10p,C4,C4: limit warming to 2°C (>50%)
+EN_NPi2020_1000f_DR1p,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_1000f_DR2p,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_1000f_DR3p,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_1000f_DR4p,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_1200_COV,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_1200f_COV,C4,C4: limit warming to 2°C (>50%)
+EN_NPi2020_1400_COV,C4,C4: limit warming to 2°C (>50%)
+EN_NPi2020_1400f_COV,C4,C4: limit warming to 2°C (>50%)
+EN_NPi2020_1600_COV,C4,C4: limit warming to 2°C (>50%)
+EN_NPi2020_1600f_COV,C4,C4: limit warming to 2°C (>50%)
+EN_NPi2020_1800_COV,C5,C5: limit warming to 2.5°C (>50%)
+EN_NPi2020_1800f_COV,C5,C5: limit warming to 2.5°C (>50%)
+EN_NPi2020_2000_COV,C5,C5: limit warming to 2.5°C (>50%)
+EN_NPi2020_2000f_COV,C5,C5: limit warming to 2.5°C (>50%)
+EN_NPi2020_200f,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_NPi2020_2500_COV,C5,C5: limit warming to 2.5°C (>50%)
+EN_NPi2020_2500f_COV,C5,C5: limit warming to 2.5°C (>50%)
+EN_NPi2020_3000_COV,C6,C6: limit warming to 3°C (>50%)
+EN_NPi2020_3000f_COV,C6,C6: limit warming to 3°C (>50%)
+EN_NPi2020_450,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+EN_NPi2020_450f,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_NPi2020_600_DR10p,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_NPi2020_600_DR1p,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+EN_NPi2020_600_DR2p,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+EN_NPi2020_600_DR3p,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+EN_NPi2020_600_DR4p,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+EN_NPi2020_600f_DR10p,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_NPi2020_600f_DR1p,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_NPi2020_600f_DR2p,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_NPi2020_600f_DR3p,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_NPi2020_600f_DR4p,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_NPi2020_700_COV,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_NPi2020_700f_COV,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+EN_NPi2020_800_COV,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_800f_COV,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_900_COV,C3,C3: limit warming to 2°C (>67%)
+EN_NPi2020_900f_COV,C3,C3: limit warming to 2°C (>67%)
+COV_GreenPush,C7,C7: limit warming to 4°C (>50%)
+COV_GreenPush_1000,C3,C3: limit warming to 2°C (>67%)
+COV_GreenPush_550,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+COV_GreenPush_max_GDP,C7,C7: limit warming to 4°C (>50%)
+COV_GreenPush_min_GDP,C7,C7: limit warming to 4°C (>50%)
+COV_NoPolicyNoCOVID,C7,C7: limit warming to 4°C (>50%)
+COV_NoPolicyNoCOVID_1000,C3,C3: limit warming to 2°C (>67%)
+COV_NoPolicyNoCOVID_550,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+COV_Restore,C7,C7: limit warming to 4°C (>50%)
+COV_Restore_1000,C3,C3: limit warming to 2°C (>67%)
+COV_Restore_550,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+COV_SelfReliance,C7,C7: limit warming to 4°C (>50%)
+COV_SelfReliance_1000,C3,C3: limit warming to 2°C (>67%)
+COV_SelfReliance_550,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+COV_SelfReliance_max_GDP,C7,C7: limit warming to 4°C (>50%)
+COV_SelfReliance_min_GDP,C7,C7: limit warming to 4°C (>50%)
+COV_SmartUse,C7,C7: limit warming to 4°C (>50%)
+COV_SmartUse_1000,C3,C3: limit warming to 2°C (>67%)
+COV_SmartUse_550,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+PR_NEMESIS_CP,#N/A,#N/A
+PR_NEMESIS_NDC,#N/A,#N/A
+CO_2C,#N/A,#N/A
+EN_INDCi2030_300f,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+NDCMCS,#N/A,#N/A
+District heating expansion,#N/A,#N/A
+Early and Steady,#N/A,#N/A
+Including road and rail transport,#N/A,#N/A
+Late and Rapid,#N/A,#N/A
+Space heat savings due to building renovation,#N/A,#N/A
+Transmission expansion after 2030,#N/A,#N/A
+NOR_Baseline_a,#N/A,#N/A
+NOR_Baseline_b,#N/A,#N/A
+NOR_Baseline_c,#N/A,#N/A
+NOR_Baseline_d,#N/A,#N/A
+NOR_Baseline_e,#N/A,#N/A
+NOR_ZEB1_a,#N/A,#N/A
+NOR_ZEB1_b,#N/A,#N/A
+NOR_ZEB1_c,#N/A,#N/A
+NOR_ZEB1_d,#N/A,#N/A
+NOR_ZEB1_e,#N/A,#N/A
+NOR_ZEB2_a,#N/A,#N/A
+NOR_ZEB2_b,#N/A,#N/A
+NOR_ZEB2_c,#N/A,#N/A
+NOR_ZEB2_d,#N/A,#N/A
+NOR_ZEB2_e,#N/A,#N/A
+CEMICS_GDPgrowth_1p5,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+CEMICS_GDPgrowth_2C,C3,C3: limit warming to 2°C (>67%)
+CEMICS_HotellingConst_1p5,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+CEMICS_HotellingConst_2C,C3,C3: limit warming to 2°C (>67%)
+CEMICS_Linear_1p5,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+CEMICS_Linear_2C,C3,C3: limit warming to 2°C (>67%)
+CEMICS_NPI,C7,C7: limit warming to 4°C (>50%)
+CEMICS_opt_1p5,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+CEMICS_opt_2C,C3,C3: limit warming to 2°C (>67%)
+LeastTotalCost_Base_brkLR15_SSP1_P50,C6,C6: limit warming to 3°C (>50%)
+LeastTotalCost_Base_brkLR15_SSP2_P50,C7,C7: limit warming to 4°C (>50%)
+LeastTotalCost_Base_brkLR15_SSP5_P50,C8,C8: exceed warming of 4°C (>=50%)
+LeastTotalCost_Base_brkSR15_SSP1_P50,C6,C6: limit warming to 3°C (>50%)
+LeastTotalCost_Base_brkSR15_SSP2_P50,C7,C7: limit warming to 4°C (>50%)
+LeastTotalCost_Base_brkSR15_SSP5_P50,C8,C8: exceed warming of 4°C (>=50%)
+LeastTotalCost_CBA_brkLR15_SSP2_P50,C3,C3: limit warming to 2°C (>67%)
+LeastTotalCost_CBA_brkSR15_SSP2_P50,C3,C3: limit warming to 2°C (>67%)
+LeastTotalCost_CEA_brkLR15_SSP2_P50,C3,C3: limit warming to 2°C (>67%)
+LeastTotalCost_CEA_brkSR15_SSP2_P50,C3,C3: limit warming to 2°C (>67%)
+LeastTotalCost_LTC_brkLR15_SSP1_P50,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+LeastTotalCost_LTC_brkLR15_SSP2_P50,C3,C3: limit warming to 2°C (>67%)
+LeastTotalCost_LTC_brkLR15_SSP5_P50,C3,C3: limit warming to 2°C (>67%)
+LeastTotalCost_LTC_brkSR15_SSP1_P50,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+LeastTotalCost_LTC_brkSR15_SSP2_P50,C3,C3: limit warming to 2°C (>67%)
+LeastTotalCost_LTC_brkSR15_SSP5_P50,C3,C3: limit warming to 2°C (>67%)
+LeastTotalCost_NDC_brkLR15_SSP2_P50,C5,C5: limit warming to 2.5°C (>50%)
+LeastTotalCost_NDC_brkSR15_SSP2_P50,C5,C5: limit warming to 2.5°C (>50%)
+LeastTotalCost_NPi_brkLR15_SSP1_P50,C5,C5: limit warming to 2.5°C (>50%)
+LeastTotalCost_NPi_brkLR15_SSP2_P50,C7,C7: limit warming to 4°C (>50%)
+LeastTotalCost_NPi_brkLR15_SSP5_P50,C8,C8: exceed warming of 4°C (>=50%)
+LeastTotalCost_NPi_brkSR15_SSP1_P50,C5,C5: limit warming to 2.5°C (>50%)
+LeastTotalCost_NPi_brkSR15_SSP2_P50,C7,C7: limit warming to 4°C (>50%)
+LeastTotalCost_NPi_brkSR15_SSP5_P50,C8,C8: exceed warming of 4°C (>=50%)
+R2p1_SSP1-Base,C6,C6: limit warming to 3°C (>50%)
+R2p1_SSP1-NDC,C5,C5: limit warming to 2.5°C (>50%)
+R2p1_SSP1-NPi,C5,C5: limit warming to 2.5°C (>50%)
+R2p1_SSP1-PkBudg1100,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+R2p1_SSP1-PkBudg1300,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+R2p1_SSP1-PkBudg900,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+R2p1_SSP2-Base,C7,C7: limit warming to 4°C (>50%)
+R2p1_SSP2-NDC,C5,C5: limit warming to 2.5°C (>50%)
+R2p1_SSP2-NPi,C7,C7: limit warming to 4°C (>50%)
+R2p1_SSP2-PkBudg1100,C3,C3: limit warming to 2°C (>67%)
+R2p1_SSP2-PkBudg1300,C3,C3: limit warming to 2°C (>67%)
+R2p1_SSP2-PkBudg900,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+R2p1_SSP5-Base,C8,C8: exceed warming of 4°C (>=50%)
+R2p1_SSP5-NDC,C7,C7: limit warming to 4°C (>50%)
+R2p1_SSP5-NPi,C8,C8: exceed warming of 4°C (>=50%)
+R2p1_SSP5-PkBudg1100,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+R2p1_SSP5-PkBudg1300,C3,C3: limit warming to 2°C (>67%)
+R2p1_SSP5-PkBudg900,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+TechCost-SSP2-B1100-bioH,C3,C3: limit warming to 2°C (>67%)
+TechCost-SSP2-B1100-ccsH,C3,C3: limit warming to 2°C (>67%)
+TechCost-SSP2-B1100-coalH,C3,C3: limit warming to 2°C (>67%)
+TechCost-SSP2-B1100-elh2H,C3,C3: limit warming to 2°C (>67%)
+TechCost-SSP2-B1100-gasH,C3,C3: limit warming to 2°C (>67%)
+TechCost-SSP2-B1100-nucH,C3,C3: limit warming to 2°C (>67%)
+TechCost-SSP2-B1100-oilH,C3,C3: limit warming to 2°C (>67%)
+TechCost-SSP2-B1100-spvH,C3,C3: limit warming to 2°C (>67%)
+TechCost-SSP2-B1100-windH,C3,C3: limit warming to 2°C (>67%)
+BEG-Base,C7,C7: limit warming to 4°C (>50%)
+BEG-Budg600,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+BEG-Budg600-EG,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+BEG-EG,C7,C7: limit warming to 4°C (>50%)
+START_BAU,C7,C7: limit warming to 4°C (>50%)
+START_Current_Policies,C7,C7: limit warming to 4°C (>50%)
+START_Net-zero,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+START_Net-zero_noLandUse_CDRlim,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+START_Net-zero_noNuc_lowVRE,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+CD-LINKS_INDC2030i_1000,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+CD-LINKS_INDC2030i_1600,C5,C5: limit warming to 2.5°C (>50%)
+CD-LINKS_INDC2030i_400,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+CD-LINKS_NoPolicy,C7,C7: limit warming to 4°C (>50%)
+EMF33_1.5C_cost100,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+EMF33_1.5C_full,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+EMF33_1.5C_nofuel,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+EMF33_Med2C_cost100,C5,C5: limit warming to 2.5°C (>50%)
+EMF33_Med2C_full,C5,C5: limit warming to 2.5°C (>50%)
+EMF33_Med2C_limbio,C5,C5: limit warming to 2.5°C (>50%)
+EMF33_Med2C_nobeccs,C4,C4: limit warming to 2°C (>50%)
+EMF33_Med2C_nofuel,C4,C4: limit warming to 2°C (>50%)
+EMF33_Med2C_none,C4,C4: limit warming to 2°C (>50%)
+EMF33_WB2C_cost100,C3,C3: limit warming to 2°C (>67%)
+EMF33_WB2C_full,C3,C3: limit warming to 2°C (>67%)
+EMF33_WB2C_limbio,C3,C3: limit warming to 2°C (>67%)
+EMF33_WB2C_nobeccs,C3,C3: limit warming to 2°C (>67%)
+EMF33_WB2C_nofuel,C3,C3: limit warming to 2°C (>67%)
+EMF33_WB2C_none,C3,C3: limit warming to 2°C (>67%)
+EMF33_tax_hi_full,C4,C4: limit warming to 2°C (>50%)
+EMF33_tax_lo_full,C5,C5: limit warming to 2.5°C (>50%)
+PEP_1p5C_full_NDC,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+PEP_1p5C_full_eff,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+PEP_1p5C_full_goodpractice,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+PEP_1p5C_full_netzero,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+PEP_1p5C_red_eff,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+PEP_2C_full_NDC,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+PEP_2C_full_eff,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+PEP_2C_full_goodpractice,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+PEP_2C_full_netzero,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+PEP_2C_red_NDC,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+PEP_2C_red_eff,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+PEP_2C_red_goodpractice,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+PEP_2C_red_netzero,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+PEP_NDC,C7,C7: limit warming to 4°C (>50%)
+PEP_NPi,C7,C7: limit warming to 4°C (>50%)
+PEP_NoPolicy,C7,C7: limit warming to 4°C (>50%)
+PEP_goodpractice,C6,C6: limit warming to 3°C (>50%)
+PEP_netzero,C5,C5: limit warming to 2.5°C (>50%)
+Diff_1300Gt_hybrid_def,C3,C3: limit warming to 2°C (>67%)
+Diff_1300Gt_no-transfer_def,C3,C3: limit warming to 2°C (>67%)
+Diff_1300Gt_uniform-pricing_def,C3,C3: limit warming to 2°C (>67%)
+Diff_No-policy_baseline,C7,C7: limit warming to 4°C (>50%)
+CEMICS_SSP1-1p5C-fullCDR,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+CEMICS_SSP1-1p5C-minCDR,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+CEMICS_SSP1-Npi,C6,C6: limit warming to 3°C (>50%)
+CEMICS_SSP2-1p5C-fullCDR,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+CEMICS_SSP2-1p5C-minCDR,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+CEMICS_SSP2-2C-fullCDR,C3,C3: limit warming to 2°C (>67%)
+CEMICS_SSP2-2C-minCDR,C3,C3: limit warming to 2°C (>67%)
+CEMICS_SSP2-Npi,C7,C7: limit warming to 4°C (>50%)
+EN_INDCi2030_600_COV,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+NGFS2_Below 2째C - IPD-95th,#N/A,#N/A
+NGFS2_Below 2째C - IPD-median,#N/A,#N/A
+NGFS2_Current Policies - IPD-95th,C7,C7: limit warming to 4°C (>50%)
+NGFS2_Current Policies - IPD-median,C7,C7: limit warming to 4°C (>50%)
+NGFS2_Net-Zero 2050 - IPD-95th,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+NGFS2_Net-Zero 2050 - IPD-median,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SusDev_SDP-NPi,C5,C5: limit warming to 2.5°C (>50%)
+SusDev_SDP-PkBudg1000,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SusDev_SSP1-NDC,C5,C5: limit warming to 2.5°C (>50%)
+SusDev_SSP1-NPi,C5,C5: limit warming to 2.5°C (>50%)
+SusDev_SSP1-PkBudg900,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SusDev_SSP2-NDC,C5,C5: limit warming to 2.5°C (>50%)
+SusDev_SSP2-NPi,C7,C7: limit warming to 4°C (>50%)
+SusDev_SSP2-PkBudg900,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+DeepElec_SSP2_ HighRE_Budg1100,C3,C3: limit warming to 2°C (>67%)
+DeepElec_SSP2_ HighRE_Budg1300,C3,C3: limit warming to 2°C (>67%)
+DeepElec_SSP2_ HighRE_Budg900,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+DeepElec_SSP2_Base,C7,C7: limit warming to 4°C (>50%)
+DeepElec_SSP2_Npi,C7,C7: limit warming to 4°C (>50%)
+DeepElec_SSP2_def_Budg1100,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+DeepElec_SSP2_def_Budg1300,C3,C3: limit warming to 2°C (>67%)
+DeepElec_SSP2_def_Budg900,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+Transport_Budg1100_Conv,C3,C3: limit warming to 2°C (>67%)
+Transport_Budg1100_Conv-LowD,C3,C3: limit warming to 2°C (>67%)
+Transport_Budg1100_ConvSyn,C3,C3: limit warming to 2°C (>67%)
+Transport_Budg1100_ElecPush,C3,C3: limit warming to 2°C (>67%)
+Transport_Budg1100_ElecPush-LowD,C3,C3: limit warming to 2°C (>67%)
+Transport_Budg1100_H2Push,C3,C3: limit warming to 2°C (>67%)
+Transport_NDC_Conv,C6,C6: limit warming to 3°C (>50%)
+Transport_NPi_Conv,C7,C7: limit warming to 4°C (>50%)
+Eff_1p5,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+Eff_Weak,C3,C3: limit warming to 2°C (>67%)
+Eff_min80,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+Incumb_1p5,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+Incumb_Weak,C3,C3: limit warming to 2°C (>67%)
+Incumb_min80,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+NewPl_1p5,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+NewPl_Weak,C3,C3: limit warming to 2°C (>67%)
+NewPl_min80,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+AP,#N/A,#N/A
+AP+,#N/A,#N/A
+AP-LTD,#N/A,#N/A
+EER,#N/A,#N/A
+EER-T,#N/A,#N/A
+LSR,#N/A,#N/A
+LSR-T,#N/A,#N/A
+NC,#N/A,#N/A
+NT,#N/A,#N/A
+ZP,#N/A,#N/A
+SAFARI_BAU,#N/A,#N/A
+SAFARI_HFA_AMB,#N/A,#N/A
+SAFARI_HFA_CUR,#N/A,#N/A
+SAFARI_HFA_HighEff,#N/A,#N/A
+SAFARI_HFA_LeastEff,#N/A,#N/A
+SAFARI_HFA_SDG,#N/A,#N/A
+SAFARI_HFA_SDG_Compact,#N/A,#N/A
+SAFARI_HFA_SDG_Sprawl,#N/A,#N/A
+ETSAP_BAU,#N/A,#N/A
+ETSAP_CLI,#N/A,#N/A
+JASM_BAU,#N/A,#N/A
+JASM_CLI,#N/A,#N/A
+JASM_EPOL,#N/A,#N/A
+JASM_LC100,#N/A,#N/A
+JASM_LC80,#N/A,#N/A
+STEM_BAU,#N/A,#N/A
+STEM_CLI,#N/A,#N/A
+SWIDEM_BAU,#N/A,#N/A
+SWIDEM_EPOL,#N/A,#N/A
+10: HR 3T (FS20),#N/A,#N/A
+1: RB 1T,#N/A,#N/A
+2: RB 1T-2T,#N/A,#N/A
+3: RB 1T-2T-3T,#N/A,#N/A
+4: RB 1T-2T-3T (FS0),#N/A,#N/A
+5: RB 1T-2T-3T (FS20),#N/A,#N/A
+6: HR 1T-2T-3T,#N/A,#N/A
+7: HR 1T-2T-3T FS0,#N/A,#N/A
+8: HR 1T-2T-3T FS20,#N/A,#N/A
+9: HR 3T (FS0),#N/A,#N/A
+Baseline - HR,#N/A,#N/A
+Baseline - RB,#N/A,#N/A
+Baseline-AEO2018-HR,#N/A,#N/A
+Baseline-AEO2018-Ref,#N/A,#N/A
+RCP2.6,no-climate-assessment,no-climate-assessment
+baseline,C7,C7: limit warming to 4°C (>50%)
+CAP,no-climate-assessment,no-climate-assessment
+REF,C7,C7: limit warming to 4°C (>50%)
+TAX,no-climate-assessment,no-climate-assessment
+NDC+,no-climate-assessment,no-climate-assessment
+BAU_PR,#N/A,#N/A
+PR_CP_CarbonPriceOnly,no-climate-assessment,no-climate-assessment
+PR_CP_CarbonPrice_1,no-climate-assessment,no-climate-assessment
+PR_CP_EmIntensity_1,no-climate-assessment,no-climate-assessment
+PR_NDC_CarbonPriceOnly,no-climate-assessment,no-climate-assessment
+PR_NDC_CarbonPrice_1,no-climate-assessment,no-climate-assessment
+PR_NDC_EmIntensity_1,no-climate-assessment,no-climate-assessment
+SSP2_1_5D-50_CCC2020,C3,C3: limit warming to 2°C (>67%)
+SSP2_1_75D-66,C3,C3: limit warming to 2°C (>67%)
+SSP2_1_75D-66_CCC2020,C3,C3: limit warming to 2°C (>67%)
+SSP2_2D-66,C3,C3: limit warming to 2°C (>67%)
+SSP2_2D-66_CCC2020,C4,C4: limit warming to 2°C (>50%)
+SSP2_BASE,C7,C7: limit warming to 4°C (>50%)
+SSP2_BASE_CCC2020,C7,C7: limit warming to 4°C (>50%)
+20% abatement (GHG),no-climate-assessment,no-climate-assessment
+450 concentration,no-climate-assessment,no-climate-assessment
+50% abatement (GHG),no-climate-assessment,no-climate-assessment
+550 concentration,no-climate-assessment,no-climate-assessment
+650 concentration,no-climate-assessment,no-climate-assessment
+INDC,#N/A,#N/A
+INDC_2030_290,#N/A,#N/A
+INDC_2030_400,#N/A,#N/A
+NPi_2020_290,#N/A,#N/A
+NPi_2020_400,#N/A,#N/A
+PEAK25-H,#N/A,#N/A
+PEAK25-L,#N/A,#N/A
+PEAK30-H,#N/A,#N/A
+PEAK30-L,#N/A,#N/A
+LTECV,#N/A,#N/A
+NeutralityV0_CCSHigh_Dhigh,#N/A,#N/A
+NeutralityV0_CCSLow_Flex,#N/A,#N/A
+NeutralityV2_CCSLow,#N/A,#N/A
+NeutralityV2_CCSLow_Dhigh,#N/A,#N/A
+NeutralityV2_NoCCS_Flex,#N/A,#N/A
+Ref_Dhigh,#N/A,#N/A
+Ref_Dlow,#N/A,#N/A
+OoR,#N/A,#N/A
+Pack_cap,#N/A,#N/A
+YJ,#N/A,#N/A
+YJ_cap,#N/A,#N/A
+Sweden,#N/A,#N/A
+SwedenNeutrality,#N/A,#N/A
+SwedenNeutrality_B,#N/A,#N/A
+Sweden_B,#N/A,#N/A
+S1B,#N/A,#N/A
+S2,#N/A,#N/A
+SNBC,#N/A,#N/A
+SDS,no-climate-assessment,no-climate-assessment
+DISCRATE_Ref_dr2p,C8,C8: exceed warming of 4°C (>=50%)
+DISCRATE_Ref_dr3p,C8,C8: exceed warming of 4°C (>=50%)
+DISCRATE_Ref_dr4p,C8,C8: exceed warming of 4°C (>=50%)
+DISCRATE_Ref_dr5p,C8,C8: exceed warming of 4°C (>=50%)
+DISCRATE_cb1000_cdrall_dr2p,C3,C3: limit warming to 2°C (>67%)
+DISCRATE_cb1000_cdrall_dr3p,C3,C3: limit warming to 2°C (>67%)
+DISCRATE_cb1000_cdrall_dr4p,C4,C4: limit warming to 2°C (>50%)
+DISCRATE_cb1000_cdrall_dr5p,C4,C4: limit warming to 2°C (>50%)
+DISCRATE_cb1000_cdrno_dr2p,C3,C3: limit warming to 2°C (>67%)
+DISCRATE_cb1000_cdrno_dr3p,C3,C3: limit warming to 2°C (>67%)
+DISCRATE_cb1000_cdrno_dr4p,C3,C3: limit warming to 2°C (>67%)
+DISCRATE_cb1000_cdrno_dr5p,C3,C3: limit warming to 2°C (>67%)
+DISCRATE_cb400_cdrall_dr2p,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+DISCRATE_cb400_cdrall_dr3p,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+DISCRATE_cb400_cdrall_dr4p,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+DISCRATE_cb400_cdrall_dr5p,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+DISCRATE_cb400_cdrno_dr2p,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+DISCRATE_cb400_cdrno_dr3p,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+DISCRATE_cb400_cdrno_dr4p,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+DISCRATE_cb400_cdrno_dr5p,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+DISCRATE_cb600_cdrall_dr2p,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+DISCRATE_cb600_cdrall_dr3p,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+DISCRATE_cb600_cdrall_dr4p,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+DISCRATE_cb600_cdrall_dr5p,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+DISCRATE_cb600_cdrno_dr2p,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+DISCRATE_cb600_cdrno_dr3p,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+DISCRATE_cb600_cdrno_dr4p,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+DISCRATE_cb600_cdrno_dr5p,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+EN_INDCi2030_800_NDCp,C3,C3: limit warming to 2°C (>67%)
+EN_INDCi2030_900_NDCp,C3,C3: limit warming to 2°C (>67%)
+NEUTR,#N/A,#N/A
+NEUTR_A45,#N/A,#N/A
+NEUTR_A85,#N/A,#N/A
+NEUTR_B45,#N/A,#N/A
+NEUTR_B85,#N/A,#N/A
+NEUTR_C45,#N/A,#N/A
+NEUTR_C85,#N/A,#N/A
+NEUTR_D45,#N/A,#N/A
+NEUTR_D85,#N/A,#N/A
+NEUTR_E45,#N/A,#N/A
+NEUTR_E85,#N/A,#N/A
+NEUTR_F45,#N/A,#N/A
+NEUTR_F85,#N/A,#N/A
+NEUTR_G45,#N/A,#N/A
+NEUTR_G85,#N/A,#N/A
+NEUTR_H45,#N/A,#N/A
+NEUTR_H85,#N/A,#N/A
+NEUTR_I45,#N/A,#N/A
+NEUTR_I85,#N/A,#N/A
+NEUTR_J45,#N/A,#N/A
+NEUTR_J85,#N/A,#N/A
+NEUTR_L45,#N/A,#N/A
+NEUTR_L85,#N/A,#N/A
+ADVANCE_2020_1.5C-2100,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+ADVANCE_2020_Med2C,C4,C4: limit warming to 2°C (>50%)
+ADVANCE_2020_WB2C,C3,C3: limit warming to 2°C (>67%)
+ADVANCE_2030_Med2C,C4,C4: limit warming to 2°C (>50%)
+ADVANCE_2030_Price1.5C,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+ADVANCE_2030_WB2C,C3,C3: limit warming to 2°C (>67%)
+ADVANCE_INDC,C6,C6: limit warming to 3°C (>50%)
+ADVANCE_NoPolicy,C7,C7: limit warming to 4°C (>50%)
+ADVANCE_Reference,C7,C7: limit warming to 4°C (>50%)
+EMF30_BCOC-EndU,C7,C7: limit warming to 4°C (>50%)
+EMF30_Baseline,C7,C7: limit warming to 4°C (>50%)
+EMF30_CH4-Only,C7,C7: limit warming to 4°C (>50%)
+EMF30_ClimPolicy,C3,C3: limit warming to 2°C (>67%)
+EMF30_ClimPolicy+SLCF,C3,C3: limit warming to 2°C (>67%)
+EMF30_D_BCOC-Red,C7,C7: limit warming to 4°C (>50%)
+EMF30_D_CH4-ClimPolicy,C7,C7: limit warming to 4°C (>50%)
+EMF30_D_CO2-Only,C5,C5: limit warming to 2.5°C (>50%)
+EMF30_D_Frozen-CH4,C7,C7: limit warming to 4°C (>50%)
+EMF30_D_Frozen-EF,C7,C7: limit warming to 4°C (>50%)
+EMF30_D_Frozen-EF-EndU,C7,C7: limit warming to 4°C (>50%)
+EMF30_D_Frozen-EF-SLCF,C7,C7: limit warming to 4°C (>50%)
+EMF30_SLCF,C7,C7: limit warming to 4°C (>50%)
+EMF30_Slower-Action,C6,C6: limit warming to 3°C (>50%)
+EMF30_Slower-Action+SLCF,C6,C6: limit warming to 3°C (>50%)
+EMF30_Slower-to-faster,C4,C4: limit warming to 2°C (>50%)
+EMF30_Slower-to-faster+SLCF,C3,C3: limit warming to 2°C (>67%)
+EMF30_Slower-to-faster+SLCF+HFC,C3,C3: limit warming to 2°C (>67%)
+SFCM_SSP2_Bio_1p5Degree,C3,C3: limit warming to 2°C (>67%)
+SFCM_SSP2_Bio_2Degree,C4,C4: limit warming to 2°C (>50%)
+SFCM_SSP2_Bio_Baseline,C8,C8: exceed warming of 4°C (>=50%)
+SFCM_SSP2_EEEI_1p5Degree,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SFCM_SSP2_EEEI_2Degree,C4,C4: limit warming to 2°C (>50%)
+SFCM_SSP2_EEEI_Baseline,C7,C7: limit warming to 4°C (>50%)
+SFCM_SSP2_LifeStyle_1p5Degree,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SFCM_SSP2_LifeStyle_2Degree,C4,C4: limit warming to 2°C (>50%)
+SFCM_SSP2_LifeStyle_Baseline,C7,C7: limit warming to 4°C (>50%)
+SFCM_SSP2_Ref_1p5Degree,C3,C3: limit warming to 2°C (>67%)
+SFCM_SSP2_Ref_2Degree,C4,C4: limit warming to 2°C (>50%)
+SFCM_SSP2_Ref_Baseline,C8,C8: exceed warming of 4°C (>=50%)
+SFCM_SSP2_ST_CCS_1p5Degree,C3,C3: limit warming to 2°C (>67%)
+SFCM_SSP2_ST_CCS_2Degree,C4,C4: limit warming to 2°C (>50%)
+SFCM_SSP2_ST_CCS_Baseline,C8,C8: exceed warming of 4°C (>=50%)
+SFCM_SSP2_ST_bio_1p5Degree,C3,C3: limit warming to 2°C (>67%)
+SFCM_SSP2_ST_bio_2Degree,C4,C4: limit warming to 2°C (>50%)
+SFCM_SSP2_ST_bio_Baseline,C8,C8: exceed warming of 4°C (>=50%)
+SFCM_SSP2_ST_nuclear_1p5Degree,C3,C3: limit warming to 2°C (>67%)
+SFCM_SSP2_ST_nuclear_2Degree,C4,C4: limit warming to 2°C (>50%)
+SFCM_SSP2_ST_nuclear_Baseline,C8,C8: exceed warming of 4°C (>=50%)
+SFCM_SSP2_ST_solar_1p5Degree,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SFCM_SSP2_ST_solar_2Degree,C4,C4: limit warming to 2°C (>50%)
+SFCM_SSP2_ST_solar_Baseline,C7,C7: limit warming to 4°C (>50%)
+SFCM_SSP2_ST_wind_1p5Degree,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SFCM_SSP2_ST_wind_2Degree,C4,C4: limit warming to 2°C (>50%)
+SFCM_SSP2_ST_wind_Baseline,C7,C7: limit warming to 4°C (>50%)
+SFCM_SSP2_SupTech_1p5Degree,C3,C3: limit warming to 2°C (>67%)
+SFCM_SSP2_SupTech_2Degree,C4,C4: limit warming to 2°C (>50%)
+SFCM_SSP2_SupTech_Baseline,C7,C7: limit warming to 4°C (>50%)
+SFCM_SSP2_combined_1p5Degree,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SFCM_SSP2_combined_2Degree,C4,C4: limit warming to 2°C (>50%)
+SFCM_SSP2_combined_Baseline,C7,C7: limit warming to 4°C (>50%)
+SSP1-19,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SSP1-Baseline,C7,C7: limit warming to 4°C (>50%)
+SSP2-Baseline,C7,C7: limit warming to 4°C (>50%)
+SSP3-34,C5,C5: limit warming to 2.5°C (>50%)
+SSP3-45,C6,C6: limit warming to 3°C (>50%)
+SSP3-60,C7,C7: limit warming to 4°C (>50%)
+SSP3-Baseline,C8,C8: exceed warming of 4°C (>=50%)
+SSP4-Baseline,C7,C7: limit warming to 4°C (>50%)
+SSP5-Baseline,C8,C8: exceed warming of 4°C (>=50%)
+CD-LINKS_NDC2030i_1000,C4,C4: limit warming to 2°C (>50%)
+TERL_15D_LowCarbonTransportPolicy,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+TERL_15D_NoTransportPolicy,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+TERL_2D_LowCarbonTransportPolicy,C3,C3: limit warming to 2°C (>67%)
+TERL_2D_NoTransportPolicy,C3,C3: limit warming to 2°C (>67%)
+TERL_Baseline_LowCarbonTransportPolicy,C7,C7: limit warming to 4°C (>50%)
+TERL_Baseline_NoTransportPolicy,C7,C7: limit warming to 4°C (>50%)
+2.5C,C6,C6: limit warming to 3°C (>50%)
+2C,C5,C5: limit warming to 2.5°C (>50%)
+450ppmCancunP,C3,C3: limit warming to 2°C (>67%)
+450ppmRCP,C3,C3: limit warming to 2°C (>67%)
+450ppmeINDC,C4,C4: limit warming to 2°C (>50%)
+INDCSamePrice,C7,C7: limit warming to 4°C (>50%)
+WB2C,C3,C3: limit warming to 2°C (>67%)
+Ratchet-1.5-allCDR,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+Ratchet-1.5-limCDR,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+Ratchet-1.5-limCDR-noOS,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+Ratchet-1.5-noCDR,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+Ratchet-1.5-noCDR-noOS,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SSP1_5.0,no-climate-assessment,no-climate-assessment
+SSP1_BAU,no-climate-assessment,no-climate-assessment
+SSP1_NDC,no-climate-assessment,no-climate-assessment
+SSP2_5.0,no-climate-assessment,no-climate-assessment
+SSP2_BAU,no-climate-assessment,no-climate-assessment
+SSP2_NDC,no-climate-assessment,no-climate-assessment
+SSP3_5.5,no-climate-assessment,no-climate-assessment
+SSP3_BAU,no-climate-assessment,no-climate-assessment
+SSP3_NDC,no-climate-assessment,no-climate-assessment
+2C-hybrid,no-climate-assessment,no-climate-assessment
+2C-normal,no-climate-assessment,no-climate-assessment
+2C-with BECCS,no-climate-assessment,no-climate-assessment
+2C-with CCS,no-climate-assessment,no-climate-assessment
+SSP2 BAU,no-climate-assessment,no-climate-assessment
+RUS_Aggressive,#N/A,#N/A
+RUS_Baseline,#N/A,#N/A
+RUS_Smart,#N/A,#N/A
+EMF33_1.5C_limbio,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+1.5C OPEC sell-out,no-climate-assessment,no-climate-assessment
+2C OPEC sell-out,no-climate-assessment,no-climate-assessment
+Practices-low,no-climate-assessment,no-climate-assessment
+Practices-reference,no-climate-assessment,no-climate-assessment
+Practices-verylow,no-climate-assessment,no-climate-assessment
+SSP2_2020_0.3_All,no-climate-assessment,no-climate-assessment
+SSP2_2020_0.3_NC,no-climate-assessment,no-climate-assessment
+SSP2_2020_1.0_All,no-climate-assessment,no-climate-assessment
+SSP2_2020_1.0_NC,no-climate-assessment,no-climate-assessment
+SSP2_Ctax,no-climate-assessment,no-climate-assessment
+ECLIPSEv6b_CLE,no-climate-assessment,no-climate-assessment
+ECLIPSEv6b_MFR,no-climate-assessment,no-climate-assessment
+ADVANCE_2030_1.5C-2100,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+PR_baseline,C7,C7: limit warming to 4°C (>50%)
+USComp+UpdPledges+RoWCond,no-climate-assessment,no-climate-assessment
+USComp+UpdPledges+RoWRatchet,no-climate-assessment,no-climate-assessment
+USCurM+RoWCond,no-climate-assessment,no-climate-assessment
+USCurM+RoWUncond,no-climate-assessment,no-climate-assessment
+USCurM+UpdPledges+RoWCond,no-climate-assessment,no-climate-assessment
+USCurM2020+RoWCond,no-climate-assessment,no-climate-assessment
+USCurM2020+RoWUncond,no-climate-assessment,no-climate-assessment
+USCurM2020+UpdPledges+RoWCond,no-climate-assessment,no-climate-assessment
+USEngage2020+UpdPledges+RoWCond,no-climate-assessment,no-climate-assessment
+USEngage2020+UpdPledges+RoWRatchet,no-climate-assessment,no-climate-assessment
+Hard_Rock,no-climate-assessment,no-climate-assessment
+Modern_Jazz,no-climate-assessment,no-climate-assessment
+Symphony_1.5C,no-climate-assessment,no-climate-assessment
+Unfinished_Symphony,no-climate-assessment,no-climate-assessment
+IMA15-AGInt,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+IMA15-Def,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+IMA15-Eff,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+IMA15-LiStCh,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+IMA15-LoNCO2,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+IMA15-Pop,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+IMA15-RenElec,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+IMA15-TOT,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+Leadership-Europe,#N/A,#N/A
+Moderate-Europe,#N/A,#N/A
+DAC15_50,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+DAC2_66,C4,C4: limit warming to 2°C (>50%)
+GEA_Eff_1p5C,C3,C3: limit warming to 2°C (>67%)
+GEA_Eff_1p5C_Delay2020,C3,C3: limit warming to 2°C (>67%)
+GEA_Eff_2C_Delay2020,C4,C4: limit warming to 2°C (>50%)
+GEA_Eff_AdvNCO2_1p5C,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+GEA_Eff_base,C7,C7: limit warming to 4°C (>50%)
+GEA_Mix_1p5C_AdvNCO2_PartialDelay2020,C3,C3: limit warming to 2°C (>67%)
+GEA_Mix_1p5C_AdvTrans_PartialDelay2020,C3,C3: limit warming to 2°C (>67%)
+GEA_Mix_2C_AdvNCO2_PartialDelay2020,C4,C4: limit warming to 2°C (>50%)
+GEA_Mix_2C_AdvTrans_PartialDelay2020,C4,C4: limit warming to 2°C (>50%)
+GEA_Mix_base,#N/A,#N/A
+LowEnergyDemand_1.3_IPCC,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SSP2_int_lc_15,C5,C5: limit warming to 2.5°C (>50%)
+SSP2_int_lc_50,C3,C3: limit warming to 2°C (>67%)
+SSP2_int_mc_15,C5,C5: limit warming to 2.5°C (>50%)
+SSP2_int_mc_50,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP2_noint_lc_15,C5,C5: limit warming to 2.5°C (>50%)
+SSP2_noint_lc_50,C3,C3: limit warming to 2°C (>67%)
+SSP2_noint_mc_15,C5,C5: limit warming to 2.5°C (>50%)
+SSP2_noint_mc_50,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP2_openres_lc_100,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP2_openres_lc_120,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP2_openres_lc_15,C5,C5: limit warming to 2.5°C (>50%)
+SSP2_openres_lc_50,C3,C3: limit warming to 2°C (>67%)
+SSP2_openres_lc_80,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP2_openres_lc_CB400,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP2_openres_lc_CB450,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP2_openres_lc_CB500,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP2_openres_lc_CB550,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP2_openres_lc_CB600,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP2_openres_mc_15,C5,C5: limit warming to 2.5°C (>50%)
+SSP2_openres_mc_50,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SSP1-1.9_zeromig,no-climate-assessment,no-climate-assessment
+SSP1_zeromig,no-climate-assessment,no-climate-assessment
+SSP2-4.5_zeromig,no-climate-assessment,no-climate-assessment
+SSP2_zeromig,no-climate-assessment,no-climate-assessment
+SSP3-7.0_zeromig,no-climate-assessment,no-climate-assessment
+SSP3_zeromig,no-climate-assessment,no-climate-assessment
+SSP4-6.0_zeromig,no-climate-assessment,no-climate-assessment
+SSP4_zeromig,no-climate-assessment,no-climate-assessment
+SSP5-8.5_zeromig,no-climate-assessment,no-climate-assessment
+SSP5_zeromig,no-climate-assessment,no-climate-assessment
+CEMICS-1.5-CDR12,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+CEMICS-1.5-CDR20,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+CEMICS-1.5-CDR8,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+CEMICS-2.0-CDR12,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+CEMICS-2.0-CDR20,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+CEMICS-2.0-CDR8,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+CEMICS-Ref,C7,C7: limit warming to 4°C (>50%)
+SMP_1p5C_Def,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SMP_1p5C_Sust,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SMP_1p5C_early,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SMP_1p5C_lifesty,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SMP_1p5C_regul,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SMP_2C_Def,C2,C2: return warming to 1.5°C (>50%) after a high overshoot
+SMP_2C_Sust,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SMP_2C_early,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SMP_2C_lifesty,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SMP_2C_regul,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+SMP_REF_Def,C7,C7: limit warming to 4°C (>50%)
+SMP_REF_Sust,C7,C7: limit warming to 4°C (>50%)
+IEA Energy Statistics (r2017),no-climate-assessment,no-climate-assessment
+2DC,no-climate-assessment,no-climate-assessment
+SSP4-19,C1,C1: limit warming to 1.5°C (>50%) with no or limited overshoot
+B2DS,no-climate-assessment,no-climate-assessment
+BPS,no-climate-assessment,no-climate-assessment
+1.5C A,no-climate-assessment,no-climate-assessment
+1.5C B,no-climate-assessment,no-climate-assessment
+1.5C C,no-climate-assessment,no-climate-assessment
+Planned Energy Scenario (PES),no-climate-assessment,no-climate-assessment
+Tranforming Energy Scenario (TES),no-climate-assessment,no-climate-assessment
+Sky,no-climate-assessment,no-climate-assessment
+NZE,no-climate-assessment,no-climate-assessment

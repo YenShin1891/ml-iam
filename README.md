@@ -1,254 +1,344 @@
-## IAM Emulation with Machine Learning
+# ML-IAM: Machine Learning for Integrated Assessment Model Emulation
 
-[![DOI](https://zenodo.org/badge/974767132.svg)](https://doi.org/10.5281/zenodo.17390677)
+**A reproducible pipeline for emulating IAM scenario time-series using gradient boosted trees and deep learning.**
 
-This repository provides a reproducible pipeline for emulating Integrated Assessment Model (IAM) scenario time‑series using multiple ML approaches:
-
-* Gradient Boosted Trees (XGBoost)
-* Temporal Fusion Transformer (TFT, PyTorch Lightning)
-* Long Short-Term Memory (LSTM, PyTorch Lightning)
-
-It standardizes data ingestion from the IPCC AR6 Scenario Explorer, feature engineering, model search / training, evaluation, and exploratory visualization via a Streamlit dashboard.
+📄 [**Preprint**](https://egusphere.copernicus.org/preprints/2026/egusphere-2025-5305/) | 🌐 [**Emulation Viewer**](https://mliam.dev/) | 📊 **Dataset** (coming soon) | [![DOI](https://zenodo.org/badge/974767132.svg)](https://doi.org/10.5281/zenodo.17390677)
 
 ---
-## Contents
-1. Features
-2. Quick Start
-3. Environment & Installation
-4. Data & Licensing (AR6)
-5. Configuration
-6. Data Processing
-7. Training Pipelines (XGB / TFT / LSTM)
-8. Visualization & Explainability
-9. Dashboard
-10. Project Layout
-11. Recommended Citation
-12. License
-13. FAQ
+
+## 🎯 What are you looking for?
+
+<table>
+<tr>
+<td width="50%">
+
+### 🔍 **Try out ML-IAM**
+Want to explore emulated IAM scenarios without coding?
+
+👉 **[Visit the Emulation Viewer](https://mliam.dev/)**
+
+Interactive web interface to visualize and compare emulated climate policy scenarios.
+
+</td>
+<td width="50%">
+
+### 🔧 **Train your own models**
+Researcher looking to replicate or extend this work?
+
+👉 **First**: [Download AR6 data](#-prerequisites) (required for all paths)
+
+👉 **Then: Quick start (XGBoost, <1 hour)**: [Quick Training](#-quick-training-xgboost)
+
+👉 **Or: Full pipeline (LSTM/TFT)**: [Advanced Training](#-advanced-training-lstmtft)
+</td>
+</tr>
+</table>
 
 ---
-## 1. Features
-* Unified AR6 scenario preprocessing & feature engineering.
-* Modular model families: XGBoost / TFT / LSTM.
-* Resumable pipelines with per‑`run_id` persisted state.
-* Autoregressive evaluation + SHAP & visualization utilities.
-* Streamlit dashboard (exploratory, WIP).
+
+## 📖 What is ML-IAM?
+
+![Figure 1: Research Concept](concept_figure.png)
+
+Integrated Assessment Models (IAMs) are crucial for climate policy analysis but computationally expensive to run. ML-IAM provides fast, accurate emulation of IAM scenarios using machine learning, enabling:
+- 🚀 **Rapid scenario exploration** (seconds vs. hours/days)
+- 🔄 **Sensitivity analysis** at scale
+
+![Figure 2: Method Overview](overview_wide.png)
+
+We train three model architectures on IPCC AR6 scenario data:
+- **XGBoost**: Gradient boosted trees (fastest, interpretable)
+- **LSTM**: Long short-term memory networks (sequential patterns)
+- **TFT**: Temporal Fusion Transformer (transformer-based temporal modeling)
 
 ---
-## 2. Quick Start
+
+## 📊 Prerequisites
+
+### Download AR6 Data
+
+This pipeline requires the **IPCC AR6 Scenario Explorer Database (v1.1)**:
+
+1. Visit the [AR6 Scenario Explorer](https://data.ene.iiasa.ac.at/ar6/)
+2. Download the following files:
+  - `AR6_Scenarios_Database_ISO3_v1.1.csv`
+  - `AR6_Scenarios_Database_R6_regions_v1.1.csv`
+  - `AR6_Scenarios_Database_R5_regions_v1.1.csv`
+  - `AR6_Scenarios_Database_R10_regions_v1.1.csv`
+  - `AR6_Scenarios_Database_World_v1.1.csv`
+
+3. Place files in your raw data directory (e.g., `/path/to/ar6/data/`)
+
+**⚠️ License & Citation:** The AR6 data is subject to [IIASA's license terms](https://data.ene.iiasa.ac.at/ar6/#/license).
+
+---
+
+## ⚡ Quick Training (XGBoost)
+
+**Time required:** ~45 minutes | **Hardware:** CPU only
+
+### Step 1: Clone Repository & Install Dependencies
+
 ```bash
-git clone <this-repo-url>
+# Clone repository
+git clone https://github.com/YenShin1891/ml-iam.git
 cd ml-iam
-python -m venv .venv && source .venv/bin/activate  # or use conda
-pip install -r requirements.txt
 
-# (Optional) Export environment variables to override defaults
-export RAW_DATA_PATH="/path/to/raw" \
-	DATA_PATH="/path/to/processed" \
-	RESULTS_PATH="/path/to/results"
+# Create virtual environment (Python 3.9)
+conda create -n ml-iam python=3.9
+conda activate ml-iam
+# If you don't have conda, install Miniconda or Anaconda first: https://docs.conda.io/en/latest/miniconda.html
 
-# Process data (writes processed & intermediate artifacts)
-make process-data
-
-# Train XGBoost full pipeline (search -> train -> test -> plot)
-python scripts/train_xgb.py
-
-# Train TFT full pipeline
-python scripts/train_tft.py
-
-# Train LSTM full pipeline
-python scripts/train_lstm.py
-
-# Launch dashboard (foreground)
-streamlit run scripts/dashboard.py
-```
-
----
-## 3. Environment & Installation
-Prerequisites:
-* Python 3.9
-* (Optional GPU) CUDA 11.6 compatible stack for TFT acceleration
-* Open ports (default Streamlit 8501)
-
-Install dependencies:
-```bash
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-If using GPUs, confirm PyTorch + CUDA alignment (adjust `pip`/`pip3` index URL if needed).
+### Step 2: Configure Paths
 
----
-## 4. Data & Licensing (AR6)
-The pipeline expects AR6 Scenario Explorer CSVs (v1.1) referenced in `configs/data.py` (`RAW_FILENAMES`). Obtain them from the IPCC / IIASA AR6 Scenario Explorer.
+Set default data locations by editing `configs/paths.py`.
 
-License & Terms of Use: The AR6 data are subject to the license described at:
-https://data.ene.iiasa.ac.at/ar6/#/license
+Open `configs/paths.py` and update the paths for:
+- `RAW_DATA_PATH` – where you saved the AR6 CSVs
+- `DATA_PATH` – where you want the processed data saved
+- `RESULTS_PATH` – where you want the model outputs saved
 
-Before using or distributing processed outputs, review the above license and attribution guidance. Include appropriate citation(s) in any derivative work. This repository does not redistribute the raw AR6 CSVs.
+### Step 3: Process Data
 
-Place raw files under a directory you configure (see `configs/paths.py` or environment overrides below). Example:
-```
-/path/to/raw/AR6_Scenarios_Database_ISO3_v1.1.csv
-... other region variants ...
-```
+Run the data processing pipeline:
 
----
-## 5. Configuration
-Central configuration modules:
-* `configs/data.py` – variable selection (`OUTPUT_VARIABLES`), filtering thresholds, naming/version knobs.
-* `configs/paths.py` – path constants (generic placeholders recommended). Replace hard‑coded defaults or export environment variables.
-* `configs/models/*.py` – model‑specific hyperparameter configurations and search spaces (XGBoost / LSTM / TFT).
-
-Override paths without editing code by exporting (evaluated early through Python in the Makefile):
-```bash
-export RAW_DATA_PATH="/path/to/raw"
-export DATA_PATH="/path/to/processed"
-export RESULTS_PATH="/path/to/results"
-```
-
-Key data knobs (from `configs/data.py`):
-* `OUTPUT_VARIABLES` – target columns (energy & emissions series).
-* `MIN_COUNT`, `COMPLETENESS_RATIO` – filtering heuristics.
-* `MAX_SERIES_LENGTH`, `N_LAG_FEATURES` – feature engineering scope.
-* `MAX_YEAR` – upper inclusive cutoff for year columns retained during preprocessing (years > MAX_YEAR dropped).
-
----
-## 6. Data Processing
-Data ingestion & processing is orchestrated via the Makefile target:
 ```bash
 make process-data
 ```
-This runs `python -m src.data.process_data` with directories resolved from `configs.paths` (or environment overrides). Outputs include processed wide/long series and optional analysis artifacts (if `SAVE_ANALYSIS=True`).
 
----
-## 7. Training Pipelines
-Each model family has a dedicated driver script in `scripts/`.
+*This command uses `configs/paths.py` and `configs/data.py` under the hood.*
 
-### XGBoost (`scripts/train_xgb.py`)
-Full pipeline (preprocess -> search -> train -> test -> plot):
+This command:
+- Loads raw AR6 CSVs from `RAW_DATA_PATH`
+- Joins metadata (variable classification and scenario categories)
+- Selects input/output variables using `OUTPUT_VARIABLES` and `MIN_COUNT`
+- Normalizes units and reshapes to a year-indexed wide table
+- Optionally filters out pre-base-year rows when `"apply-base-year"` is in `TAGS`
+- Applies row-level completeness filtering using `COMPLETENESS_RATIO`
+- Writes a versioned dataset (`processed_series.csv`) and analysis files under `DATA_PATH/<version_name>`
+
+**Key knobs** (in `configs/data.py`):
+- `OUTPUT_VARIABLES`: Variables the models will learn to predict
+- `MIN_COUNT`: Minimum occurrences required to keep a variable
+- `COMPLETENESS_RATIO`: Fraction of non-missing variables required to keep a row
+- `TAGS`: Extra behaviors (e.g. `"include-intermediate"`, `"apply-base-year"`)
+
+### Step 4: Train XGBoost Model
+
 ```bash
+# Run full pipeline: hyperparameter search → train → test → visualize
 python scripts/train_xgb.py
 ```
-Options:
-* `--skip_search` – skip hyperparameter search and directly train using stored/previous best params.
-* `--resume {search|train|test|plot} --run_id <id>` – resume from a saved session.
-* `--dataset <name>` – specify a processed dataset version.
-* `--note "description"` – attach a note stored in session state.
 
-Example background run:
-```bash
-nohup python scripts/train_xgb.py --note "baseline xgb" > xgb.out 2>&1 &
-```
+**Command options:**
+- `--skip_search`: Skip hyperparameter search, use previous best parameters
+- `--resume {search|train|test|plot} --run_id <id>`: Resume from a saved session
+- `--note "description"`: Add notes to the run
 
-### Temporal Fusion Transformer (`scripts/train_tft.py`)
-Runs sequential phases automatically when invoked without arguments:
-```bash
-python scripts/train_tft.py
-```
-Resume at a later step:
-```bash
-python scripts/train_tft.py --resume train --run_id 2024_09_15_001
-```
+**Outputs** (saved to `./results/xgb/[run_id]/`):
+- Logs
+- Trained model
+- Performance metrics (RMSE, MAE, R²)
+- Visualizations & SHAP explainability plots
 
-### LSTM (`scripts/train_lstm.py`)
-PyTorch Lightning implementation with sequence modeling capabilities:
-```bash
-python scripts/train_lstm.py
-```
-Resume at a later step:
-```bash
-python scripts/train_lstm.py --resume train --run_id 2024_09_15_001
-```
+**Next steps:** See [Understanding Results](#-understanding-results) for interpretation.
 
 ---
-## 8. Visualization & Explainability
-The visualization layer covers three categories:
-1. Diagnostic scatter (predicted vs actual across targets)
-2. Trajectory comparison (model vs historical / IAM reference)
-3. SHAP explainability (For both trees & neural networks)
 
-Directory structure (`src/visualization/`):
-```
-trajectories.py  # 1 & 2: trajectory panels, scatter diagnostics, metadata helpers
-shap_xgb.py      # 3: XGBoost SHAP value computation + summary plots
-shap_nn.py       # 3: LSTM, TFT temporal SHAP, heatmap, timestep importance
-helpers.py       # Shared: subplot grids, feature name formatting, render helpers
-__init__.py      # Public re-exports
+## 🚀 Advanced Training (LSTM/TFT)
+
+**Time required:** 4-12 hours | **Hardware:** GPU recommended (CUDA 11.6+)
+
+**If you haven't already completed the Quick Training setup:**
+1. Complete [Steps 1-3 from Quick Training](#-quick-training-xgboost) (clone, install, configure, process data)
+2. Then return here for GPU-specific setup
+
+
+### Install additional Python dependencies (LSTM/TFT)
+
+Install the extra Python packages needed for LSTM/TFT on top of the quick-start environment:
+
+```bash
+pip install -r requirements-advanced.txt
 ```
 
-## 9. Dashboard
-The Streamlit dashboard (`scripts/dashboard.py`) provides exploratory visualization (WIP). Launch in foreground:
+Verify PyTorch CUDA availability:
+```bash
+python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+```
+
+### Training LSTM
+
+```bash
+# Full pipeline: search → train → test → plot
+python scripts/train_lstm.py
+```
+
+**Command options (LSTM):**
+- `--skip_search`: Skip hyperparameter search, use default config from `configs/models/lstm.py`
+- `--resume {search|train|test|plot} --run_id <id>`: Resume a saved run from a specific stage
+- `--dataset <version_name>`: Use a specific processed dataset subdirectory under `DATA_PATH`
+- `--lag-required/--no-lag-required`: Control whether full lag history is required
+- `--note "description"`: Add a note to the run metadata
+
+Example resume:
+
+```bash
+python scripts/train_lstm.py --resume train --run_id run_01
+```
+
+### Training TFT (Temporal Fusion Transformer)
+
+```bash
+# Full pipeline: search → train → test → plot
+python scripts/train_tft.py
+```
+
+**Command options (TFT):**
+- `--resume {search|train|test|plot} --run_id <id>`: Resume a saved run from a specific stage
+- `--dataset <version_name>`: Use a specific processed dataset subdirectory under `DATA_PATH`
+- `--lag-required/--no-lag-required`: Control whether full lag history is required
+- `--two-window`: Use the two-window prediction variant
+
+Example resume:
+
+```bash
+python scripts/train_tft.py --resume train --run_id run_01
+```
+
+### Training Tips
+
+**Background training (optional)**
+
+If you don’t want to keep a terminal open, you can run training in the background and log everything to a file:
+
+```bash
+nohup python scripts/train_lstm.py > train.log 2>&1 &
+```
+
+- This keeps training running even if you close the terminal and writes output to `train.log`.
+- If you already started training in the foreground: `Ctrl+Z` → `bg` → `disown` lets it keep running even if the terminal closes. However, you can monitor it only with logs in the `RESULTS_PATH` in this case.
+
+---
+
+## ⚙️ Configuration
+
+All configuration is centralized in the `configs/` directory. You can tweak the settings to match your preference.
+
+### Data Processing Configurations (`configs/data.py`)
+Key parameters:
+```python
+OUTPUT_VARIABLES = [
+    'Emissions|CO2',
+    'Primary Energy|Coal',
+    # ... more targets
+]
+
+MAX_YEAR = 2100  # Upper year limit
+N_LAG_FEATURES = 3  # Number of lagged timesteps
+```
+
+### Model Hyperparameters
+- **XGBoost**: `configs/models/xgb.py` (training) and `configs/models/xgb_search.py` (search space)
+- **LSTM**: `configs/models/lstm.py`
+- **TFT**: `configs/models/tft.py` and `configs/models/tft_search.py`
+
+---
+
+## 📈 Understanding Results
+
+### Output Structure
+
+After training, results are organized as:
+```
+results/
+├── xgb/
+│   └── [run_id]/
+│       ├── models/              # Trained XGBoost models per variable
+│       ├── predictions/         # Test set predictions
+│       ├── metrics.json         # Performance metrics (RMSE, MAE, R²)
+│       └── plots/               # Visualizations & SHAP plots
+├── lstm/
+│   └── [run_id]/
+│       └── ...
+└── tft/
+    └── [run_id]/
+        └── ...
+```
+
+### Visualizations
+
+Generated plots include:
+1. **Predicted vs Actual scatter plots** (per variable)
+2. **Trajectory comparisons** (model predictions vs IAM scenarios)
+3. **SHAP explainability plots** (feature importance over time)
+
+---
+
+## 🎨 Explore Your Results
+
+Launch the interactive Streamlit page to explore results:
+
 ```bash
 streamlit run scripts/dashboard.py
 ```
-Background with basic logging:
-```bash
-nohup streamlit run scripts/dashboard.py --logger.level=info --server.runOnSave=false > dashboard.out 2>&1 &
+
+Access at `http://localhost:8501`
+
+**Features (WIP):**
+- Compare predictions across models
+- Visualize scenario trajectories
+- Explore feature importance
+
+---
+
+## ❓ FAQ
+
+### Can I use pre-trained models for inference?
+
+Currently, we do not provide pre-trained models for direct inference. To use ML-IAM, you need to train models yourself using the pipeline. We may release pre-trained models in the future.
+
+**For now:**
+- Use the [Emulation Viewer](https://mliam.dev/) to explore pre-computed scenarios
+- Train models yourself following the [Quick Training](#-quick-training-xgboost) guide
+
+### How do I add new target variables?
+
+1. Edit `configs/data.py` and add to `OUTPUT_VARIABLES`:
+   ```python
+   OUTPUT_VARIABLES = [
+       'Emissions|CO2',
+       'Your|New|Variable',  # Add here
+   ]
+   ```
+2. Re-run data processing: `make process-data`
+3. Retrain models
+
+---
+
+## 📚 Citation
+
+```bibtex
+@article{egusphere-2025-5305,
+AUTHOR = {Shin, Y. and Lee, C. and Kim, E. and Myung, J. and Park, K. and Ha, J. and Choi, M.-Y. and Kim, B. and Ka, H. W. and Woo, J.-H. and Oh, A. and McJeon, H.},
+TITLE = {ML-IAM v1.0: Emulating Integrated Assessment Models With Machine Learning},
+JOURNAL = {EGUsphere},
+VOLUME = {2026},
+YEAR = {2026},
+PAGES = {1--24},
+URL = {https://egusphere.copernicus.org/preprints/2026/egusphere-2025-5305/},
+DOI = {10.5194/egusphere-2025-5305}
+}
 ```
 
----
-## 10. Project Layout
-```
-├── configs/
-│   ├── data.py                    # Data selection & feature engineering knobs
-│   ├── paths.py                   # Centralized path placeholders
-│   └── models/
-│       ├── __init__.py
-│       ├── xgb.py                 # XGBoost hyperparameter configurations
-│       ├── xgb_search.py          # XGBoost search space definitions
-│       ├── lstm.py                # LSTM hyperparameter configurations
-│       ├── tft.py                 # TFT hyperparameter configurations
-│       └── tft_search.py          # TFT search space definitions
-├── scripts/
-│   ├── dashboard.py               # Streamlit dashboard (exploration)
-│   ├── get_run_id.py              # Utility to retrieve run IDs
-│   ├── train_xgb.py               # XGBoost pipeline driver
-│   ├── train_lstm.py              # LSTM pipeline driver
-│   └── train_tft.py               # TFT pipeline driver
-├── src/
-│   ├── data/
-│   │   ├── preprocess.py          # Data preprocessing utilities
-│   │   └── process_data.py        # Main data processing pipeline
-│   ├── trainers/
-│   │   ├── evaluation.py          # Evaluation metrics & autoregressive testing
-│   │   ├── xgb_trainer.py         # XGBoost training & search routines
-│   │   ├── lstm_trainer.py        # LSTM training & search routines
-│   │   ├── tft_dataset.py         # TFT dataset builder
-│   │   ├── tft_model.py           # TFT model architecture
-│   │   ├── tft_trainer.py         # TFT training & search routines
-│   │   ├── tft_two_window_simple.py  # TFT dual-window utilities
-│   │   └── tft_utils.py           # TFT helper functions
-│   ├── utils/
-│   │   └── utils.py               # General utilities
-│   └── visualization/
-│       ├── __init__.py
-│       ├── helpers.py             # Shared plotting helpers
-│       ├── shap_nn.py             # SHAP for neural networks (TFT/LSTM)
-│       ├── shap_xgb.py            # SHAP for XGBoost
-│       └── trajectories.py        # Trajectory & scatter plot functions
-├── .gitignore
-├── Makefile                       # Data processing convenience target
-├── requirements.txt               # Python dependencies
-├── train_test_lstm.sh             # LSTM training shell script
-├── train_test_lstm_no_search.sh   # LSTM training without search
-└── train_test_tft.sh              # TFT training shell script
-```
+**Additionally, please cite the AR6 Scenario Database** per the [citation guidance](https://data.ene.iiasa.ac.at/ar6/#/license).
 
 ---
-## 11. Recommended Citation
-If you use this pipeline or derivative artifacts in academic or policy work, cite:
-* The IPCC AR6 Scenario Explorer per its official citation guidance.
-* (Placeholder for forthcoming paper)
 
----
-## 12. License
-This repository's code is released under the existing LICENSE file. AR6 data are subject to their own license; you must obtain and use them in compliance with: https://data.ene.iiasa.ac.at/ar6/#/license
+## 📄 License
 
----
-## 13. FAQ
-**Q:** How do I add a new target variable?  
-**A:** Append it to `OUTPUT_VARIABLES` in `configs/data.py`, re-run `make process-data`, then retrain models.
-
----
-Feel free to open issues for clarifications or enhancements.
-
+This code is released under [LICENSE]. The AR6 data used by this pipeline has its own separate license and must be obtained and used in compliance with the [IIASA AR6 license](https://data.ene.iiasa.ac.at/ar6/#/license).
