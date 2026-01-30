@@ -173,11 +173,11 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-# nohup
+# Custom ignores
 nohup.out
 lightning_logs/
 processed/
 results/
+
 .vscode/settings.json
 CLAUDE.md
-configs/paths.py
