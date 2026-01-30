@@ -1,0 +1,1043 @@
+No.,Variable(All),Level,Category_template,Model type,Unit,Definition,Type,Basis for Classification
+104,Capital Cost|Electricity|Biomass|w/ CCS,4,Capital costs,Energy system,US$2010/kW,"capital cost of a new biomass power plant with CCS. If more than technology in this category is modelled, modellers should report capital costs for the technology that is used most; please specify the technology name/characteristics in the comments.",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+105,Capital Cost|Electricity|Biomass|w/o CCS,4,Capital costs,Energy system,US$2010/kW,"capital cost of a new biomass power plant w/o CCS. If more than technology in this category is modelled, modellers should report capital costs for the technology that is used most; please specify the technology name/characteristics in the comments.",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+106,Capital Cost|Electricity|Coal|w/ CCS,4,Capital costs,Energy system,US$2010/kW,"capital cost of a new coal power plant with CCS. If more than technology in this category is modelled, modellers should report capital costs for the technology that is used most; please specify the technology name/characteristics in the comments.",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+107,Capital Cost|Electricity|Coal|w/o CCS,4,Capital costs,Energy system,US$2010/kW,"capital cost of a new coal power plant w/o CCS. If more than technology in this category is modelled, modellers should report capital costs for the technology that is used most; please specify the technology name/characteristics in the comments.",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+108,Capital Cost|Electricity|Gas|w/ CCS,4,Capital costs,Energy system,US$2010/kW,"capital cost of a new gas power plant with CCS. If more than technology in this category is modelled, modellers should report capital costs for the technology that is used most; please specify the technology name/characteristics in the comments.",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+109,Capital Cost|Electricity|Gas|w/o CCS,4,Capital costs,Energy system,US$2010/kW,"capital cost of a new gas power plant w/o CCS. If more than technology in this category is modelled, modellers should report capital costs for the technology that is used most; please specify the technology name/characteristics in the comments.",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+110,Capital Cost|Electricity|Geothermal,3,Capital costs,Energy system,US$2010/kW,"capital cost of a new geothermal power plant. If more than technology in this category is modelled, modellers should report capital costs for the technology that is used most; please specify the technology name/characteristics in the comments.",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+111,Capital Cost|Electricity|Hydro,3,Capital costs,Energy system,US$2010/kW,"capital cost of a new hydropower plant. If more than technology in this category is modelled, modellers should report capital costs for the technology that is used most; please specify the technology name/characteristics in the comments.",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+112,Capital Cost|Electricity|Nuclear,3,Capital costs,Energy system,US$2010/kW,"capital cost of a new nuclear power plants. If more than technology in this category is modelled, modellers should report capital costs for the technology that is used most; please specify the technology name/characteristics in the comments.",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+113,Capital Cost|Electricity|Solar|CSP,4,Capital costs,Energy system,US$2010/kW,"capital cost of a new concentrated solar power plant. If more than technology in this category is modelled, modellers should report capital costs for the technology that is used most; please specify the technology name/characteristics in the comments.",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+114,Capital Cost|Electricity|Solar|PV,4,Capital costs,Energy system,US$2010/kW,"capital cost of a new solar PV units. If more than technology in this category is modelled, modellers should report capital costs for the technology that is used most; please specify the technology name/characteristics in the comments.",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+120,Capital Cost|Electricity|Wind|Offshore,4,Capital costs,Energy system,US$2010/kW,"capital cost of a new offshore wind power plants. If more than technology in this category is modelled, modellers should report capital costs for the technology that is used most; please specify the technology name/characteristics in the comments.",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+121,Capital Cost|Electricity|Wind|Onshore,4,Capital costs,Energy system,US$2010/kW,"capital cost of a new onshore wind power plants. If more than technology in this category is modelled, modellers should report capital costs for the technology that is used most; please specify the technology name/characteristics in the comments.",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+133,Capital Cost|Hydrogen|Electricity,3,Capital costs,Energy system,US$2010/kW,"capital cost of a new hydrogen-by-electrolysis plant. If more than technology in this category is modelled, modellers should report capital costs for the technology that is used most; please specify the technology name/characteristics in the comments.",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+253,Efficiency|Electricity|Biomass|w/ CCS,4,Techno-economic,Energy system,%,"Conversion efficiency (electricity produced per unit of primary energy input) of a new biomass power plant with CCS. The efficiency should refer to the plant type(s) for which capital costs have been reported. If capital cost for more than one plant type has been reported, modellers should report efficiency for the additional plant types by adding variables Efficiency|Electricity|Biomass|w/ CCS|2, ... Efficiency|Electricity|Biomass|w/ CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",input,https://docs.messageix.org/en/stable/efficiency.html
+254,Efficiency|Electricity|Biomass|w/o CCS,4,Techno-economic,Energy system,%,"Conversion efficiency (electricity produced per unit of primary energy input) of a new biomass power plant w/o CCS. The efficiency should refer to the plant type(s) for which capital costs have been reported. If capital cost for more than one plant type has been reported, modellers should report efficiency for the additional plant types by adding variables Efficiency|Electricity|Biomass|w/o CCS|2, ... Efficiency|Electricity|Biomass|w/o CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",input,https://docs.messageix.org/en/stable/efficiency.html
+255,Efficiency|Electricity|Coal|w/ CCS,4,Techno-economic,Energy system,%,"Conversion efficiency (electricity produced per unit of primary energy input) of a new coal power plant with CCS. The efficiency should refer to the plant type(s) for which capital costs have been reported. If capital cost for more than one plant type has been reported, modellers should report efficiency for the additional plant types by adding variables Efficiency|Electricity|Coal|w/ CCS|2, ... Efficiency|Electricity|Coal|w/ CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",input,https://docs.messageix.org/en/stable/efficiency.html
+256,Efficiency|Electricity|Coal|w/o CCS,4,Techno-economic,Energy system,%,"Conversion efficiency (electricity produced per unit of primary energy input) of a new coal power plant w/o CCS. The efficiency should refer to the plant type(s) for which capital costs have been reported. If capital cost for more than one plant type has been reported, modellers should report efficiency for the additional plant types by adding variables Efficiency|Electricity|Coal|w/o CCS|2, ... Efficiency|Electricity|Coal|w/o CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",input,https://docs.messageix.org/en/stable/efficiency.html
+257,Efficiency|Electricity|Gas|w/ CCS,4,Techno-economic,Energy system,%,"Conversion efficiency (electricity produced per unit of primary energy input) of a new gas power plant with CCS. The efficiency should refer to the plant type(s) for which capital costs have been reported. If capital cost for more than one plant type has been reported, modellers should report efficiency for the additional plant types by adding variables Efficiency|Electricity|Gas|w/ CCS|2, ... Efficiency|Electricity|Gas|w/ CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",input,https://docs.messageix.org/en/stable/efficiency.html
+258,Efficiency|Electricity|Gas|w/o CCS,4,Techno-economic,Energy system,%,"Conversion efficiency (electricity produced per unit of primary energy input) of a new gas power plant w/o CCS. The efficiency should refer to the plant type(s) for which capital costs have been reported. If capital cost for more than one plant type has been reported, modellers should report efficiency for the additional plant types by adding variables Efficiency|Electricity|Gas|w/o CCS|2, ... Efficiency|Electricity|Gas|w/o CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",input,https://docs.messageix.org/en/stable/efficiency.html
+557,Energy Service|Transportation|Freight,3,Energy,Energy system,bn tkm/yr,annual demand for energy services related to freight transportation,output,https://jgcri.github.io/gcam-doc/inputs_demand.html
+565,Energy Service|Transportation|Passenger,3,Energy,Energy system,bn pkm/yr,annual demand for energy services related to passenger transportation,output,https://jgcri.github.io/gcam-doc/inputs_demand.html
+868,GDP|MER,2,Economy,Energy system,billion US$2010/yr,GDP at market exchange rate,input,https://jgcri.github.io/gcam-doc/demand_energy.html
+869,GDP|PPP,2,Economy,Energy system,billion Int$2010/yr,GDP at purchasing power parity,input,https://jgcri.github.io/gcam-doc/demand_energy.html
+885,Investment,1,Investment,Energy system,billion US$2010/yr,"Total economy wide investments (macroecomic capital stock, energy system, R&D, ...) ",output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+897,Investment|Energy Supply,2,Investment,Energy system,billion US$2010/yr,investments into the energy supply system,output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+898,Investment|Energy Supply|CO2 Transport and Storage,3,Investment,Energy system,billion US$2010/yr,investment in CO2 transport and storage (note that investment in the capturing equipment should be included along with the power plant technology),output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+899,Investment|Energy Supply|Electricity,3,Investment,Energy system,billion US$2010/yr,investments into electricity generation and supply (including electricity storage and transmission & distribution),output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+900,Investment|Energy Supply|Electricity|Biomass,4,Investment,Energy system,billion US$2010/yr,바이오매스를 이용한 전기공급에 대한 투자,output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+901,Investment|Energy Supply|Electricity|Biomass|w/ CCS,5,Investment,Energy system,billion US$2010/yr,바이오매스를 이용한 전기공급에 대한 투자(ccs 기술을 적용한),output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+902,Investment|Energy Supply|Electricity|Biomass|w/o CCS,5,Investment,Energy system,billion US$2010/yr,바이오매스를 이용한 전기공급에 대한 투자(ccs 기술을 적용하지 않은),output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+903,Investment|Energy Supply|Electricity|Coal,4,Investment,Energy system,billion US$2010/yr,석탄를 이용한 전기공급에 대한 투자,output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+904,Investment|Energy Supply|Electricity|Coal|w/ CCS,5,Investment,Energy system,billion US$2010/yr,석탄를 이용한 전기공급에 대한 투자(ccs 기술을 적용한),output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+905,Investment|Energy Supply|Electricity|Coal|w/o CCS,5,Investment,Energy system,billion US$2010/yr,석탄를 이용한 전기공급에 대한 투자(ccs 기술을 적용하지 않은),output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+906,Investment|Energy Supply|Electricity|Electricity Storage,4,Investment,Energy system,billion US$2010/yr,"investments in electricity storage technologies (e.g., batteries, compressed air storage reservoirs, etc.)",output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+907,Investment|Energy Supply|Electricity|Fossil,4,Investment,Energy system,billion US$2010/yr,화석연료를 이용한 전기공급에 대한 투자,output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+908,Investment|Energy Supply|Electricity|Gas,4,Investment,Energy system,billion US$2010/yr,가스를 이용한 전기공급에 대한 투자,output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+909,Investment|Energy Supply|Electricity|Gas|w/ CCS,5,Investment,Energy system,billion US$2010/yr,가스를 이용한 전기공급에 대한 투자(ccs 기술을 적용한),output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+910,Investment|Energy Supply|Electricity|Gas|w/o CCS,5,Investment,Energy system,billion US$2010/yr,가스를 이용한 전기공급에 대한 투자(ccs 기술을 적용한),output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+911,Investment|Energy Supply|Electricity|Geothermal,4,Investment,Energy system,billion US$2010/yr,지열를 이용한 전기공급에 대한 투자,output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+912,Investment|Energy Supply|Electricity|Hydro,4,Investment,Energy system,billion US$2010/yr,수력를 이용한 전기공급에 대한 투자,output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+913,Investment|Energy Supply|Electricity|Non-Biomass Renewables,4,Investment,Energy system,billion US$2010/yr,Non-Biomass Renewables를 이용한 전기공급에 대한 투자,output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+914,Investment|Energy Supply|Electricity|Non-fossil,4,Investment,Energy system,billion US$2010/yr,Non-fossil를 이용한 전기공급에 대한 투자,output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+915,Investment|Energy Supply|Electricity|Nuclear,4,Investment,Energy system,billion US$2010/yr,Nuclear를 이용한 전기공급에 대한 투자,output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+917,Investment|Energy Supply|Electricity|Oil,4,Investment,Energy system,billion US$2010/yr,석유를 이용한 전기공급에 대한 투자,output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+919,Investment|Energy Supply|Electricity|Oil|w/o CCS,5,Investment,Energy system,billion US$2010/yr,석유를 이용한 전기공급에 대한 투자(ccs 기술을 적용하지 않은),output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+922,Investment|Energy Supply|Electricity|Solar,4,Investment,Energy system,billion US$2010/yr,"investments in new power generation for the specified power plant category. If the model features several sub-categories, the total investments should be reported. For plants equipped with CCS, the investment in the capturing equipment should be included but not the one on transport and storage.",output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+923,Investment|Energy Supply|Electricity|Transmission and Distribution,4,Investment,Energy system,billion US$2010/yr,investments in transmission and distribution of power generation,output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+924,Investment|Energy Supply|Electricity|Wind,4,Investment,Energy system,billion US$2010/yr,"investments in new power generation for the specified power plant category. If the model features several sub-categories, the total investments should be reported. For plants equipped with CCS, the investment in the capturing equipment should be included but not the one on transport and storage.",output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+926,Investment|Energy Supply|Extraction|Coal,4,Investment,Energy system,billion US$2010/yr,"investments for extraction and conversion of coal. These should include mining, shipping and ports",output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+927,Investment|Energy Supply|Extraction|Fossil,4,Investment,Energy system,billion US$2010/yr,investments for all types of fossil extraction,output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+928,Investment|Energy Supply|Extraction|Gas,4,Investment,Energy system,billion US$2010/yr,"investments for extraction and conversion of natural gas. These should include upstream, LNG chain and transmission and distribution",output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+929,Investment|Energy Supply|Extraction|Oil,4,Investment,Energy system,billion US$2010/yr,"investments for extraction and conversion of oil. These should include upstream, transport and refining",output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+931,Investment|Energy Supply|Heat,3,Investment,Energy system,billion US$2010/yr,investments in heat generation facilities,output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+932,Investment|Energy Supply|Hydrogen,3,Investment,Energy system,billion US$2010/yr,investments for the production of hydrogen,output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+935,Investment|Energy Supply|Hydrogen|Fossil,4,Investment,Energy system,billion US$2010/yr,"investments for the production of hydrogen from fossil fuels. For plants equipped with CCS, the investment in the capturing equipment should be included but not the one on transport and storage.",output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+937,Investment|Energy Supply|Hydrogen|Renewable,4,Investment,Energy system,billion US$2010/yr,"investments for the production of hydrogen from the specified source. For plants equipped with CCS, the investment in the capturing equipment should be included but not the one on transport and storage.",output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+938,Investment|Energy Supply|Liquids,3,Investment,Energy system,billion US$2010/yr,"investments for the production of liquid fuels. For plants equipped with CCS, the investment in the capturing equipment should be included but not the one on transport and storage.",output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+939,Investment|Energy Supply|Liquids|Biomass,4,Investment,Energy system,billion US$2010/yr,"investments for the production of biofuels. These should not include the costs of the feedstock. For plants equipped with CCS, the investment in the capturing equipment should be included but not the one on transport and storage.",output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+940,Investment|Energy Supply|Liquids|Coal and Gas,4,Investment,Energy system,billion US$2010/yr,"investments for the production of fossil-based synfuels (coal and gas). For plants equipped with CCS, the investment in the capturing equipment should be included but not the one on transport and storage.",output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+941,Investment|Energy Supply|Liquids|Oil,4,Investment,Energy system,billion US$2010/yr,"investments for the production of fossil fuels from oil refineries For plants equipped with CCS, the investment in the capturing equipment should be included but not the one on transport and storage.",output,"- https://pure.iiasa.ac.at/id/eprint/19589/1/Downscaling%20down%20under%20towards%20degrowth%20in%20integrated%20assessment%20models.pdf
+- https://www.econstor.eu/bitstream/10419/276241/1/SSRN-id4301223.pdf"
+951,Lifetime|Electricity|Coal|w/o CCS,4,Techno-economic,Energy system,years,"Lifetime of a new coal power plant w/o CCS. Lifetime should be calculated by summing all vintages of a  capacity unit (e.g. (1+1+0.9+0.7+0.5) * 10 years = 41 years) or by the e-folding time for exponential capacity depreciation.  The lifetime should refer to the plant type(s) for which capital costs have been reported. If capital cost for more than one plant type has been reported, modellers should report lifetime for the additional plant types by adding variables Lifetime|Electricity|Coal|w/o CCS|2, ... Lifetime|Electricity|Coal|w/o CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",input,https://www.iamcdocumentation.eu/index.php/Model_inputs_-_GCAM
+953,Lifetime|Electricity|Gas|w/o CCS,4,Techno-economic,Energy system,years,"Lifetime of a new gas power plant w/o CCS. Lifetime should be calculated by summing all vintages of a  capacity unit (e.g. (1+1+0.9+0.7+0.5) * 10 years = 41 years) or by the e-folding time for exponential capacity depreciation.  The lifetime should refer to the plant type(s) for which capital costs have been reported. If capital cost for more than one plant type has been reported, modellers should report lifetime for the additional plant types by adding variables Lifetime|Electricity|Gas|w/o CCS|2, ... Lifetime|Electricity|Gas|w/o CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",input,https://www.iamcdocumentation.eu/index.php/Model_inputs_-_GCAM
+954,Lifetime|Electricity|Geothermal,3,Techno-economic,Energy system,years,"Lifetime of a new geothermal power plant. Lifetime should be calculated by summing all vintages of a  capacity unit (e.g. (1+1+0.9+0.7+0.5) * 10 years = 41 years) or by the e-folding time for exponential capacity depreciation.  The lifetime should refer to the plant type(s) for which capital costs have been reported. If capital cost for more than one plant type has been reported, modellers should report lifetime for the additional plant types by adding variables Lifetime|Electricity|Geothermal|2, ... Lifetime|Electricity|Geothermal|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",input,https://www.iamcdocumentation.eu/index.php/Model_inputs_-_GCAM
+955,Lifetime|Electricity|Hydro,3,Techno-economic,Energy system,years,"Lifetime of a new hydropower plant. Lifetime should be calculated by summing all vintages of a  capacity unit (e.g. (1+1+0.9+0.7+0.5) * 10 years = 41 years) or by the e-folding time for exponential capacity depreciation.  The lifetime should refer to the plant type(s) for which capital costs have been reported. If capital cost for more than one plant type has been reported, modellers should report lifetime for the additional plant types by adding variables Lifetime|Electricity|Hydro|2, ... Lifetime|Electricity|Hydro|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",input,https://www.iamcdocumentation.eu/index.php/Model_inputs_-_GCAM
+956,Lifetime|Electricity|Nuclear,3,Techno-economic,Energy system,years,"Lifetime of a new nuclear power plant. Lifetime should be calculated by summing all vintages of a  capacity unit (e.g. (1+1+0.9+0.7+0.5) * 10 years = 41 years) or by the e-folding time for exponential capacity depreciation.  The lifetime should refer to the plant type(s) for which capital costs have been reported. If capital cost for more than one plant type has been reported, modellers should report lifetime for the additional plant types by adding variables Lifetime|Electricity|Nuclear|2, ... Lifetime|Electricity|Nuclear|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",input,https://www.iamcdocumentation.eu/index.php/Model_inputs_-_GCAM
+958,Lifetime|Electricity|Solar|PV,4,Techno-economic,Energy system,years,"Lifetime of a new PV unit. Lifetime should be calculated by summing all vintages of a  capacity unit (e.g. (1+1+0.9+0.7+0.5) * 10 years = 41 years) or by the e-folding time for exponential capacity depreciation.  The lifetime should refer to the plant type(s) for which capital costs have been reported. If capital cost for more than one plant type has been reported, modellers should report lifetime for the additional plant types by adding variables Lifetime|Electricity|Solar|PV|2, ... Lifetime|Electricity|Solar|PV|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",input,https://www.iamcdocumentation.eu/index.php/Model_inputs_-_GCAM
+976,Lifetime|Hydrogen|Electricity,3,Techno-economic,Energy system,years,"Lifetime of a new hydrogen-by-electrolysis plant. Lifetime should be calculated by summing all vintages of a  capacity unit (e.g. (1+1+0.9+0.7+0.5) * 10 years = 41 years) or by the e-folding time for exponential capacity depreciation.  The lifetime should refer to the plant type(s) for which capital costs have been reported. If capital cost for more than one plant type has been reported, modellers should report lifetime for the additional plant types by adding variables Lifetime|Hydrogen|Electricity|w/ CCS|2, ... Lifetime|Hydrogen|Electricity|w/ CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",input,https://www.iamcdocumentation.eu/index.php/Model_inputs_-_GCAM
+996,OM Cost|Fixed|Electricity|Biomass|w/ CCS,5,Techno-economic,Energy system,US$2010/kW/yr,"Annual fixed operation & maintainance cost of a new biomass power plant with CCS. If more than one CCS biomass power technology is modelled, modellers should report fixed O&M costs  for each represented CCS biomass power technology by adding variables OM Cost|Fixed|Electricity|Biomass|w/ CCS|2, ... OM Cost|Fixed|Electricity|Biomass|w/ CCS|N (with N = number of represented technologies) (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet).",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+997,OM Cost|Fixed|Electricity|Biomass|w/o CCS,5,Techno-economic,Energy system,US$2010/kW/yr,"Annual fixed operation & maintainance cost of a new biomass power plant w/o CCS. If more than one biomass power technology is modelled, modellers should report fixed O&M costs  for each represented biomass power technology by adding variables OM Cost|Fixed|Electricity|Biomass|w/o CCS|2, ... OM Cost|Fixed|Electricity|Biomass|w/o CCS|N (with N = number of represented technologies) (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet).",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+998,OM Cost|Fixed|Electricity|Coal|w/ CCS,5,Techno-economic,Energy system,US$2010/kW/yr,"Annual fixed operation & maintainance cost of a new coal power plant with CCS. If more than one CCS coal power technology is modelled (e.g. subcritical PC with post-combustion capture, supercritical PC with post-combustion capture, supercritical PC with oxyfuel combustion and capture, IGCC with pre-combustion capture), modellers should report fixed O&M costs  for each represented CCS coal power technology by adding variables OM Cost|Fixed|Electricity|Coal|w/ CCS|2, ... OM Cost|Fixed|Electricity|Coal|w/ CCS|N (with N = number of represented technologies) (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet).",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+999,OM Cost|Fixed|Electricity|Coal|w/o CCS,5,Techno-economic,Energy system,US$2010/kW/yr,"Annual fixed operation & maintainance cost of a new coal power plant w/o CCS. If more than one coal power technology is modelled (e.g. subcritical PC, supercritical PC, IGCC), modellers should report fixed O&M costs  for each represented coal power technology by adding variables OM Cost|Fixed|Electricity|Coal|w/o CCS|2, ... OM Cost|Fixed|Electricity|Coal|w/o CCS|N (with N = number of represented technologies) (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet).",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+1000,OM Cost|Fixed|Electricity|Gas|w/ CCS,5,Techno-economic,Energy system,US$2010/kW/yr,"Annual fixed operation & maintainance cost of a new gas power plant with CCS. If more than one CCS gas power technology is modelled, modellers should report fixed O&M costs  for each represented CCS gas power technology by adding variables OM Cost|Fixed|Electricity|Gas|w/ CCS|2, ... OM Cost|Fixed|Electricity|Gas|w/ CCS|N (with N = number of represented technologies) (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet).",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+1001,OM Cost|Fixed|Electricity|Gas|w/o CCS,5,Techno-economic,Energy system,US$2010/kW/yr,"Annual fixed operation & maintainance cost of a new gas power plant w/o CCS. If more than one gas power technology is modelled, modellers should report fixed O&M costs  for each represented gas power technology by adding variables OM Cost|Fixed|Electricity|Gas|w/o CCS|2, ... OM Cost|Fixed|Electricity|Gas|w/o CCS|N (with N = number of represented technologies) (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet).",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+1002,OM Cost|Fixed|Electricity|Geothermal,4,Techno-economic,Energy system,US$2010/kW/yr,"Annual fixed operation & maintainance cost of a new geothermal power plants. If more than one geothermal power plant technology is modelled (e.g., hydrothermal, hard dry rock), modellers should report fixed O&M costs  for each represented geothermal power technology by adding variables OM Cost|Fixed|Electricity|Geothermal|2, ... Capital|Cost|Electricity|Geothermal|N (with N = number of represented geothermal power technologies) (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet).",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+1003,OM Cost|Fixed|Electricity|Hydro,4,Techno-economic,Energy system,US$2010/kW/yr,"Annual fixed operation & maintainance cost of a new hydropower plant. If more than one hydropower technology is modelled, modellers should report fixed O&M costs  for each represented hydropower technology by adding variables OM Cost|Fixed|Electricity|Hydro|2, ... OM Cost|Fixed|Electricity|Hydro|N (with N = number of represented technologies) (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet).",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+1004,OM Cost|Fixed|Electricity|Nuclear,4,Techno-economic,Energy system,US$2010/kW/yr,"Annual fixed operation & maintainance cost of a new nuclear power plants. If more than one nuclear power plant technology is modelled (e.g., Gen II, III, IV; LWR, thermal reactors with other moderator materials, fast breeders), modellers should report fixed O&M costs  for each represented nuclear power technology by adding variables OM Cost|Fixed|Electricity|Nuclear|2, ... Capital|Cost|Electricity|Nuclear|N (with N = number of represented nuclear power technologies) (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet).",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+1005,OM Cost|Fixed|Electricity|Solar|CSP,5,Techno-economic,Energy system,US$2010/kW/yr,"Annual fixed operation & maintainance cost of a new concentrated solar power plant. If more than one CSP technology is modelled (e.g., parabolic trough, solar power tower), modellers should report fixed O&M costs  for each represented CSP technology by adding variables OM Cost|Fixed|Electricity|Solar|CSP|2, ... Capital|Cost|Electricity|Solar|CSP|N (with N = number of represented CSP technologies) (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet).",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+1006,OM Cost|Fixed|Electricity|Solar|PV,5,Techno-economic,Energy system,US$2010/kW/yr,"Annual fixed operation & maintainance cost of a new solar PV units. If more than one PV technology is modelled (e.g., centralized PV plant, distributed (rooftop) PV, crystalline SI PV, thin-film PV), modellers should report fixed O&M costs  for each represented PV technology by adding variables OM Cost|Fixed|Electricity|Solar|PV|2, ... Capital|Cost|Electricity|Solar|PV|N (with N = number of represented PV technologies) (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet).",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+1008,OM Cost|Fixed|Electricity|Wind|Offshore,5,Techno-economic,Energy system,US$2010/kW/yr,"Annual fixed operation & maintainance cost of a new offshore wind power plants. This variable should only be filled, if wind power is separated into onshore and offshore. If more than one offshore wind power technology is modelled (e.g., wind power units with different hub height and capacity), modellers should report fixed O&M costs  for each represented wind power technology by adding variables OM Cost|Fixed|Electricity|Wind|Offshore|2, ... Capital|Cost|Electricity|Wind|Offshore|N (with N = number of represented offshore wind power technologies) (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet).",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+1009,OM Cost|Fixed|Electricity|Wind|Onshore,5,Techno-economic,Energy system,US$2010/kW/yr,"Annual fixed operation & maintainance cost of a new onshore wind power plants. This variable should only be filled, if wind power is separated into onshore and offshore. If more than one onshore wind power technology is modelled (e.g., wind power units with different hub height and capacity), modellers should report fixed O&M costs  for each represented wind power technology by adding variables OM Cost|Fixed|Electricity|Wind|Onshore|2, ... Capital|Cost|Electricity|Wind|Onshore|N (with N = number of represented onshore wind power technologies) (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet).",input,https://jgcri.github.io/gcam-doc/inputs_supply.html
+1042,Population,1,SDG,Energy system,million,total population,input,"- https://www.nature.com/articles/s41558-021-01098-3
+- https://jgcri.github.io/gcam-doc/index.html"
+1066,Price|Agriculture|Non-Energy Crops and Livestock|Index,4,Economy,Energy system,Index (2010 = 1),weighted average price index of non-energy crops and livestock products,output,"-https://jgcri.github.io/gcam-doc/index.html
+- https://pure.iiasa.ac.at/id/eprint/14503/1/Transportelasticities_secondsubm.pdf"
+1071,Price|Carbon,2,Economy,Energy system,US$2010/t CO2,price of carbon (for regional aggregrates the weighted price of carbon by subregion should be used),input,"-https://jgcri.github.io/gcam-doc/index.html
+- https://pure.iiasa.ac.at/id/eprint/14503/1/Transportelasticities_secondsubm.pdf"
+1084,Price|Primary Energy|Biomass,3,Economy,Energy system,US$2010/GJ,biomass producer price,output,"-https://jgcri.github.io/gcam-doc/index.html
+- https://pure.iiasa.ac.at/id/eprint/14503/1/Transportelasticities_secondsubm.pdf"
+1085,Price|Primary Energy|Coal,3,Economy,Energy system,US$2010/GJ,coal price at the primary level (i.e. the spot price at the global or regional market),output,"-https://jgcri.github.io/gcam-doc/index.html
+- https://pure.iiasa.ac.at/id/eprint/14503/1/Transportelasticities_secondsubm.pdf"
+1086,Price|Primary Energy|Gas,3,Economy,Energy system,US$2010/GJ,natural gas price at the primary level (i.e. the spot price at the global or regional market),output,"-https://jgcri.github.io/gcam-doc/index.html
+- https://pure.iiasa.ac.at/id/eprint/14503/1/Transportelasticities_secondsubm.pdf"
+1087,Price|Primary Energy|Oil,3,Economy,Energy system,US$2010/GJ,crude oil price at the primary level (i.e. the spot price at the global or regional market),output,"-https://jgcri.github.io/gcam-doc/index.html
+- https://pure.iiasa.ac.at/id/eprint/14503/1/Transportelasticities_secondsubm.pdf"
+1088,Price|Secondary Energy|Electricity,3,Economy,Energy system,US$2010/GJ,"electricity price at the secondary level, i.e. for large scale consumers (e.g. aluminum production).  Prices should include the effect of carbon prices.",output,"-https://jgcri.github.io/gcam-doc/index.html
+- https://pure.iiasa.ac.at/id/eprint/14503/1/Transportelasticities_secondsubm.pdf"
+1089,Price|Secondary Energy|Gases|Natural Gas,4,Economy,Energy system,US$2010/GJ,"natural gas price at the secondary level, i.e. for large scale consumers (e.g. gas power plant). Prices should include the effect of carbon prices.",output,"-https://jgcri.github.io/gcam-doc/index.html
+- https://pure.iiasa.ac.at/id/eprint/14503/1/Transportelasticities_secondsubm.pdf"
+1090,Price|Secondary Energy|Hydrogen,3,Economy,Energy system,US$2010/GJ,hydrogen price at the secondary level. Prices should include the effect of carbon prices,output,"-https://jgcri.github.io/gcam-doc/index.html
+- https://pure.iiasa.ac.at/id/eprint/14503/1/Transportelasticities_secondsubm.pdf"
+1091,Price|Secondary Energy|Liquids,3,Economy,Energy system,US$2010/GJ,"liquid fuel price at the secondary level, i.e. petrol, diesel, or weighted average",output,"-https://jgcri.github.io/gcam-doc/index.html
+- https://pure.iiasa.ac.at/id/eprint/14503/1/Transportelasticities_secondsubm.pdf"
+1092,Price|Secondary Energy|Liquids|Biomass,4,Economy,Energy system,US$2010/GJ,"biofuel price at the secondary level, i.e. for biofuel consumers",output,"-https://jgcri.github.io/gcam-doc/index.html
+- https://pure.iiasa.ac.at/id/eprint/14503/1/Transportelasticities_secondsubm.pdf"
+1093,Price|Secondary Energy|Liquids|Oil,4,Economy,Energy system,US$2010/GJ,"light fuel oil price at the secondary level, i.e. for large scale consumers (e.g. oil power plant). Prices should include the effect of carbon prices.",output,"-https://jgcri.github.io/gcam-doc/index.html
+- https://pure.iiasa.ac.at/id/eprint/14503/1/Transportelasticities_secondsubm.pdf"
+1333,Agricultural Demand,1,Land,Land,million t DM/yr,"total demand for food, non-food and feed products (crops and livestock) and bioenergy crops (1st & 2nd generation)",output,https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+1334,Agricultural Demand|Crops,2,Land,Land,million t DM/yr,"total demand for food, non-food and feed crops and bioenergy crops (1st & 2nd generation)",output,https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+1335,Agricultural Demand|Crops|Energy,3,Land,Land,million t DM/yr,demand for modern primary energy crops (1st and 2nd generation),output,https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+1336,Agricultural Demand|Crops|Energy|1st generation,4,Land,Land,million t DM/yr,Demand for modern primary 1st generation energy crops,output,https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+1337,Agricultural Demand|Crops|Energy|2nd generation,4,Land,Land,million t DM/yr,Demand for modern primary 2nd generation energy crops,output,https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+1338,Agricultural Demand|Crops|Feed,3,Land,Land,million t DM/yr,total demand for feed crops,output,https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+1339,Agricultural Demand|Crops|Food,3,Land,Land,million t DM/yr,total demand for food crops,output,https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+1340,Agricultural Demand|Crops|Other,3,Land,Land,million t DM/yr,total demand for other crops,output,https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+1341,Agricultural Demand|Livestock,2,Land,Land,million t DM/yr,total demand for livestock,output,https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+1342,Agricultural Demand|Livestock|Food,3,Land,Land,million t DM/yr,total demand for food livestock,output,https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+1343,Agricultural Demand|Livestock|Other,3,Land,Land,million t DM/yr,total demand for other livestock,output,https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+1410,Food Demand,1,SDG,Land,kcal/cap/day,"all food demand in calories (conversion factor: 1 kcal = 4,1868 kJ)",output,https://jgcri.github.io/gcam-doc/inputs_demand.html
+1411,Food Demand|Crops,2,SDG,Land,kcal/cap/day,crop related food demand in calories,output,https://jgcri.github.io/gcam-doc/inputs_demand.html
+1412,Food Demand|Livestock,2,SDG,Land,kcal/cap/day,livestock related food demand in calories,output,https://jgcri.github.io/gcam-doc/inputs_demand.html
+1436,Land Cover,1,Land cover,Land,million ha,total land cover,output,"land 모형에서는 출력변수이지만, 에너지 모형에서는 demand 개념으로도 사용됨"
+1437,Land Cover|Built-up Area,2,Land cover,Land,million ha,total built-up land associated with human settlement,output,"land 모형에서는 출력변수이지만, 에너지 모형에서는 demand 개념으로도 사용됨"
+1438,Land Cover|Cropland,2,Land cover,Land,million ha,"total arable land, i.e. land in non-forest bioenergy crop, food, and feed/fodder crops, as well as other arable land (cultivated area)",output,"land 모형에서는 출력변수이지만, 에너지 모형에서는 demand 개념으로도 사용됨"
+1439,Land Cover|Cropland|Cereals,3,Land cover,Land,million ha,"land dedicated to cereal crops: wheat, rice and coarse grains (maize, corn, millet, sorghum, barley, oats, rye)",output,"land 모형에서는 출력변수이지만, 에너지 모형에서는 demand 개념으로도 사용됨"
+1441,Land Cover|Cropland|Energy Crops,3,Land cover,Land,million ha,land dedicated to both 1st & 2nd generation energy crops,output,"land 모형에서는 출력변수이지만, 에너지 모형에서는 demand 개념으로도 사용됨"
+1444,Land Cover|Cropland|Irrigated,3,Land cover,Land,million ha,"irrigated arable land, i.e. land in non-forest bioenergy crop, food, and feed/fodder crops, as well as other arable land (cultivated area)",output,"land 모형에서는 출력변수이지만, 에너지 모형에서는 demand 개념으로도 사용됨"
+1448,Land Cover|Forest,2,Land cover,Land,million ha,managed and unmanaged forest area,output,"land 모형에서는 출력변수이지만, 에너지 모형에서는 demand 개념으로도 사용됨"
+1449,Land Cover|Forest|Afforestation and Reforestation,3,Land cover,Land,million ha,area with afforestation and reforestation,output,"land 모형에서는 출력변수이지만, 에너지 모형에서는 demand 개념으로도 사용됨"
+1451,Land Cover|Forest|Managed,3,Land cover,Land,million ha,"managed forests producing commercial wood supply for timber or energy (note: woody energy crops reported under ""energy crops"")",output,"land 모형에서는 출력변수이지만, 에너지 모형에서는 demand 개념으로도 사용됨"
+1452,Land Cover|Forest|Natural Forest,3,Land cover,Land,million ha,"undisturbed natural forests, modified natural forests",output,"land 모형에서는 출력변수이지만, 에너지 모형에서는 demand 개념으로도 사용됨"
+1456,Land Cover|Other Land,2,Land cover,Land,million ha,"other land cover that does not fit into any other category (e.g., rock, ice, desert, water, please provide a definition of the sources in this category in the 'comments' tab)",output,"land 모형에서는 출력변수이지만, 에너지 모형에서는 demand 개념으로도 사용됨"
+1457,Land Cover|Pasture,2,Land cover,Land,million ha,"pasture land. All categories of pasture land - not only high quality rangeland. Based on FAO definition of ""permanent meadows and pastures""",output,"land 모형에서는 출력변수이지만, 에너지 모형에서는 demand 개념으로도 사용됨"
+1,Capacity Additions|Electricity|Biomass,3,Energy,Energy system,GW/yr,Capacity additions of all biomass power plants (yearly average additions between previos and current model time step) ,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+2,Capacity Additions|Electricity|Biomass|w/ CCS,4,Energy,Energy system,GW/yr,Capacity additions of biomass power plants with CCS (yearly average additions between previos and current model time step) ,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+3,Capacity Additions|Electricity|Biomass|w/o CCS,4,Energy,Energy system,GW/yr,Capacity additions of biomass power plants without CCS (yearly average additions between previos and current model time step) ,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+4,Capacity Additions|Electricity|Coal,3,Energy,Energy system,GW/yr,Capacity additions of all coal power plants (yearly average additions between previos and current model time step) ,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+5,Capacity Additions|Electricity|Coal|w/ CCS,4,Energy,Energy system,GW/yr,Capacity additions of coal power plants with CCS (yearly average additions between previos and current model time step) ,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+6,Capacity Additions|Electricity|Coal|w/o CCS,4,Energy,Energy system,GW/yr,Capacity additions of coal power plants without CCS (yearly average additions between previos and current model time step) ,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+8,Capacity Additions|Electricity|Gas,3,Energy,Energy system,GW/yr,Capacity additions of all gas power plants (yearly average additions between previos and current model time step) ,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+9,Capacity Additions|Electricity|Gas|w/ CCS,4,Energy,Energy system,GW/yr,Capacity additions of gas power plants with CCS (yearly average additions between previos and current model time step) ,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+10,Capacity Additions|Electricity|Gas|w/o CCS,4,Energy,Energy system,GW/yr,Capacity additions of gas power plants without CCS (yearly average additions between previos and current model time step) ,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+12,Capacity Additions|Electricity|Hydro,3,Energy,Energy system,GW/yr,Capacity additions of hydropower plants (yearly average additions between previos and current model time step) ,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+14,Capacity Additions|Electricity|Nuclear,3,Energy,Energy system,GW/yr,Capacity additions of nuclear power plants (yearly average additions between previos and current model time step) ,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+19,Capacity Additions|Electricity|Solar,3,Energy,Energy system,GW/yr,Capacity additions of solar power plants (yearly average additions between previos and current model time step) ,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+20,Capacity Additions|Electricity|Solar|CSP,4,Energy,Energy system,GW/yr,Capacity additions of concentrated solar power plants (yearly average additions between previos and current model time step) ,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+21,Capacity Additions|Electricity|Solar|PV,4,Energy,Energy system,GW/yr,Capacity additions of solar PV (yearly average additions between previos and current model time step) ,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+23,Capacity Additions|Electricity|Wind,3,Energy,Energy system,GW/yr,Capacity additions of wind power plants (onshore and offshore) (yearly average additions between previos and current model time step) ,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+24,Capacity Additions|Electricity|Wind|Offshore,4,Energy,Energy system,GW/yr,Capacity additions of wind power plants (ooffshore) (yearly average additions between previos and current model time step) ,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+25,Capacity Additions|Electricity|Wind|Onshore,4,Energy,Energy system,GW/yr,Capacity additions of wind power plants (onshore) (yearly average additions between previos and current model time step) ,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+26,Capacity|Electricity,2,Energy,Energy system,GW,total installed electricity generation capacity,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+27,Capacity|Electricity|Biomass,3,Energy,Energy system,GW,total installed electricity generation capacity of biomass power plants,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+28,Capacity|Electricity|Biomass|w/ CCS,4,Energy,Energy system,GW,"Total installed (available) capacity of biomass power plants with CCS, including plants held in an operating reserve. The installed (available) capacity of CCS biomass power plants by plant type for which capital costs are reported should be reported by adding variables Capacity|Electricity|Biomass|w/ CCS|1, ..., Capacity|Electricity|Biomass|w/ CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+29,Capacity|Electricity|Biomass|w/o CCS,4,Energy,Energy system,GW,"Total installed (available) capacity of biomass power plants without CCS, including plants held in an operating reserve. The installed (available) capacity of biomass power plants by plant type for which capital costs are reported should be reported by adding variables Capacity|Electricity|Biomass|w/o CCS|1, ..., Capacity|Electricity|Biomass|w/o CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+30,Capacity|Electricity|Coal,3,Energy,Energy system,GW,total installed electricity generation capacity of coal power plants,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+31,Capacity|Electricity|Coal|w/ CCS,4,Energy,Energy system,GW,"Total installed (available) capacity of coal power plants with CCS, including plants held in an operating reserve. The installed (available) capacity of CCS coal power plants by plant type for which capital costs are reported should be reported by adding variables Capacity|Electricity|Coal|w/ CCS|1, ..., Capacity|Electricity|Coal|w/ CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+32,Capacity|Electricity|Coal|w/o CCS,4,Energy,Energy system,GW,"Total installed (available) capacity of coal power plants without CCS, including plants held in an operating reserve. The installed (available) capacity of coal power plants by plant type for which capital costs are reported should be reported by adding variables Capacity|Electricity|Coal|w/o CCS|1, ..., Capacity|Electricity|Coal|w/o CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+34,Capacity|Electricity|Gas,3,Energy,Energy system,GW,total installed electricity generation capacity of gas power plants,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+35,Capacity|Electricity|Gas|w/ CCS,4,Energy,Energy system,GW,"Total installed (available) capacity of gas power plants with CCS, including plants held in an operating reserve. The installed (available) capacity of CCS gas power plants by plant type for which capital costs are reported should be reported by adding variables Capacity|Electricity|Gas|w/ CCS|1, ..., Capacity|Electricity|Gas|w/ CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+36,Capacity|Electricity|Gas|w/o CCS,4,Energy,Energy system,GW,"Total installed (available) capacity of gas power plants without CCS, including plants held in an operating reserve. The installed (available) capacity of gas power plants by plant type for which capital costs are reported should be reported by adding variables Capacity|Electricity|Gas|w/o CCS|1, ..., Capacity|Electricity|Gas|w/o CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+37,Capacity|Electricity|Geothermal,3,Energy,Energy system,GW,total installed electricity generation capacity of geothermal power plants,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+38,Capacity|Electricity|Hydro,3,Energy,Energy system,GW,total installed electricity generation capacity of hydro power plants,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+40,Capacity|Electricity|Nuclear,3,Energy,Energy system,GW,total installed electricity generation capacity of nuclear power plants,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+42,Capacity|Electricity|Oil,3,Energy,Energy system,GW,total installed electricity generation capacity of oil power plants,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+43,Capacity|Electricity|Oil|w/ CCS,4,Energy,Energy system,GW,"Total installed (available) capacity of oil power plants with CCS, including plants held in an operating reserve. The installed (available) capacity of CCS oil power plants by plant type for which capital costs are reported should be reported by adding variables Capacity|Electricity|Oil|w/ CCS|1, ..., Capacity|Electricity|Oil|w/ CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+44,Capacity|Electricity|Oil|w/o CCS,4,Energy,Energy system,GW,"Total installed (available) capacity of oil power plants without CCS, including plants held in an operating reserve. The installed (available) capacity of oil power plants by plant type for which capital costs are reported should be reported by adding variables Capacity|Electricity|Oil|w/o CCS|1, ..., Capacity|Electricity|Oil|w/o CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+48,Capacity|Electricity|Solar,3,Energy,Energy system,GW,total installed electricity generation capacity of solar power installations,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+49,Capacity|Electricity|Solar|CSP,4,Energy,Energy system,GW,total installed electricity generation capacity of CSP plants,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+50,Capacity|Electricity|Solar|PV,4,Energy,Energy system,GW,total installed electricity generation capacity of PV installations,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+53,Capacity|Electricity|Storage,3,Energy,Energy system,GW,Total installed (available) capacity of operating electricity storage,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+61,Capacity|Electricity|Wind,3,Energy,Energy system,GW,total installed electricity generation capacity of wind power installations,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+62,Capacity|Electricity|Wind|Offshore,4,Energy,Energy system,GW,total installed electricity generation capacity of offshore wind power installations,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+63,Capacity|Electricity|Wind|Onshore,4,Energy,Energy system,GW,total installed electricity generation capacity of onshore wind power installations,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+191,Cumulative Capacity|Electricity|Biomass,3,Energy,Energy system,GW,cumulative installed capacity (since 2005) of biomass power plants,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+192,Cumulative Capacity|Electricity|Biomass|w/ CCS,4,Energy,Energy system,GW,cumulative installed capacity (since 2005) of biomass power plants with CCS.,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+193,Cumulative Capacity|Electricity|Biomass|w/o CCS,4,Energy,Energy system,GW,cumulative installed capacity (since 2005) of biomass power plants without CCS.,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+194,Cumulative Capacity|Electricity|Coal,3,Energy,Energy system,GW,cumulative installed capacity (since 2005) of coal power plants,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+195,Cumulative Capacity|Electricity|Coal|w/ CCS,4,Energy,Energy system,GW,cumulative installed capacity (since 2005) of coal power plants with CCS.,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+196,Cumulative Capacity|Electricity|Coal|w/o CCS,4,Energy,Energy system,GW,cumulative installed capacity (since 2005) of coal power plants without CCS.,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+198,Cumulative Capacity|Electricity|Gas,3,Energy,Energy system,GW,cumulative installed capacity (since 2005) of gas power plants,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+199,Cumulative Capacity|Electricity|Gas|w/ CCS,4,Energy,Energy system,GW,cumulative installed capacity (since 2005) of gas power plants without CCS.,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+200,Cumulative Capacity|Electricity|Gas|w/o CCS,4,Energy,Energy system,GW,cumulative installed capacity (since 2005) of gas power plants with CCS.,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+201,Cumulative Capacity|Electricity|Geothermal,3,Energy,Energy system,GW,cumulative installed capacity (since 2005) of geothermal power plants,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+202,Cumulative Capacity|Electricity|Hydro,3,Energy,Energy system,GW,cumulative installed capacity (since 2005) of hydro power plants,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+204,Cumulative Capacity|Electricity|Nuclear,3,Energy,Energy system,GW,cumulative installed capacity (since 2005) of nuclear power plants,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+206,Cumulative Capacity|Electricity|Oil,3,Energy,Energy system,GW,cumulative installed capacity (since 2005) of oil power plants,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+207,Cumulative Capacity|Electricity|Oil|w/ CCS,4,Energy,Energy system,GW,"Cumulative installed capacity (since 2005) of oil power plants with CCS. The cumulative capacity of CCS oil power plants by plant type for which capital costs are reported should be reported by adding variables Cumulative Capacity|Electricity|Oil|w/ CCS|1, ..., Cumulative Capacity|Electricity|Oil|w/ CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+208,Cumulative Capacity|Electricity|Oil|w/o CCS,4,Energy,Energy system,GW,"Cumulative installed capacity (since 2005) of oil power plants without CCS. The cumulative capacity of oil power plants by plant type for which capital costs are reported should be reported by adding variables Cumulative Capacity|Electricity|Oil|w/o CCS|1, ..., Cumulative Capacity|Electricity|Oil|w/o CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+211,Cumulative Capacity|Electricity|Solar,3,Energy,Energy system,GW,cumulative installed capacity (since 2005) of solar power installations,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+212,Cumulative Capacity|Electricity|Solar|CSP,4,Energy,Energy system,GW,cumulative installed capacity (since 2005) of CSP plants,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+213,Cumulative Capacity|Electricity|Solar|PV,4,Energy,Energy system,GW,cumulative installed capacity (since 2005) of PV installations,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+214,Cumulative Capacity|Electricity|Wind,3,Energy,Energy system,GW,cumulative installed capacity (since 2005) of wind power installations,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+215,Cumulative Capacity|Electricity|Wind|Offshore,4,Energy,Energy system,GW,cumulative installed capacity (since 2005) of offshore wind power installations,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+216,Cumulative Capacity|Electricity|Wind|Onshore,4,Energy,Energy system,GW,cumulative installed capacity (since 2005) of onshore wind power installations,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+223,Cumulative Capacity|Hydrogen|Biomass,3,Energy,Energy system,GW,Cumulative installed capacity (since 2005) of biomass to hydrogen plants.,output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+224,Cumulative Capacity|Hydrogen|Biomass|w/ CCS,4,Energy,Energy system,GW,"Cumulative installed capacity (since 2005) of biomass to hydrogen plants with CCS. The cumulative capacity of CCS biomass to hydrogen plants by plant type for which capital costs are reported should be reported by adding variables Cumulative Capacity|Hydrogen|Biomass|w/ CCS|1, ..., Cumulative Capacity|Hydrogen|Biomass|w/ CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+225,Cumulative Capacity|Hydrogen|Biomass|w/o CCS,4,Energy,Energy system,GW,"Cumulative installed capacity (since 2005) of biomass to hydrogen plants without CCS. The cumulative capacity of biomass to hydrogen plants by plant type for which capital costs are reported should be reported by adding variables Cumulative Capacity|Hydrogen|Biomass|w/o CCS|1, ..., Cumulative Capacity|Hydrogen|Biomass|w/o CCS|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+229,Cumulative Capacity|Hydrogen|Electricity,3,Energy,Energy system,GW,"Cumulative installed capacity (since 2005) of hydrogen-by-electrolysis plants. The cumulative capacity of hydrogen-by-electrolysis plants by plant type for which capital costs are reported should be reported by adding variables Cumulative Capacity|Hydrogen|Electricity|1, ..., Cumulative Capacity|Hydrogen|Electricity|N (matching the assignment of plant types to technologies in the reporting of capital costs as documented in the comments sheet). ",output,"Capacity는 입력변수로부터 산정되며, 출력변수 산정을 위한 변수로 활용됨
+- https://pure.iiasa.ac.at/id/eprint/15157/1/manuscript%20%20The%20MESSAGEix.pdf
+- https://www.sciencedirect.com/science/article/pii/S1364032122006657"
+156,Carbon Sequestration|CCS,2,CCS,Energy system,Mt CO2/yr,"total carbon dioxide emissions captured and stored in geological deposits (e.g. in depleted oil and gas fields, unmined coal seams, saline aquifers) and the deep ocean, stored amounts should be reported as positive numbers",output,https://essd.copernicus.org/preprints/essd-2024-68/
+157,Carbon Sequestration|CCS|Biomass,3,CCS,Energy system,Mt CO2/yr,"total carbon dioxide emissions captured from bioenergy use and stored in geological deposits (e.g. in depleted oil and gas fields, unmined coal seams, saline aquifers) and the deep ocean, stored amounts should be reported as positive numbers",output,https://essd.copernicus.org/preprints/essd-2024-68/
+159,Carbon Sequestration|CCS|Biomass|Energy|Demand|Industry,6,CCS,Energy system,Mt CO2/yr,"total carbon dioxide emissions captured from bioenergy use in industry (IPCC category 1A2) and stored in geological deposits (e.g. in depleted oil and gas fields, unmined coal seams, saline aquifers) and the deep ocean, stored amounts should be reported as positive numbers",output,https://essd.copernicus.org/preprints/essd-2024-68/
+160,Carbon Sequestration|CCS|Biomass|Energy|Supply,5,CCS,Energy system,Mt CO2/yr,"total carbon dioxide emissions captured from bioenergy use and stored in geological deposits (e.g. in depleted oil and gas fields, unmined coal seams, saline aquifers) and the deep ocean, stored amounts should be reported as positive numbers",output,https://essd.copernicus.org/preprints/essd-2024-68/
+161,Carbon Sequestration|CCS|Biomass|Energy|Supply|Electricity,6,CCS,Energy system,Mt CO2/yr,"total carbon dioxide emissions captured from bioenergy use in electricity production (part of IPCC category 1A1a) and stored in geological deposits (e.g. in depleted oil and gas fields, unmined coal seams, saline aquifers) and the deep ocean, stored amounts should be reported as positive numbers",output,https://essd.copernicus.org/preprints/essd-2024-68/
+163,Carbon Sequestration|CCS|Biomass|Energy|Supply|Hydrogen,6,CCS,Energy system,Mt CO2/yr,"total carbon dioxide emissions captured from bioenergy use in hydrogen production (part of IPCC category 1A) and stored in geological deposits (e.g. in depleted oil and gas fields, unmined coal seams, saline aquifers) and the deep ocean, stored amounts should be reported as positive numbers",output,https://essd.copernicus.org/preprints/essd-2024-68/
+164,Carbon Sequestration|CCS|Biomass|Energy|Supply|Liquids,6,CCS,Energy system,Mt CO2/yr,"total carbon dioxide emissions captured from bioenergy use in liquid fuel production (part of IPCC category 1A) and stored in geological deposits (e.g. in depleted oil and gas fields, unmined coal seams, saline aquifers) and the deep ocean, stored amounts should be reported as positive numbers",output,https://essd.copernicus.org/preprints/essd-2024-68/
+167,Carbon Sequestration|CCS|Fossil,3,CCS,Energy system,Mt CO2/yr,"total carbon dioxide emissions captured from fossil fuel use and stored in geological deposits (e.g. in depleted oil and gas fields, unmined coal seams, saline aquifers) and the deep ocean, stored amounts should be reported as positive numbers",output,https://essd.copernicus.org/preprints/essd-2024-68/
+169,Carbon Sequestration|CCS|Fossil|Energy|Demand|Industry,6,CCS,Energy system,Mt CO2/yr,"total carbon dioxide emissions captured from fossil fuel use in industry (IPCC category 1A2) and stored in geological deposits (e.g. in depleted oil and gas fields, unmined coal seams, saline aquifers) and the deep ocean, stored amounts should be reported as positive numbers",output,https://essd.copernicus.org/preprints/essd-2024-68/
+170,Carbon Sequestration|CCS|Fossil|Energy|Supply,5,CCS,Energy system,Mt CO2/yr,"total carbon dioxide emissions captured from fossil fuel use in energy supply (IPCC category 1A) and stored in geological deposits (e.g. in depleted oil and gas fields, unmined coal seams, saline aquifers) and the deep ocean, stored amounts should be reported as positive numbers",output,https://essd.copernicus.org/preprints/essd-2024-68/
+171,Carbon Sequestration|CCS|Fossil|Energy|Supply|Electricity,6,CCS,Energy system,Mt CO2/yr,"total carbon dioxide emissions captured from fossil fuel use in electricity production (part of IPCC category 1A1a) and stored in geological deposits (e.g. in depleted oil and gas fields, unmined coal seams, saline aquifers) and the deep ocean, stored amounts should be reported as positive numbers",output,https://essd.copernicus.org/preprints/essd-2024-68/
+173,Carbon Sequestration|CCS|Fossil|Energy|Supply|Hydrogen,6,CCS,Energy system,Mt CO2/yr,"total carbon dioxide emissions captured from fossil fuel use in hydrogen production (part of IPCC category 1A) and stored in geological deposits (e.g. in depleted oil and gas fields, unmined coal seams, saline aquifers) and the deep ocean, stored amounts should be reported as positive numbers",output,https://essd.copernicus.org/preprints/essd-2024-68/
+174,Carbon Sequestration|CCS|Fossil|Energy|Supply|Liquids,6,CCS,Energy system,Mt CO2/yr,"total carbon dioxide emissions captured from fossil fuel use in liquid fuel production (part of IPCC category 1A) and stored in geological deposits (e.g. in depleted oil and gas fields, unmined coal seams, saline aquifers) and the deep ocean, stored amounts should be reported as positive numbers",output,https://essd.copernicus.org/preprints/essd-2024-68/
+177,Carbon Sequestration|CCS|Industrial Processes,3,CCS,Energy system,Mt CO2/yr,"total carbon dioxide emissions captured from industrial processes (e.g., cement production, but not from fossil fuel burning) use and stored in geological deposits (e.g. in depleted oil and gas fields, unmined coal seams, saline aquifers) and the deep ocean, stored amounts should be reported as positive numbers",output,https://essd.copernicus.org/preprints/essd-2024-68/
+178,Carbon Sequestration|Direct Air Capture,2,CCS,Energy system,Mt CO2/yr,total carbon dioxide sequestered through direct air capture,output,https://essd.copernicus.org/preprints/essd-2024-68/
+181,Carbon Sequestration|Land Use,2,CCS,Energy system,Mt CO2/yr,"total carbon dioxide sequestered through land-based sinks (e.g., afforestation, soil carbon enhancement, biochar)",output,https://essd.copernicus.org/preprints/essd-2024-68/
+182,Carbon Sequestration|Land Use|Afforestation,3,CCS,Energy system,Mt CO2/yr,total carbon dioxide sequestered through afforestation,output,https://essd.copernicus.org/preprints/essd-2024-68/
+190,Consumption,1,Economy,Energy system,billion US$2010/yr,"total consumption of all goods, by all consumers in a region",output,Total Consumption
+277,Emissions|BC,2,Emissions,Energy system,Mt BC/yr,total black carbon emissions,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+278,Emissions|BC|AFOLU,3,Emissions,Energy system,Mt BC/yr,"black carbon emissions from agriculture, forestry and other land use (IPCC category 3)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+281,Emissions|BC|Energy,3,Emissions,Energy system,Mt BC/yr,"black carbon emissions from energy use on supply and demand side, including fugitive emissions from fuels (IPCC category 1A, 1B)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+282,Emissions|BC|Energy|Demand|Industry,5,Emissions,Energy system,Mt BC/yr,black carbon emissions from fuel combustion in industry (IPCC category 1A2),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+283,Emissions|BC|Energy|Demand|Residential and Commercial,5,Emissions,Energy system,Mt BC/yr,"black carbon emissions from fuel combustion in residential, commercial, institutional sectors and agriculture (IPCC category 1A4a, 1A4b)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+286,Emissions|BC|Energy|Demand|Transportation,5,Emissions,Energy system,Mt BC/yr,"black carbon emissions from fuel combustion in transportation sector (IPCC category 1A3), excluding pipeline emissions (IPCC category 1A3ei)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+289,Emissions|BC|Energy|Supply,4,Emissions,Energy system,Mt BC/yr,"black carbon emissions from fuel combustion and fugitive emissions from fuels: electricity and heat production and distribution (IPCC category 1A1a), other energy conversion (e.g. refineries, synfuel production, solid fuel processing, IPCC category 1Ab, 1Ac), incl. pipeline transportation (IPCC category 1A3ei), fugitive emissions from fuels (IPCC category 1B) and emissions from carbon dioxide transport and storage (IPCC category 1C)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+295,Emissions|CH4,2,Emissions,Energy system,Mt CH4/yr,total CH4 emissions,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+296,Emissions|CH4|AFOLU,3,Emissions,Energy system,Mt CH4/yr,"CH4 emissions from agriculture, forestry and other land use (IPCC category 3)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+297,Emissions|CH4|AFOLU|Agriculture,4,Emissions,Energy system,Mt CH4/yr,CH4 emissions from Livestock in the agriculture sector,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+298,Emissions|CH4|AFOLU|Agriculture|Livestock,5,Emissions,Energy system,Mt CH4/yr,CH4 emissions from Livestock in the agriculture sector,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+299,Emissions|CH4|AFOLU|Agriculture|Livestock|Enteric Fermentation,6,Emissions,Energy system,Mt CH4/yr,CH4 emissions from enteric fermentation in  Livestock in the agriculture sector,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+300,Emissions|CH4|AFOLU|Agriculture|Livestock|Manure Management,6,Emissions,Energy system,Mt CH4/yr,CH4 emissions from processes involving manure (waste) management  in Livestock in the agriculture sector,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+301,Emissions|CH4|AFOLU|Agriculture|Rice,5,Emissions,Energy system,Mt CH4/yr,CH4 emissions from rice cultivation in the agriculture sector,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+304,Emissions|CH4|Energy,3,Emissions,Energy system,Mt CH4/yr,"CH4 emissions from energy use on supply and demand side, including fugitive emissions from fuels (IPCC category 1A, 1B)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+305,Emissions|CH4|Energy|Demand|Industry,5,Emissions,Energy system,Mt CH4/yr,CH4 emissions from fuel combustion in industry (IPCC category 1A2),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+306,Emissions|CH4|Energy|Demand|Residential and Commercial,5,Emissions,Energy system,Mt CH4/yr,"CH4 emissions from fuel combustion in residential, commercial, institutional sectors (IPCC category 1A4a, 1A4b)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+309,Emissions|CH4|Energy|Demand|Transportation,5,Emissions,Energy system,Mt CH4/yr,"CH4 emissions from fuel combustion in transportation sector (IPCC category 1A3), excluding pipeline emissions (IPCC category 1A3ei)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+310,Emissions|CH4|Energy|Supply,4,Emissions,Energy system,Mt CH4/yr,"CH4 emissions from fuel combustion and fugitive emissions from fuels: electricity and heat production and distribution (IPCC category 1A1a), other energy conversion (e.g. refineries, synfuel production, solid fuel processing, IPCC category 1Ab, 1Ac), incl. pipeline transportation (IPCC category 1A3ei), fugitive emissions from fuels (IPCC category 1B) and emissions from carbon dioxide transport and storage (IPCC category 1C)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+314,Emissions|CH4|Other,3,Emissions,Energy system,Mt CH4/yr,CH4 emissions from other sources (please provide a definition of other sources in this category in the 'comments' tab),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+316,Emissions|CO,2,Emissions,Energy system,Mt CO/yr,total CO emissions,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+317,Emissions|CO|AFOLU,3,Emissions,Energy system,Mt CO/yr,Land Use based carbon monoxide emissions,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+320,Emissions|CO|Energy,3,Emissions,Energy system,Mt CO/yr,"carbon monoxide emissions from energy use on supply and demand side, including fugitive emissions from fuels (IPCC category 1A, 1B)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+321,Emissions|CO|Energy|Demand|Industry,5,Emissions,Energy system,Mt CO/yr,carbon monoxide emissions from Combustion in industry (IPCC 1A2) and industrial processes (IPCC 2C1-2C5),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+322,Emissions|CO|Energy|Demand|Residential and Commercial,5,Emissions,Energy system,Mt CO/yr,"carbon monoxide emissions from Combustion in Residential and Commercial/Institutional Sectors (IPCC 1A4A, 1A4B)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+325,Emissions|CO|Energy|Demand|Transportation,5,Emissions,Energy system,Mt CO/yr,carbon monoxide emissions from Combustion in Transportation Sector (IPCC category 1A3),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+328,Emissions|CO|Energy|Supply,4,Emissions,Energy system,Mt CO/yr,"carbon monoxide emissions from Extraction and Distribution of Fossil Fuels (including fugitive emissions, IPCC category 1B); Electricity production and distribution, district heating and other energy conversion (e.g. refineries, synfuel production)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+332,Emissions|CO2,2,Emissions,Energy system,Mt CO2/yr,total net-CO2 emissions from all sources,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+333,Emissions|CO2|AFOLU,3,Emissions,Energy system,Mt CO2/yr,"CO2 emissions from agriculture, forestry and other land use (IPCC category 3)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+337,Emissions|CO2|Energy,3,Emissions,Energy system,Mt CO2/yr,"CO2 emissions from energy use on supply and demand side (IPCC category 1A, 1B)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+338,Emissions|CO2|Energy and Industrial Processes,3,Emissions,Energy system,Mt CO2/yr,"CO2 emissions from energy use on supply and demand side (IPCC category 1A, 1B) and from industrial processes (IPCC categories 2A, B, C, E)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+339,Emissions|CO2|Energy|Demand,4,Emissions,Energy system,Mt CO2/yr,"CO2 emissions from fuel combustion in industry (IPCC category 1A2), residential, commercial, institutional sectors and agriculture, forestry, fishing (AFOFI) (IPCC category 1A4a, 1A4b, 1A4c), and transportation sector (IPCC category 1A3), excluding pipeline emissions (IPCC category 1A3ei)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+340,Emissions|CO2|Energy|Demand|AFOFI,5,Emissions,Energy system,Mt CO2/yr,"CO2 emissions from fuel combustion in agriculture, forestry, fishing (AFOFI) (IPCC category 1A4c)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+342,Emissions|CO2|Energy|Demand|Industry,5,Emissions,Energy system,Mt CO2/yr,CO2 emissions from fuel combustion in industry (IPCC category 1A2),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+353,Emissions|CO2|Energy|Demand|Other Sector,5,Emissions,Energy system,Mt CO2/yr,CO2 emissions from fuel combustion in other energy supply sectors (please provide a definition of other sources in this category in the 'comments' tab),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+355,Emissions|CO2|Energy|Demand|Residential and Commercial,5,Emissions,Energy system,Mt CO2/yr,"CO2 emissions from fuel combustion in residential, commercial, institutional sectors (IPCC category 1A4a, 1A4b)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+356,Emissions|CO2|Energy|Demand|Residential and Commercial|Commercial,6,Emissions,Energy system,Mt CO2/yr,CO2 emissions from fuel combustion in commercial and institutional sectors (IPCC category 1A4a),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+365,Emissions|CO2|Energy|Demand|Residential and Commercial|Residential,6,Emissions,Energy system,Mt CO2/yr,CO2 emissions from fuel combustion in residential (IPCC category 1A4b),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+370,Emissions|CO2|Energy|Demand|Transportation,5,Emissions,Energy system,Mt CO2/yr,"CO2 emissions from fuel combustion in transportation sector (IPCC category 1A3), excluding pipeline emissions (IPCC category 1A3ei)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+388,Emissions|CO2|Energy|Supply,4,Emissions,Energy system,Mt CO2/yr,"CO2 emissions from fuel combustion and fugitive emissions from fuels: electricity and heat production and distribution (IPCC category 1A1a), other energy conversion (e.g. refineries, synfuel production, solid fuel processing, IPCC category 1Ab, 1Ac), incl. pipeline transportation (IPCC category 1A3ei), fugitive emissions from fuels (IPCC category 1B) and emissions from carbon dioxide transport and storage (IPCC category 1C)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+389,Emissions|CO2|Energy|Supply|Electricity,5,Emissions,Energy system,Mt CO2/yr,CO2 emissions from electricity and CHP production and distribution (IPCC category 1A1ai and 1A1aii),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+390,Emissions|CO2|Energy|Supply|Gases,5,Emissions,Energy system,Mt CO2/yr,"CO2 emissions from fuel combustion and fugitive emissions from fuels: gaseous fuel extraction and processing (e.g. natural gas extraction production, IPCC category 1B2b, parts of 1A1cii)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+391,Emissions|CO2|Energy|Supply|Heat,5,Emissions,Energy system,Mt CO2/yr,CO2 emissions from heat production and distribution (IPCC category 1A1aiii),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+392,Emissions|CO2|Energy|Supply|Liquids,5,Emissions,Energy system,Mt CO2/yr,"CO2 emissions from fuel combustion and fugitive emissions from fuels: liquid fuel extraction and processing (e.g. oil production, refineries, synfuel production, IPCC category 1A1b, parts of 1A1cii, 1B2a)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+394,Emissions|CO2|Energy|Supply|Solids,5,Emissions,Energy system,Mt CO2/yr,"CO2 emissions from fuel combustion and fugitive emissions from fuels: solid fuel extraction and processing (IPCC category 1A1ci, parts of 1A1cii, 1B1)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+395,Emissions|CO2|Industrial Processes,3,Emissions,Energy system,Mt CO2/yr,"CO2 emissions from industrial processes (IPCC categories 2A, B, C, E)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+408,Emissions|F-Gases,2,Emissions,Energy system,Mt CO2-equiv/yr,"total F-gas emissions, including sulfur hexafluoride (SF6), hydrofluorocarbons (HFCs), perfluorocarbons (PFCs) (preferably use 100-year GWPs from AR4 for aggregation of different F-gases; in case other GWPs have been used, please document this on the 'comments' tab)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+409,Emissions|HFC,2,Emissions,Energy system,kt HFC134a-equiv/yr,"total emissions of hydrofluorocarbons (HFCs), provided as aggregate HFC134a-equivalents",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+410,Emissions|HFC|HFC125,3,Emissions,Energy system,kt HFC125/yr,total emissions of HFC125,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+411,Emissions|HFC|HFC134a,3,Emissions,Energy system,kt HFC134a/yr,total emissions of HFC134a,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+412,Emissions|HFC|HFC143a,3,Emissions,Energy system,kt HFC143a/yr,total emissions of HFC143a,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+413,Emissions|HFC|HFC227ea,3,Emissions,Energy system,kt HFC227ea/yr,total emissions of HFC227ea,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+414,Emissions|HFC|HFC23,3,Emissions,Energy system,kt HFC23/yr,total emissions of HFC23,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+415,Emissions|HFC|HFC245fa,3,Emissions,Energy system,kt HFC245fa/yr,total emissions of HFC245fa,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+416,Emissions|HFC|HFC32,3,Emissions,Energy system,kt HFC32/yr,total emissions of HFC32,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+417,Emissions|HFC|HFC43-10,3,Emissions,Energy system,kt HFC43-10/yr,total emissions of HFC343-10,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+419,Emissions|Kyoto Gases,2,Emissions,Energy system,Mt CO2-equiv/yr,"total Kyoto GHG emissions, including CO2, CH4, N2O and F-gases (preferably use 100-year GWPs from AR4 for aggregation of different gases; in case other GWPs have been used, please document this on the 'comments' tab)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+420,Emissions|N2O,2,Emissions,Energy system,kt N2O/yr,total N2O emissions,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+421,Emissions|N2O|AFOLU,3,Emissions,Energy system,kt N2O/yr,"N2O emissions from agriculture, forestry and other land use (IPCC category 3)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+422,Emissions|N2O|AFOLU|Agriculture,4,Emissions,Energy system,kt N2O/yr,N2O|AFOLU|Agric emissions from agriculture,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+423,Emissions|N2O|AFOLU|Agriculture|Livestock|Manure Management,6,Emissions,Energy system,kt N2O/yr,N2O  emissions from livestock manure management in the agriculture sector,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+424,Emissions|N2O|AFOLU|Agriculture|Managed Soils,5,Emissions,Energy system,kt N2O/yr,N2O  emissions from soil management practices in the agriculture sector,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+427,Emissions|N2O|Energy,3,Emissions,Energy system,kt N2O/yr,"N2O emissions from energy use on supply and demand side, including fugitive emissions from fuels (IPCC category 1A, 1B)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+433,Emissions|N2O|Other,3,Emissions,Energy system,kt N2O/yr,N2O emissions from other sources (please provide a definition of other sources in this category in the 'comments' tab),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+435,Emissions|NH3,2,Emissions,Energy system,Mt NH3/yr,total ammonia (NH3) emissions,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+436,Emissions|NH3|AFOLU,3,Emissions,Energy system,Mt NH3/yr,land use based ammonia Emissions,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+439,Emissions|NH3|Energy,3,Emissions,Energy system,Mt NH3/yr,"ammonia emissions from energy use on supply and demand side, including fugitive emissions from fuels (IPCC category 1A, 1B)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+440,Emissions|NH3|Energy|Demand|Industry,5,Emissions,Energy system,Mt NH3/yr,ammonia Emissions from Combustion in industry (IPCC 1A2) and industrial processes (IPCC 2C1-2C5),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+441,Emissions|NH3|Energy|Demand|Residential and Commercial,5,Emissions,Energy system,Mt NH3/yr,"ammonia Emissions from Combustion in Residential and Commercial/Institutional Sectors (IPCC 1A4A, 1A4B)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+442,Emissions|NH3|Energy|Demand|Transportation,5,Emissions,Energy system,Mt NH3/yr,ammonia Emissions from Combustion in Transportation Sector (IPCC category 1A3),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+443,Emissions|NH3|Energy|Supply,4,Emissions,Energy system,Mt NH3/yr,"ammonia Emissions from Extraction and Distribution of Fossil Fuels (including fugitive Emissions, IPCC category 1B); Electricity production and distribution, district heating and other energy conversion (e.g. refineries, synfuel production)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+447,Emissions|NOx,2,Emissions,Energy system,Mt NO2/yr,total NOx emissions,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+448,Emissions|NOx|AFOLU,3,Emissions,Energy system,Mt NO2/yr,"NOx emissions from agriculture, forestry and other land use (IPCC category 3)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+451,Emissions|NOx|Energy,3,Emissions,Energy system,Mt NO2/yr,"NOx emissions from energy use on supply and demand side, including fugitive emissions from fuels (IPCC category 1A, 1B)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+452,Emissions|NOx|Energy|Demand|Industry,5,Emissions,Energy system,Mt NO2/yr,NOx emissions from fuel combustion in industry (IPCC category 1A2),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+453,Emissions|NOx|Energy|Demand|Residential and Commercial,5,Emissions,Energy system,Mt NO2/yr,"NOx emissions from fuel combustion in residential, commercial, institutional sectors (IPCC category 1A4a, 1A4b)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+456,Emissions|NOx|Energy|Demand|Transportation,5,Emissions,Energy system,Mt NO2/yr,"NOx emissions from fuel combustion in transportation sector (IPCC category 1A3), excluding pipeline emissions (IPCC category 1A3ei)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+457,Emissions|NOx|Energy|Supply,4,Emissions,Energy system,Mt NO2/yr,"NOx emissions from fuel combustion and fugitive emissions from fuels: electricity and heat production and distribution (IPCC category 1A1a), other energy conversion (e.g. refineries, synfuel production, solid fuel processing, IPCC category 1Ab, 1Ac), incl. pipeline transportation (IPCC category 1A3ei), fugitive emissions from fuels (IPCC category 1B) and emissions from carbon dioxide transport and storage (IPCC category 1C)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+461,Emissions|OC,2,Emissions,Energy system,Mt OC/yr,total organic carbon emissions,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+462,Emissions|OC|AFOLU,3,Emissions,Energy system,Mt OC/yr,"organic carbon emissions from agriculture, forestry and other land use (IPCC category 3)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+465,Emissions|OC|Energy,3,Emissions,Energy system,Mt OC/yr,"organic carbon emissions from energy use on supply and demand side, including fugitive emissions from fuels (IPCC category 1A, 1B)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+466,Emissions|OC|Energy|Demand|Industry,5,Emissions,Energy system,Mt OC/yr,organic carbon emissions from fuel combustion in industry (IPCC category 1A2),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+467,Emissions|OC|Energy|Demand|Residential and Commercial,5,Emissions,Energy system,Mt OC/yr,"organic carbon emissions from fuel combustion in residential, commercial, institutional sectors (IPCC category 1A4a, 1A4b)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+470,Emissions|OC|Energy|Demand|Transportation,5,Emissions,Energy system,Mt OC/yr,"organic carbon emissions from fuel combustion in transportation sector (IPCC category 1A3), excluding pipeline emissions (IPCC category 1A3ei)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+473,Emissions|OC|Energy|Supply,4,Emissions,Energy system,Mt OC/yr,"organic carbon emissions from fuel combustion and fugitive emissions from fuels: electricity and heat production and distribution (IPCC category 1A1a), other energy conversion (e.g. refineries, synfuel production, solid fuel prorganic carbonessing, IPCC category 1Ab, 1Ac), incl. pipeline transportation (IPCC category 1A3ei), fugitive emissions from fuels (IPCC category 1B) and emissions from carbon dioxide transport and storage (IPCC category 1C)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+477,Emissions|PFC,2,Emissions,Energy system,kt CF4-equiv/yr,"total emissions of perfluorocarbons (PFCs), provided as aggregate CF4-equivalents",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+482,Emissions|SF6,2,Emissions,Energy system,kt SF6/yr,total emissions of sulfur hexafluoride (SF6),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+483,Emissions|Sulfur,2,Emissions,Energy system,Mt SO2/yr,total sulfur (SO2) emissions,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+484,Emissions|Sulfur|AFOLU,3,Emissions,Energy system,Mt SO2/yr,"sulfur emissions from agriculture, forestry and other land use (IPCC category 3)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+487,Emissions|Sulfur|Energy,3,Emissions,Energy system,Mt SO2/yr,"sulfur emissions from energy use on supply and demand side, including fugitive emissions from fuels (IPCC category 1A, 1B)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+488,Emissions|Sulfur|Energy|Demand|Industry,5,Emissions,Energy system,Mt SO2/yr,sulfur emissions from fuel combustion in industry (IPCC category 1A2),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+489,Emissions|Sulfur|Energy|Demand|Residential and Commercial,5,Emissions,Energy system,Mt SO2/yr,"sulfur emissions from fuel combustion in residential, commercial, institutional sectors (IPCC category 1A4a, 1A4b)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+492,Emissions|Sulfur|Energy|Demand|Transportation,5,Emissions,Energy system,Mt SO2/yr,"sulfur emissions from fuel combustion in transportation sector (IPCC category 1A3), excluding pipeline emissions (IPCC category 1A3ei)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+495,Emissions|Sulfur|Energy|Supply,4,Emissions,Energy system,Mt SO2/yr,"sulfur emissions from fuel combustion and fugitive emissions from fuels: electricity and heat production and distribution (IPCC category 1A1a), other energy conversion (e.g. refineries, synfuel production, solid fuel processing, IPCC category 1Ab, 1Ac), incl. pipeline transportation (IPCC category 1A3ei), fugitive emissions from fuels (IPCC category 1B) and emissions from carbon dioxide transport and storage (IPCC category 1C)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+499,Emissions|VOC,2,Emissions,Energy system,Mt VOC/yr,total volatile organic compound (VOC) emissions,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+500,Emissions|VOC|AFOLU,3,Emissions,Energy system,Mt VOC/yr,land use based volatile organic compounds Emissions,output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+503,Emissions|VOC|Energy,3,Emissions,Energy system,Mt VOC/yr,"volatile organic compounds emissions from energy use on supply and demand side, including fugitive emissions from fuels (IPCC category 1A, 1B)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+504,Emissions|VOC|Energy|Demand|Industry,5,Emissions,Energy system,Mt VOC/yr,volatile organic compounds Emissions from Combustion in industry (IPCC 1A2) and industrial processes (IPCC 2C1-2C5),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+505,Emissions|VOC|Energy|Demand|Residential and Commercial,5,Emissions,Energy system,Mt VOC/yr,"volatile organic compounds Emissions from Combustion in Residential and Commercial/Institutional Sectors (IPCC 1A4A, 1A4B)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+508,Emissions|VOC|Energy|Demand|Transportation,5,Emissions,Energy system,Mt VOC/yr,volatile organic compounds Emissions from Combustion in Transportation Sector (IPCC category 1A3),output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+511,Emissions|VOC|Energy|Supply,4,Emissions,Energy system,Mt VOC/yr,"volatile organic compounds Emissions from Extraction and Distribution of Fossil Fuels (including fugitive Emissions, IPCC category 1B); Electricity production and distribution, district heating and other energy conversion (e.g. refineries, synfuel production)",output,"Emission
+- https://jgcri.github.io/gcam-doc/index.html"
+597,Final Energy,1,Energy,Energy system,EJ/yr,"total final energy consumption by all end-use sectors and all fuels, excluding transmission/distribution losses",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+615,Final Energy|Electricity,2,Energy,Energy system,PJ/yr,"final energy consumption of electricity (including on-site solar PV), excluding transmission/distribution losses",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+617,Final Energy|Gases,2,Energy,Energy system,PJ/yr,"final energy consumption of gases (natural gas, biogas, coal-gas), excluding transmission/distribution losses",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+618,Final Energy|Geothermal,2,Energy,Energy system,EJ/yr,"final energy consumption of geothermal energy (e.g., from decentralized or small-scale geothermal heating systems) EXCLUDING geothermal heat pumps",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+619,Final Energy|Heat,2,Energy,Energy system,EJ/yr,"final energy consumption of heat (e.g., district heat, process heat, warm water), excluding transmission/distribution losses, excluding direct geothermal and solar heating",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+620,Final Energy|Hydrogen,2,Energy,Energy system,EJ/yr,"final energy consumption of hydrogen, excluding transmission/distribution losses",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+621,Final Energy|Industry,2,Energy,Energy system,EJ/yr,"final energy consumed by the industrial sector, including feedstocks, including agriculture and fishing",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+674,Final Energy|Industry|Electricity,3,Energy,Energy system,EJ/yr,"final energy consumption by the industrial sector of electricity (including on-site solar PV), excluding transmission/distribution losses",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+676,Final Energy|Industry|Gases,3,Energy,Energy system,EJ/yr,"final energy consumption by the industrial sector of gases (natural gas, biogas, coal-gas), excluding transmission/distribution losses",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+681,Final Energy|Industry|Heat,3,Energy,Energy system,EJ/yr,"final energy consumption by the industrial sector of heat (e.g., district heat, process heat, solar heating and warm water), excluding transmission/distribution losses",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+682,Final Energy|Industry|Hydrogen,3,Energy,Energy system,EJ/yr,final energy consumption by the industrial sector of hydrogen,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+683,Final Energy|Industry|Liquids,3,Energy,Energy system,EJ/yr,"final energy consumption by the industrial sector of refined liquids (conventional & unconventional oil, biofuels, coal-to-liquids, gas-to-liquids)",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+689,Final Energy|Industry|Other,3,Energy,Energy system,EJ/yr,final energy consumption by the industrial sector of other sources that do not fit to any other category (please provide a definition of the sources in this category in the 'comments' tab),output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+710,Final Energy|Industry|Solids,3,Energy,Energy system,EJ/yr,final energy solid fuel consumption by the industrial sector (including coal and solid biomass),output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+711,Final Energy|Industry|Solids|Biomass,4,Energy,Energy system,EJ/yr,final energy consumption by the industry sector of solid biomass,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+712,Final Energy|Industry|Solids|Coal,4,Energy,Energy system,EJ/yr,final energy consumption by the industry sector of coal,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+728,Final Energy|Liquids,2,Energy,Energy system,EJ/yr,"final energy consumption of refined liquids (conventional & unconventional oil, biofuels, coal-to-liquids, gas-to-liquids)",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+729,Final Energy|Non-Energy Use,2,Energy,Energy system,EJ/yr,final energy consumption by the non-combustion processes,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+730,Final Energy|Non-Energy Use|Biomass,3,Energy,Energy system,EJ/yr,final energy consumption of biomass by the non-combustion processes,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+731,Final Energy|Non-Energy Use|Coal,3,Energy,Energy system,EJ/yr,final energy consumption of coal by the non-combustion processes,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+732,Final Energy|Non-Energy Use|Gas,3,Energy,Energy system,EJ/yr,final energy consumption of gas by the non-combustion processes,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+733,Final Energy|Non-Energy Use|Oil,3,Energy,Energy system,EJ/yr,final energy consumption of oil by the non-combustion processes,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+735,Final Energy|Other Sector,2,Energy,Energy system,EJ/yr,total final energy consumption by other sectors,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+736,Final Energy|Other Sector|Electricity,3,Energy,Energy system,EJ/yr,"final energy consumption by other sectors of electricity (including on-site solar PV), excluding transmission/distribution losses",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+737,Final Energy|Other Sector|Gases,3,Energy,Energy system,EJ/yr,"final energy consumption by other sectors of gases (natural gas, biogas, coal-gas), excluding transmission/distribution losses",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+739,Final Energy|Other Sector|Hydrogen,3,Energy,Energy system,EJ/yr,final energy consumption by other sectors of hydrogen,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+740,Final Energy|Other Sector|Liquids,3,Energy,Energy system,EJ/yr,"final energy consumption by other sectors of refined liquids (conventional & unconventional oil, biofuels, coal-to-liquids, gas-to-liquids)",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+742,Final Energy|Other Sector|Solids,3,Energy,Energy system,EJ/yr,final energy solid fuel consumption by other sectors (including coal and solid biomass),output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+747,Final Energy|Residential and Commercial,2,Energy,Energy system,EJ/yr,final energy consumed in the residential & commercial sector,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+749,Final Energy|Residential and Commercial|Commercial,3,Energy,Energy system,EJ/yr,final energy consumed in the commercial sector,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+753,Final Energy|Residential and Commercial|Commercial|Gases,4,Energy,Energy system,EJ/yr,"final energy consumption by the commercial sector of gases (natural gas, biogas, coal-gas), excluding transmission/distribution losses",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+763,Final Energy|Residential and Commercial|Commercial|Liquids,4,Energy,Energy system,EJ/yr,"final energy consumption by the commercial sector of refined liquids (conventional & unconventional oil, biofuels, coal-to-liquids, gas-to-liquids)",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+772,Final Energy|Residential and Commercial|Electricity,3,Energy,Energy system,EJ/yr,"final energy consumption by the residential & commercial sector of electricity (including on-site solar PV), excluding transmission/distribution losses",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+773,Final Energy|Residential and Commercial|Gases,3,Energy,Energy system,EJ/yr,"final energy consumption by the residential & commercial sector of gases (natural gas, biogas, coal-gas), excluding transmission/distribution losses",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+774,Final Energy|Residential and Commercial|Heat,3,Energy,Energy system,EJ/yr,"final energy consumption by the residential & commercial sector of heat (e.g., district heat, process heat, solar heating and warm water), excluding transmission/distribution losses",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+779,Final Energy|Residential and Commercial|Hydrogen,3,Energy,Energy system,EJ/yr,final energy consumption by the residential & commercial sector of hydrogen,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+781,Final Energy|Residential and Commercial|Liquids,3,Energy,Energy system,EJ/yr,"final energy consumption by the residential & commercial sector of refined liquids (conventional & unconventional oil, biofuels, coal-to-liquids, gas-to-liquids)",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+783,Final Energy|Residential and Commercial|Other,3,Energy,Energy system,EJ/yr,final energy consumption by the residential & commercial sector of other sources that do not fit to any other category (please provide a definition of the sources in this category in the 'comments' tab),output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+784,Final Energy|Residential and Commercial|Residential,3,Energy,Energy system,EJ/yr,final energy consumed in the residential sector,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+787,Final Energy|Residential and Commercial|Residential|Electricity,4,Energy,Energy system,EJ/yr,"final energy consumption by the residential sector of electricity (including on-site solar PV), excluding transmission/distribution losses",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+788,Final Energy|Residential and Commercial|Residential|Gases,4,Energy,Energy system,EJ/yr,"final energy consumption by the residential sector of gases (natural gas, biogas, coal-gas), excluding transmission/distribution losses",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+798,Final Energy|Residential and Commercial|Residential|Liquids,4,Energy,Energy system,EJ/yr,"final energy consumption by the residential sector of refined liquids (conventional & unconventional oil, biofuels, coal-to-liquids, gas-to-liquids)",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+804,Final Energy|Residential and Commercial|Solids,3,Energy,Energy system,EJ/yr,final energy solid fuel consumption by the residential & commercial sector (including coal and solid biomass),output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+805,Final Energy|Residential and Commercial|Solids|Biomass,4,Energy,Energy system,EJ/yr,final energy consumption by the residential & commercial sector of solid biomass (modern and traditional),output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+806,Final Energy|Residential and Commercial|Solids|Biomass|Traditional,5,Energy,Energy system,EJ/yr,final energy consumed in the residential & commercial sector coming from biomass (traditional),output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+807,Final Energy|Residential and Commercial|Solids|Coal,4,Energy,Energy system,EJ/yr,final energy coal consumption by the residential & commercial sector,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+809,Final Energy|Solar,2,Energy,Energy system,PJ/yr,"final energy consumption of solar energy (e.g., from roof-top solar hot water collector systems)",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+810,Final Energy|Solids,2,Energy,Energy system,EJ/yr,final energy solid fuel consumption (including coal and solid biomass),output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+811,Final Energy|Solids|Biomass,3,Energy,Energy system,EJ/yr,"final energy consumption of solid biomass (modern and traditional), excluding final energy consumption of bioliquids which are reported in the liquids category",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+812,Final Energy|Solids|Biomass|Traditional,4,Energy,Energy system,EJ/yr,final energy consumption of traditional biomass,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+813,Final Energy|Solids|Coal,3,Energy,Energy system,PJ/yr,final energy coal consumption,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+814,Final Energy|Transportation,2,Energy,Energy system,PJ/yr,"final energy consumed in the transportation sector, including bunker fuels, excluding pipelines",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+818,Final Energy|Transportation|Electricity,3,Energy,Energy system,EJ/yr,"final energy consumption by the transportation sector of electricity (including on-site solar PV), excluding transmission/distribution losses",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+819,Final Energy|Transportation|Freight,3,Energy,Energy system,EJ/yr,final energy consumed for freight transportation,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+825,Final Energy|Transportation|Freight|Liquids,4,Energy,Energy system,PJ/yr,"final energy consumption by the freight transportation sector of refined liquids (conventional & unconventional oil, biofuels, coal-to-liquids, gas-to-liquids)",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+826,Final Energy|Transportation|Freight|Liquids|Bioenergy,5,Energy,Energy system,EJ/yr,Final biofuels based (liquid or gas) energy consumed in the transport sector by freight vehicles,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+829,Final Energy|Transportation|Freight|Liquids|Oil,5,Energy,Energy system,EJ/yr,final energy consumption by the freight transportation sector of liquid oil products (from conventional & unconventional oil),output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+831,Final Energy|Transportation|Gases,3,Energy,Energy system,EJ/yr,"final energy consumption by the transportation sector of gases (natural gas, biogas, coal-gas), excluding transmission/distribution losses",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+834,Final Energy|Transportation|Hydrogen,3,Energy,Energy system,EJ/yr,final energy consumption by the transportation sector of hydrogen,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+835,Final Energy|Transportation|Liquids,3,Energy,Energy system,EJ/yr,"final energy consumption by the transportation sector of refined liquids (conventional & unconventional oil, biofuels, coal-to-liquids, gas-to-liquids)",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+836,Final Energy|Transportation|Liquids|Bioenergy,4,Energy,Energy system,EJ/yr,Final biofuels based (liquid or gas) energy consumed in the transport sector by passenger and freight vehicles,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+838,Final Energy|Transportation|Liquids|Coal,4,Energy,Energy system,EJ/yr,final energy consumption by the transportation sector of coal based liquids (coal-to-liquids),output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+841,Final Energy|Transportation|Liquids|Oil,4,Energy,Energy system,EJ/yr,final energy consumption by the transportation sector of liquid oil products (from conventional & unconventional oil),output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+843,Final Energy|Transportation|Other,3,Energy,Energy system,EJ/yr,final energy consumption by the transportation sector of other sources that do not fit to any other category (please provide a definition of the sources in this category in the 'comments' tab),output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+844,Final Energy|Transportation|Passenger,3,Energy,Energy system,EJ/yr,final energy consumed for passenger transportation,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+845,Final Energy|Transportation|Passenger|Electricity,4,Energy,Energy system,PJ/yr,"final energy consumption by the passenger transportation sector of electricity (including on-site solar PV), excluding transmission/distribution losses",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+850,Final Energy|Transportation|Passenger|Hydrogen,4,Energy,Energy system,PJ/yr,final energy consumption by the passenger transportation sector of hydrogen,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+851,Final Energy|Transportation|Passenger|Liquids,4,Energy,Energy system,PJ/yr,"final energy consumption by the passenger transportation sector of refined liquids (conventional & unconventional oil, biofuels, coal-to-liquids, gas-to-liquids)",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+852,Final Energy|Transportation|Passenger|Liquids|Bioenergy,5,Energy,Energy system,EJ/yr,Final biofuels based (liquid or gas) energy consumed in the transport sector by passenger vehicles,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+855,Final Energy|Transportation|Passenger|Liquids|Oil,5,Energy,Energy system,EJ/yr,final energy consumption by the passenger transportation sector of liquid oil products (from conventional & unconventional oil),output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1031,Policy Cost|Additional Total Energy System Cost,2,Economy,Energy system,billion US$2010/yr,additional energy system cost associated with the policy,output,https://jgcri.github.io/gcam-doc/policies.html#policy-costs
+1033,Policy Cost|Consumption Loss,2,Economy,Energy system,billion US$2010/yr,consumption loss in a policy scenario compared to the corresponding baseline (losses should be reported as negative numbers),output,https://jgcri.github.io/gcam-doc/policies.html#policy-costs
+1036,Policy Cost|GDP Loss,2,Economy,Energy system,billion US$2010/yr,"GDP loss in a policy scenario, including international transfers, compared to the corresponding baseline (losses should be reported as negative numbers). Transfers included if present; if no transfer, report same value as ""w/o transfers""",output,https://jgcri.github.io/gcam-doc/policies.html#policy-costs
+1096,Primary Energy,1,Energy,Energy system,EJ/yr,total primary energy consumption (direct equivalent),output,Energy Consumption
+1097,Primary Energy|Biomass,2,Energy,Energy system,PJ/yr,"primary energy consumption of purpose-grown bioenergy crops, crop and forestry residue bioenergy, municipal solid waste bioenergy, traditional biomass",output,Energy Consumption
+1098,Primary Energy|Biomass|1st Generation,3,Energy,Energy system,EJ/yr,"biomass primary energy from 1st generation biofuel crops (e.g., sugar cane, rapeseed oil, maize, sugar beet)",output,Energy Consumption
+1099,Primary Energy|Biomass|Electricity,3,Energy,Energy system,EJ/yr,"primary energy input to electricity generation of purpose-grown bioenergy crops, crop and forestry residue bioenergy, municipal solid waste bioenergy, traditional biomass",output,Energy Consumption
+1100,Primary Energy|Biomass|Electricity|w/ CCS,4,Energy,Energy system,EJ/yr,"purpose-grown bioenergy crops, crop and forestry residue bioenergy, municipal solid waste bioenergy, traditional biomass primary energy input to electricity generation used in combination with CCS",output,Energy Consumption
+1101,Primary Energy|Biomass|Electricity|w/o CCS,4,Energy,Energy system,EJ/yr,"purpose-grown bioenergy crops, crop and forestry residue bioenergy, municipal solid waste bioenergy, traditional biomass primary energy input to electricity generation without CCS",output,Energy Consumption
+1102,Primary Energy|Biomass|Energy Crops,3,Energy,Energy system,EJ/yr,biomass primary energy from purpose-grown bioenergy crops,output,Energy Consumption
+1104,Primary Energy|Biomass|Hydrogen,3,Energy,Energy system,EJ/yr,primary energy input to the fuel conversion sector,output,Energy Consumption
+1105,Primary Energy|Biomass|Liquids,3,Energy,Energy system,EJ/yr,primary energy input to the fuel conversion sector,output,Energy Consumption
+1106,Primary Energy|Biomass|Modern,3,Energy,Energy system,EJ/yr,"modern biomass primary energy consumption, including purpose-grown bioenergy crops, crop and forestry residue bioenergy and municipal solid waste bioenergy",output,Energy Consumption
+1107,Primary Energy|Biomass|Modern|w/ CCS,4,Energy,Energy system,EJ/yr,"purpose-grown bioenergy crops, crop and forestry residue bioenergy, municipal solid waste bioenergy, traditional biomass primary energy consumption used in combination with CCS",output,Energy Consumption
+1108,Primary Energy|Biomass|Modern|w/o CCS,4,Energy,Energy system,EJ/yr,"purpose-grown bioenergy crops, crop and forestry residue bioenergy, municipal solid waste bioenergy, traditional biomass primary energy consumption without CCS",output,Energy Consumption
+1109,Primary Energy|Biomass|Residues,3,Energy,Energy system,EJ/yr,biomass primary energy from residues,output,Energy Consumption
+1110,Primary Energy|Biomass|Solids,3,Energy,Energy system,EJ/yr,primary energy input to the fuel conversion sector,output,Energy Consumption
+1111,Primary Energy|Biomass|Traditional,3,Energy,Energy system,EJ/yr,traditional biomass primary energy consumption,output,Energy Consumption
+1112,Primary Energy|Coal,2,Energy,Energy system,PJ/yr,coal primary energy consumption,output,Energy Consumption
+1113,Primary Energy|Coal|Electricity,3,Energy,Energy system,EJ/yr,coal primary energy input to electricity generation,output,Energy Consumption
+1114,Primary Energy|Coal|Electricity|w/ CCS,4,Energy,Energy system,EJ/yr,coal primary energy input to electricity generation used in combination with CCS,output,Energy Consumption
+1115,Primary Energy|Coal|Electricity|w/o CCS,4,Energy,Energy system,EJ/yr,coal primary energy input to electricity generation without CCS,output,Energy Consumption
+1117,Primary Energy|Coal|Hydrogen,3,Energy,Energy system,EJ/yr,primary energy input to the fuel conversion sector,output,Energy Consumption
+1120,Primary Energy|Coal|w/ CCS,3,Energy,Energy system,EJ/yr,coal primary energy consumption used in combination with CCS,output,Energy Consumption
+1121,Primary Energy|Coal|w/o CCS,3,Energy,Energy system,EJ/yr,coal primary energy consumption without CCS,output,Energy Consumption
+1122,Primary Energy|Fossil,2,Energy,Energy system,EJ/yr,"coal, gas, conventional and unconventional oil primary energy consumption",output,Energy Consumption
+1123,Primary Energy|Fossil|w/ CCS,3,Energy,Energy system,EJ/yr,"coal, gas, conventional and unconventional oil primary energy consumption used in combination with CCS",output,Energy Consumption
+1124,Primary Energy|Fossil|w/o CCS,3,Energy,Energy system,EJ/yr,"coal, gas, conventional and unconventional oil primary energy consumption without CCS",output,Energy Consumption
+1125,Primary Energy|Gas,2,Energy,Energy system,PJ/yr,gas primary energy consumption,output,Energy Consumption
+1126,Primary Energy|Gas|Electricity,3,Energy,Energy system,EJ/yr,gas primary energy input to electricity generation,output,Energy Consumption
+1127,Primary Energy|Gas|Electricity|w/ CCS,4,Energy,Energy system,EJ/yr,gas primary energy input to electricity generation used in combination with CCS,output,Energy Consumption
+1128,Primary Energy|Gas|Electricity|w/o CCS,4,Energy,Energy system,EJ/yr,gas primary energy input to electricity generation without CCS,output,Energy Consumption
+1130,Primary Energy|Gas|Hydrogen,3,Energy,Energy system,EJ/yr,primary energy input to the fuel conversion sector,output,Energy Consumption
+1133,Primary Energy|Gas|w/ CCS,3,Energy,Energy system,EJ/yr,gas primary energy consumption used in combination with CCS,output,Energy Consumption
+1134,Primary Energy|Gas|w/o CCS,3,Energy,Energy system,EJ/yr,gas primary energy consumption without CCS,output,Energy Consumption
+1135,Primary Energy|Geothermal,2,Energy,Energy system,EJ/yr,total geothermal primary energy consumption,output,Energy Consumption
+1136,Primary Energy|Hydro,2,Energy,Energy system,EJ/yr,total hydro primary energy consumption,output,Energy Consumption
+1137,Primary Energy|Non-Biomass Renewables,2,Energy,Energy system,EJ/yr,"non-biomass renewable primary energy consumption (direct equivalent, includes hydro electricity, wind electricity, geothermal electricity and heat, solar electricity and heat and hydrogen, ocean energy)",output,Energy Consumption
+1143,Primary Energy|Nuclear,2,Energy,Energy system,EJ/yr,"nuclear primary energy consumption (direct equivalent, includes electricity, heat and hydrogen production from nuclear energy)",output,Energy Consumption
+1145,Primary Energy|Oil,2,Energy,Energy system,PJ/yr,conventional & unconventional oil primary energy consumption,output,Energy Consumption
+1146,Primary Energy|Oil|Electricity,3,Energy,Energy system,EJ/yr,conventional & unconventional oil primary energy input to electricity generation,output,Energy Consumption
+1147,Primary Energy|Oil|Electricity|w/ CCS,4,Energy,Energy system,EJ/yr,conventional & unconventional oil primary energy input to electricity generation used in combination with CCS,output,Energy Consumption
+1148,Primary Energy|Oil|Electricity|w/o CCS,4,Energy,Energy system,EJ/yr,conventional & unconventional oil primary energy input to electricity generation without CCS,output,Energy Consumption
+1153,Primary Energy|Oil|w/ CCS,3,Energy,Energy system,EJ/yr,conventional & unconventional oil primary energy consumption used in combination with CCS,output,Energy Consumption
+1154,Primary Energy|Oil|w/o CCS,3,Energy,Energy system,EJ/yr,conventional & unconventional oil primary energy consumption without CCS,output,Energy Consumption
+1155,Primary Energy|Other,2,Energy,Energy system,EJ/yr,total other primary energy consumption,output,Energy Consumption
+1157,Primary Energy|Secondary Energy Trade,2,Energy,Energy system,EJ/yr,"trade in secondary energy carriers that cannot be unambiguoulsy mapped to one of the existing primary energy categories (e.g. electricity, hydrogen, fossil synfuels, negative means net exports)",output,Energy Consumption
+1158,Primary Energy|Solar,2,Energy,Energy system,EJ/yr,total solar primary energy consumption,output,Energy Consumption
+1159,Primary Energy|Wind,2,Energy,Energy system,PJ/yr,total wind primary energy consumption,output,Energy Consumption
+1172,Secondary Energy,1,Energy,Energy system,EJ/yr,total secondary energy - the sum of all secondary energy carrier production (for consistency checks),output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1173,Secondary Energy|Electricity,2,Energy,Energy system,PJ/yr,total net electricity production,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1174,Secondary Energy|Electricity|Biomass,3,Energy,Energy system,PJ/yr,"net electricity production from municipal solid waste, purpose-grown biomass, crop residues, forest industry waste, biogas",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1175,Secondary Energy|Electricity|Biomass|w/ CCS,4,Energy,Energy system,EJ/yr,"net electricity production from municipal solid waste, purpose-grown biomass, crop residues, forest industry waste with a CO2 capture component",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1176,Secondary Energy|Electricity|Biomass|w/o CCS,4,Energy,Energy system,EJ/yr,"net electricity production from municipal solid waste, purpose-grown biomass, crop residues, forest industry waste with freely vented CO2 emissions",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1177,Secondary Energy|Electricity|Coal,3,Energy,Energy system,PJ/yr,net electricity production from coal,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1178,Secondary Energy|Electricity|Coal|w/ CCS,4,Energy,Energy system,EJ/yr,net electricity production from coal with a CO2 capture component,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1179,Secondary Energy|Electricity|Coal|w/o CCS,4,Energy,Energy system,EJ/yr,net electricity production from coal with freely vented CO2 emissions,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1181,Secondary Energy|Electricity|Fossil,3,Energy,Energy system,EJ/yr,"net electricity production from coal, gas, conventional and unconventional oil",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1182,Secondary Energy|Electricity|Fossil|w/ CCS,4,Energy,Energy system,EJ/yr,"net electricity production from coal, gas, conventional and unconventional oil used in combination with CCS",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1183,Secondary Energy|Electricity|Fossil|w/o CCS,4,Energy,Energy system,EJ/yr,"net electricity production from coal, gas, conventional and unconventional oil without CCS",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1184,Secondary Energy|Electricity|Gas,3,Energy,Energy system,PJ/yr,net electricity production from natural gas,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1185,Secondary Energy|Electricity|Gas|w/ CCS,4,Energy,Energy system,EJ/yr,net electricity production from natural gas with a CO2 capture component,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1186,Secondary Energy|Electricity|Gas|w/o CCS,4,Energy,Energy system,EJ/yr,net electricity production from natural gas with freely vented CO2 emissions,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1187,Secondary Energy|Electricity|Geothermal,3,Energy,Energy system,EJ/yr,"net electricity production from all sources of geothermal energy (e.g., hydrothermal, enhanced geothermal systems)",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1188,Secondary Energy|Electricity|Hydro,3,Energy,Energy system,PJ/yr,net hydroelectric production,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1189,Secondary Energy|Electricity|Non-Biomass Renewables,3,Energy,Energy system,EJ/yr,"net electricity production from hydro, wind, solar, geothermal, ocean, and other renewable sources (excluding bioenergy). This is a summary category for all the non-biomass renewables.",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1190,Secondary Energy|Electricity|Nuclear,3,Energy,Energy system,PJ/yr,net electricity production from nuclear energy,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1192,Secondary Energy|Electricity|Oil,3,Energy,Energy system,EJ/yr,net electricity production from refined liquid oil products,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1193,Secondary Energy|Electricity|Oil|w/ CCS,4,Energy,Energy system,EJ/yr,net electricity production from refined liquids with a CO2 capture component,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1194,Secondary Energy|Electricity|Oil|w/o CCS,4,Energy,Energy system,EJ/yr,net electricity production from refined liquids with freely vented CO2 emissions,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1195,Secondary Energy|Electricity|Other,3,Energy,Energy system,EJ/yr,net electricity production from sources that do not fit to any other category (please provide a definition of the sources in this category in the 'comments' tab),output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1197,Secondary Energy|Electricity|Solar,3,Energy,Energy system,EJ/yr,"net electricity production from all sources of solar energy (e.g., PV and concentrating solar power)",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1198,Secondary Energy|Electricity|Solar|CSP,4,Energy,Energy system,EJ/yr,net electricity production from concentrating solar power (CSP),output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1199,Secondary Energy|Electricity|Solar|PV,4,Energy,Energy system,PJ/yr,net electricity production from solar photovoltaics (PV),output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1204,Secondary Energy|Electricity|Wind,3,Energy,Energy system,PJ/yr,net electricity production from wind energy (on- and offshore),output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1205,Secondary Energy|Electricity|Wind|Offshore,4,Energy,Energy system,PJ/yr,net electricity production from offshore wind energy,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1206,Secondary Energy|Electricity|Wind|Onshore,4,Energy,Energy system,PJ/yr,net electricity production from onshore wind energy,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1207,Secondary Energy|Gases,2,Energy,Energy system,EJ/yr,"total production of gaseous fuels, including natural gas",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1208,Secondary Energy|Gases|Biomass,3,Energy,Energy system,EJ/yr,total production of biogas,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1209,Secondary Energy|Gases|Coal,3,Energy,Energy system,EJ/yr,total production of coal gas from coal gasification,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1210,Secondary Energy|Gases|Natural Gas,3,Energy,Energy system,EJ/yr,total production of natural gas,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1212,Secondary Energy|Heat,2,Energy,Energy system,EJ/yr,total centralized heat generation,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1213,Secondary Energy|Heat|Biomass,3,Energy,Energy system,EJ/yr,centralized heat generation from biomass,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1214,Secondary Energy|Heat|Coal,3,Energy,Energy system,EJ/yr,centralized heat generation from coal,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1216,Secondary Energy|Heat|Gas,3,Energy,Energy system,EJ/yr,centralized heat generation from gases,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1217,Secondary Energy|Heat|Geothermal,3,Energy,Energy system,EJ/yr,centralized heat generation from geothermal energy EXCLUDING geothermal heat pumps,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1224,Secondary Energy|Hydrogen,2,Energy,Energy system,EJ/yr,total hydrogen production,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1225,Secondary Energy|Hydrogen|Biomass,3,Energy,Energy system,EJ/yr,hydrogen production from biomass,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1226,Secondary Energy|Hydrogen|Biomass|w/ CCS,4,Energy,Energy system,EJ/yr,hydrogen production from biomass with a CO2 capture component,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1227,Secondary Energy|Hydrogen|Biomass|w/o CCS,4,Energy,Energy system,EJ/yr,hydrogen production from biomass with freely vented CO2 emissions,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1228,Secondary Energy|Hydrogen|Coal,3,Energy,Energy system,EJ/yr,hydrogen production from coal,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1229,Secondary Energy|Hydrogen|Coal|w/ CCS,4,Energy,Energy system,EJ/yr,hydrogen production from coal with a CO2 capture component,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1230,Secondary Energy|Hydrogen|Coal|w/o CCS,4,Energy,Energy system,EJ/yr,hydrogen production from coal with freely vented CO2 emissions,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1231,Secondary Energy|Hydrogen|Electricity,3,Energy,Energy system,EJ/yr,hydrogen production from electricity via electrolysis,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1232,Secondary Energy|Hydrogen|Fossil,3,Energy,Energy system,EJ/yr,hydrogen production from fossil fuels,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1233,Secondary Energy|Hydrogen|Fossil|w/ CCS,4,Energy,Energy system,EJ/yr,hydrogen production from fossil fuels with a CO2 capture component,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1234,Secondary Energy|Hydrogen|Fossil|w/o CCS,4,Energy,Energy system,EJ/yr,hydrogen production from fossil fuels with freely vented CO2 emissions,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1235,Secondary Energy|Hydrogen|Gas,3,Energy,Energy system,EJ/yr,hydrogen production from gas,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1236,Secondary Energy|Hydrogen|Gas|w/ CCS,4,Energy,Energy system,EJ/yr,hydrogen production from natural gas with a CO2 capture component,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1237,Secondary Energy|Hydrogen|Gas|w/o CCS,4,Energy,Energy system,EJ/yr,hydrogen production from natural gas with freely vented CO2 emissions,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1244,Secondary Energy|Liquids,2,Energy,Energy system,EJ/yr,"total production of refined liquid fuels from all energy sources (incl. oil products, synthetic fossil fuels from gas and coal, biofuels)",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1245,Secondary Energy|Liquids|Biomass,3,Energy,Energy system,EJ/yr,total liquid biofuels production,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1246,Secondary Energy|Liquids|Biomass|1st Generation,4,Energy,Energy system,EJ/yr,"liquid biofuels production from 1st generation technologies, relying on e.g. corn, sugar, oil ",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1247,Secondary Energy|Liquids|Biomass|Energy Crops,4,Energy,Energy system,EJ/yr,liquid biofuels production from energy crops,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1250,Secondary Energy|Liquids|Biomass|w/ CCS,4,Energy,Energy system,EJ/yr,total liquid biofuels production with CCS,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1251,Secondary Energy|Liquids|Biomass|w/o CCS,4,Energy,Energy system,EJ/yr,total liquid biofuels production without CCS,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1252,Secondary Energy|Liquids|Coal,3,Energy,Energy system,EJ/yr,total production of fossil liquid synfuels from coal-to-liquids (CTL) technologies,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1253,Secondary Energy|Liquids|Coal|w/ CCS,4,Energy,Energy system,EJ/yr,total production of fossil liquid synfuels from coal-to-liquids (CTL) technologies with CCS,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1254,Secondary Energy|Liquids|Coal|w/o CCS,4,Energy,Energy system,EJ/yr,total production of fossil liquid synfuels from coal-to-liquids (CTL) technologies without CCS,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1255,Secondary Energy|Liquids|Fossil,3,Energy,Energy system,EJ/yr,total production of fossil liquid synfuels,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1256,Secondary Energy|Liquids|Fossil|w/ CCS,4,Energy,Energy system,EJ/yr,total production of fossil liquid synfuels from facilities with CCS,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1257,Secondary Energy|Liquids|Fossil|w/o CCS,4,Energy,Energy system,EJ/yr,total production of fossil liquid synfuels from facilities without CCS,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1258,Secondary Energy|Liquids|Gas,3,Energy,Energy system,EJ/yr,total production of fossil liquid synfuels from gas-to-liquids (GTL) technologies,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1259,Secondary Energy|Liquids|Gas|w/ CCS,4,Energy,Energy system,EJ/yr,total production of fossil liquid synfuels from gas-to-liquids (GTL) technologies with CCS,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1260,Secondary Energy|Liquids|Gas|w/o CCS,4,Energy,Energy system,EJ/yr,total production of fossil liquid synfuels from gas-to-liquids (GTL) technologies without CCS,output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1261,Secondary Energy|Liquids|Oil,3,Energy,Energy system,EJ/yr,"total production of liquid fuels from petroleum, including both conventional and unconventional sources",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1264,Secondary Energy|Solids,2,Energy,Energy system,EJ/yr,"solid secondary energy carriers (e.g., briquettes, coke, wood chips, wood pellets)",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1265,Secondary Energy|Solids|Biomass,3,Energy,Energy system,EJ/yr,"solid secondary energy carriers produced from biomass (e.g., commercial charcoal, wood chips, wood pellets). Tradional bioenergy use is excluded.  ",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1266,Secondary Energy|Solids|Coal,3,Energy,Energy system,EJ/yr,"solid secondary energy carriers produced from coal (e.g., briquettes, coke)",output,"Energy consumption
+- https://jgcri.github.io/gcam-doc/index.html"
+1276,Trade,1,Trade,Energy system,billion US$2010/yr,"net exports of all goods, at the global level these should add up to the trade losses only",output,"Trade(judgment based on experience)
+- https://jgcri.github.io/gcam-doc/details_trade.html
+- https://unece.org/fileadmin/DAM/energy/se/pdfs/CSE/PATHWAYS/2019/ws_Consult_14_15.May.2019/supp_doc/IIASA-ModellingEnergyPlannScenarios.PDF
+- https://www.sciencedirect.com/science/article/pii/S1364032122003586"
+1282,Trade|Primary Energy|Biomass|Volume,4,Energy,Energy system,EJ/yr,"net exports of solid, unprocessed biomass, at the global level these should add up to the trade losses only",output,"Trade(judgment based on experience)
+- https://jgcri.github.io/gcam-doc/details_trade.html
+- https://unece.org/fileadmin/DAM/energy/se/pdfs/CSE/PATHWAYS/2019/ws_Consult_14_15.May.2019/supp_doc/IIASA-ModellingEnergyPlannScenarios.PDF
+- https://www.sciencedirect.com/science/article/pii/S1364032122003586"
+1284,Trade|Primary Energy|Coal|Volume,4,Energy,Energy system,PJ/yr,"net exports of coal, at the global level these should add up to the trade losses only",output,"Trade(judgment based on experience)
+- https://jgcri.github.io/gcam-doc/details_trade.html
+- https://unece.org/fileadmin/DAM/energy/se/pdfs/CSE/PATHWAYS/2019/ws_Consult_14_15.May.2019/supp_doc/IIASA-ModellingEnergyPlannScenarios.PDF
+- https://www.sciencedirect.com/science/article/pii/S1364032122003586"
+1286,Trade|Primary Energy|Gas|Volume,4,Energy,Energy system,PJ/yr,"net exports of natural gas, at the global level these should add up to the trade losses only",output,"Trade(judgment based on experience)
+- https://jgcri.github.io/gcam-doc/details_trade.html
+- https://unece.org/fileadmin/DAM/energy/se/pdfs/CSE/PATHWAYS/2019/ws_Consult_14_15.May.2019/supp_doc/IIASA-ModellingEnergyPlannScenarios.PDF
+- https://www.sciencedirect.com/science/article/pii/S1364032122003586"
+1288,Trade|Primary Energy|Oil|Volume,4,Energy,Energy system,PJ/yr,"net exports of crude oil, at the global level these should add up to the trade losses only",output,"Trade(judgment based on experience)
+- https://jgcri.github.io/gcam-doc/details_trade.html
+- https://unece.org/fileadmin/DAM/energy/se/pdfs/CSE/PATHWAYS/2019/ws_Consult_14_15.May.2019/supp_doc/IIASA-ModellingEnergyPlannScenarios.PDF
+- https://www.sciencedirect.com/science/article/pii/S1364032122003586"
+1344,Agricultural Production,1,Land,Land,million t DM/yr,"total production of food, non-food and feed products (crops and livestock) and bioenergy crops (1st & 2nd generation)",output,https://jgcri.github.io/gcam-doc/index.html
+1345,Agricultural Production|Energy,2,Land,Land,million t DM/yr,total bioenergy-related agricultural production (including waste and residues),output,https://jgcri.github.io/gcam-doc/index.html
+1346,Agricultural Production|Energy|Crops,3,Land,Land,million t DM/yr,production for modern primary energy crops (1st and 2nd generation),output,https://jgcri.github.io/gcam-doc/index.html
+1348,Agricultural Production|Non-Energy,2,Land,Land,million t DM/yr,"total production for food, non-food and feed products (crops and livestock)",output,https://jgcri.github.io/gcam-doc/index.html
+1349,Agricultural Production|Non-Energy|Crops,3,Land,Land,million t DM/yr,"total production for food, non-food and feed products (crops)",output,https://jgcri.github.io/gcam-doc/index.html
+1350,Agricultural Production|Non-Energy|Livestock,3,Land,Land,million t DM/yr,total production for livestock products,output,https://jgcri.github.io/gcam-doc/index.html
+1403,Fertilizer Use|Nitrogen,2,Agriculture,Land,Tg N/yr,total nitrogen fertilizer use (organic + inorganic + biological fixation),output,https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+1466,Water Consumption|Electricity,2,Water,Land,km3/yr,total water consumption for net electricity production,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1468,Water Consumption|Electricity|Biomass,3,Water,Land,km3/yr,"water consumption for net electricity production from municipal solid waste, purpose-grown biomass, crop residues, forest industry waste, biogas",output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1469,Water Consumption|Electricity|Biomass|w/ CCS,4,Water,Land,km3/yr,"water consumption for net electricity production from municipal solid waste, purpose-grown biomass, crop residues, forest industry waste with a CO2 capture component",output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1470,Water Consumption|Electricity|Biomass|w/o CCS,4,Water,Land,km3/yr,"water consumption for net electricity production from municipal solid waste, purpose-grown biomass, crop residues, forest industry waste with freely vented CO2 emissions",output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1471,Water Consumption|Electricity|Coal,3,Water,Land,km3/yr,water consumption for net electricity production from coal,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1472,Water Consumption|Electricity|Coal|w/ CCS,4,Water,Land,km3/yr,water consumption for net electricity production from coal with a CO2 capture component,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1473,Water Consumption|Electricity|Coal|w/o CCS,4,Water,Land,km3/yr,water consumption for net electricity production from coal with freely vented CO2 emissions,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1476,Water Consumption|Electricity|Fossil,3,Water,Land,km3/yr,"water consumption for net electricity production from coal, gas, conventional and unconventional oil",output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1477,Water Consumption|Electricity|Fossil|w/ CCS,4,Water,Land,km3/yr,"water consumption for net electricity production from coal, gas, conventional and unconventional oil used in combination with CCS",output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1478,Water Consumption|Electricity|Fossil|w/o CCS,4,Water,Land,km3/yr,"water consumption for  net electricity production from coal, gas, conventional and unconventional oil without CCS",output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1479,Water Consumption|Electricity|Gas,3,Water,Land,km3/yr,water consumption for net electricity production from natural gas,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1480,Water Consumption|Electricity|Gas|w/ CCS,4,Water,Land,km3/yr,water consumption for net electricity production from natural gas with a CO2 capture component,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1481,Water Consumption|Electricity|Gas|w/o CCS,4,Water,Land,km3/yr,water consumption for net electricity production from natural gas with freely vented CO2 emissions,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1483,Water Consumption|Electricity|Hydro,3,Water,Land,km3/yr,water consumption for net hydroelectric production,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1484,Water Consumption|Electricity|Non-Biomass Renewables,3,Water,Land,km3/yr,"water consumption for net electricity production from hydro, wind, solar, geothermal, ocean, and other renewable sources (excluding bioenergy). This is a summary category for all the non-biomass renewables.",output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1485,Water Consumption|Electricity|Nuclear,3,Water,Land,km3/yr,water consumption for net electricity production from nuclear energy,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1486,Water Consumption|Electricity|Oil,3,Water,Land,km3/yr,water consumption for net electricity production from refined liquids,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1544,Water Withdrawal|Electricity,2,Water,Land,km3/yr,total water withdrawals for net electricity production,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1545,Water Withdrawal|Electricity|Biomass,3,Water,Land,km3/yr,"water withdrawals for net electricity production from municipal solid waste, purpose-grown biomass, crop residues, forest industry waste, biogas",output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1546,Water Withdrawal|Electricity|Biomass|w/ CCS,4,Water,Land,km3/yr,"water withdrawals for net electricity production from municipal solid waste, purpose-grown biomass, crop residues, forest industry waste with a CO2 capture component",output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1547,Water Withdrawal|Electricity|Biomass|w/o CCS,4,Water,Land,km3/yr,"water withdrawals for net electricity production from municipal solid waste, purpose-grown biomass, crop residues, forest industry waste with freely vented CO2 emissions",output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1548,Water Withdrawal|Electricity|Coal,3,Water,Land,km3/yr,water withdrawals for net electricity production from coal,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1549,Water Withdrawal|Electricity|Coal|w/ CCS,4,Water,Land,km3/yr,water withdrawals for net electricity production from coal with a CO2 capture component,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1550,Water Withdrawal|Electricity|Coal|w/o CCS,4,Water,Land,km3/yr,water withdrawals for net electricity production from coal with freely vented CO2 emissions,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1554,Water Withdrawal|Electricity|Fossil|w/ CCS,4,Water,Land,km3/yr,"water withdrawals for net electricity production from coal, gas, conventional and unconventional oil used in combination with CCS",output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1555,Water Withdrawal|Electricity|Fossil|w/o CCS,4,Water,Land,km3/yr,"water withdrawals for  net electricity production from coal, gas, conventional and unconventional oil without CCS",output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1556,Water Withdrawal|Electricity|Gas,3,Water,Land,km3/yr,water withdrawals for net electricity production from natural gas,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1557,Water Withdrawal|Electricity|Gas|w/ CCS,4,Water,Land,km3/yr,water withdrawals for net electricity production from natural gas with a CO2 capture component,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1558,Water Withdrawal|Electricity|Gas|w/o CCS,4,Water,Land,km3/yr,water withdrawals for net electricity production from natural gas with freely vented CO2 emissions,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1561,Water Withdrawal|Electricity|Non-Biomass Renewables,3,Water,Land,km3/yr,"water withdrawals for net electricity production from hydro, wind, solar, geothermal, ocean, and other renewable sources (excluding bioenergy). This is a summary category for all the non-biomass renewables.",output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1562,Water Withdrawal|Electricity|Nuclear,3,Water,Land,km3/yr,water withdrawals for net electricity production from nuclear energy,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1564,Water Withdrawal|Electricity|Oil,3,Water,Land,km3/yr,water withdrawals for net electricity production from refined liquids,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1605,Water Withdrawal|Irrigation,2,Water,Land,km3/yr,water withdrawal for irrigation,output,"https://jgcri.github.io/gcam-doc/v5.3/aglu.html
+https://egusphere.copernicus.org/preprints/2023/egusphere-2023-258/egusphere-2023-258.pdf
+https://jgcri.github.io/gcam-doc/demand_energy.html"
+1622,Yield|Cereal,2,Agriculture,Land,t DM/ha/yr,yield of cereal production per until of area (used here as repreentative crop to measure yield assumptions),input,"https://www.iamconsortium.org/resources/model-resources/eppa/
+https://data.ene.iiasa.ac.at/huppmann/open-energy-modelling-spring-2021/lecture-3.pdf"

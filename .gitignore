@@ -176,8 +176,8 @@ cython_debug/
 # nohup
 nohup.out
 lightning_logs/
-metadata/
-process_data.ipynb
-heatmap_analysis.ipynb
+processed/
+results/
 .vscode/settings.json
 CLAUDE.md
+configs/paths.py

@@ -1,0 +1,9 @@
+# Additional dependencies for advanced LSTM/TFT training
+# Install on top of requirements.txt
+
+-r requirements.txt
+
+# Deep Learning (Optional, Only needed for LSTM/TFT)
+torch>=2.0.0
+lightning>=2.0.0
+pytorch-forecasting>=0.10.0  # For TFT implementation
