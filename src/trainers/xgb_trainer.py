@@ -26,7 +26,6 @@ from configs.models import (
 )
 from src.trainers.evaluation import test_xgb_autoregressively
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4'
 os.environ['XGB_CUDA_MAX_MEMORY_PERCENT'] = '80'
 os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
 
@@ -124,6 +123,7 @@ def train_and_evaluate_single_config(
     X, y, X_with_index, train_groups, targets, params, gpu_id, client,
     use_cv=True, X_val=None, y_val=None, X_val_with_index=None, n_folds=5,
     use_dask=True, early_stopping_rounds: int = 15, trainer_cfg: Optional[XGBTrainerConfig] = None,
+    show_autoreg_progress: bool = False,
 ) -> Tuple[Dict, float]:
     """
     Train and evaluate a single parameter configuration using either k-fold CV or single validation set.
@@ -184,6 +184,7 @@ def train_and_evaluate_single_config(
                         X_train, y_train, X_val_fold, y_val_fold, X_val_with_index_fold,
                         targets, params, client, fold_cache[cache_key], fold+1, use_dask,
                         early_stopping_rounds=early_stopping_rounds, trainer_cfg=trainer_cfg,
+                        show_autoreg_progress=show_autoreg_progress,
                     )
                     scores.append(fold_score)
                     
@@ -200,6 +201,7 @@ def train_and_evaluate_single_config(
                     X, y, X_val, y_val, X_val_with_index,
                     targets, params, client, {}, 1, use_dask,
                     early_stopping_rounds=early_stopping_rounds, trainer_cfg=trainer_cfg,
+                    show_autoreg_progress=show_autoreg_progress,
                 )
                 score = -fold_score
 
@@ -220,6 +222,7 @@ def train_and_evaluate_single_config(
 def _train_single_fold(
     X_train, y_train, X_val, y_val, X_val_with_index, targets, params, client, cache, fold_num,
     use_dask=True, early_stopping_rounds: int = 15, trainer_cfg: Optional[XGBTrainerConfig] = None,
+    show_autoreg_progress: bool = False,
 ):
     """
     Helper function to train and evaluate a single fold/validation set.
@@ -285,18 +288,37 @@ def _train_single_fold(
             **xgb_params
         )
         
+    fit_t0 = time.perf_counter()
     regular_model.fit(
-            X_train, y_train_df,
-            eval_set=[(X_val, y_val_df)],
-            verbose=25
-        )
-    
+        X_train,
+        y_train_df,
+        eval_set=[(X_val, y_val_df)],
+        verbose=25,
+    )
+    fit_dt = time.perf_counter() - fit_t0
+    logging.info(
+        "Fold %d fit() done in %.2fs (train_rows=%d, val_rows=%d, num_boost_round=%s)",
+        fold_num,
+        fit_dt,
+        int(getattr(X_train, "shape", [len(X_train)])[0]),
+        int(getattr(X_val, "shape", [len(X_val)])[0]),
+        str(params.get("num_boost_round")),
+    )
+
+    ar_t0 = time.perf_counter()
     predictions = test_xgb_autoregressively(
-        X_val_with_index, 
-        y_val, 
-        model=regular_model, 
-        disable_progress=True, 
-        cache=cache
+        X_val_with_index,
+        y_val,
+        model=regular_model,
+        disable_progress=(not show_autoreg_progress),
+        cache=cache,
+    )
+    ar_dt = time.perf_counter() - ar_t0
+    logging.info(
+        "Fold %d autoregressive validation done in %.2fs (show_progress=%s)",
+        fold_num,
+        ar_dt,
+        str(show_autoreg_progress),
     )
     
     # Calculate RMSE
@@ -469,6 +491,7 @@ def hyperparameter_search(
                                 n_folds=trainer_cfg.n_folds,
                                 early_stopping_rounds=trainer_cfg.early_stopping_rounds,
                                 trainer_cfg=trainer_cfg,
+                                show_autoreg_progress=trainer_cfg.search_show_autoreg_progress,
                             )
                         else:
                             params_copy, score = train_and_evaluate_single_config(
@@ -479,6 +502,7 @@ def hyperparameter_search(
                                 n_folds=trainer_cfg.n_folds,
                                 early_stopping_rounds=trainer_cfg.early_stopping_rounds,
                                 trainer_cfg=trainer_cfg,
+                                show_autoreg_progress=trainer_cfg.search_show_autoreg_progress,
                             )
                         result = params_copy.copy()
                         score_key = 'mean_test_score' if use_cv else 'val_score'

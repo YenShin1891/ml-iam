@@ -3,12 +3,6 @@ import logging
 import numpy as np
 import pandas as pd
 
-from src.data.preprocess import prepare_data, load_and_process_data, prepare_features_and_targets
-from src.trainers.xgb_trainer import hyperparameter_search, train_and_save_model
-from src.trainers.evaluation import test_xgb_autoregressively, save_metrics
-from src.utils.utils import setup_logging, save_session_state, load_session_state, load_model, get_next_run_id, load_best_params
-from src.visualization import plot_scatter, plot_xgb_shap
-
 np.random.seed(0)
 
 def preprocessing(run_id, dataset=None, lag_required=True):
@@ -20,6 +14,9 @@ def preprocessing(run_id, dataset=None, lag_required=True):
         dataset: Dataset version to use
         lag_required: When True, drop rows without a full history of lag features.
     """
+    from src.data.preprocess import prepare_data, load_and_process_data, prepare_features_and_targets
+    from src.utils.utils import save_session_state
+
     data = load_and_process_data(version=dataset)
     prepared, features, targets = prepare_features_and_targets(data, lag_required=lag_required)
     prepared = prepared.dropna(subset=targets)
@@ -55,6 +52,7 @@ def preprocessing(run_id, dataset=None, lag_required=True):
 def search_xgb(session_state, run_id):
     """Run hyperparameter search and store best_params in session_state."""
     logging.info("Starting hyperparameter search for XGBoost...")
+    from src.trainers.xgb_trainer import hyperparameter_search
     targets = session_state["targets"]
     X_train = session_state["X_train"]
     y_train = session_state["y_train"]
@@ -81,9 +79,16 @@ def search_xgb(session_state, run_id):
 
 def train_xgb(session_state, run_id):
     """Final training using best_params already present in session_state."""
+    from src.trainers.xgb_trainer import train_and_save_model
     if "best_params" not in session_state:
-        logging.info("best_params not searched from search step. Loading from external best_params.json.")
-        session_state = load_best_params(session_state)
+        from configs.models.xgb_search import XGBDefaultParams
+
+        logging.info(
+            "best_params not found in session state. "
+            "Using default XGBoost parameters from configs.models.xgb_search.XGBDefaultParams"
+        )
+        default_cfg = XGBDefaultParams()
+        session_state["best_params"] = default_cfg.to_dict()
     best_params = session_state["best_params"]
     logging.info("Starting final XGBoost training with best params: %s", best_params)
     targets = session_state["targets"]
@@ -113,6 +118,7 @@ def test_xgb(session_state, run_id):
     y_test = session_state["y_test"]
     test_data = session_state["test_data"]
     logging.info("Testing the model...")
+    from src.trainers.evaluation import test_xgb_autoregressively, save_metrics
     preds = test_xgb_autoregressively(X_test_with_index, y_test, run_id)
     session_state["preds"] = preds
     save_metrics(run_id, y_test, preds, test_data)
@@ -121,6 +127,8 @@ def test_xgb(session_state, run_id):
 
 
 def plot_xgb(session_state, run_id):
+    from src.visualization import plot_scatter, plot_xgb_shap
+
     features = session_state["features"]
     targets = session_state["targets"]
     X_test_with_index = session_state["X_test_with_index"]
@@ -183,6 +191,7 @@ def parse_arguments():
 
 def main():
     run_id, resume, note, skip_search, dataset, lag_required_arg = parse_arguments()
+    from src.utils.utils import setup_logging, save_session_state, load_session_state, get_next_run_id
 
     if resume is None:
         # Full pipeline: process -> search -> train -> test -> plot

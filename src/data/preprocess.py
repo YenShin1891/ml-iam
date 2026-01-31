@@ -140,10 +140,9 @@ def prepare_data(prepared, targets, features):
     X_test_index_columns = test_data[[col for col in INDEX_COLUMNS if col not in features]].copy()
     y_test = test_data[targets].values.copy()
 
-    categorical_columns = ['Region', 'Model_Family']
-    X_train = encode_categorical_columns(X_train, categorical_columns)
-    X_val = encode_categorical_columns(X_val, categorical_columns)
-    X_test = encode_categorical_columns(X_test, categorical_columns)
+    X_train = encode_categorical_columns(X_train, CATEGORICAL_COLUMNS)
+    X_val = encode_categorical_columns(X_val, CATEGORICAL_COLUMNS)
+    X_test = encode_categorical_columns(X_test, CATEGORICAL_COLUMNS)
     
     x_scaler = StandardScaler()
     X_train_scaled = x_scaler.fit_transform(X_train)
@@ -184,8 +183,30 @@ def load_and_process_data(version=None) -> pd.DataFrame:
         dataset_path = os.path.join(DATA_PATH, version, "processed_series.csv")
     else:
         dataset_path = os.path.join(DATA_PATH, DEFAULT_DATASET)
+
+    # Validate dataset path
     if not os.path.isfile(dataset_path):
-        raise FileNotFoundError(f"Processed dataset not found: {dataset_path}. Update configs.data.DEFAULT_DATASET.")
+        if version is None: # User wants DEFAULT_DATASET but file is missing
+            versions_file = os.path.join(DATA_PATH, "dataset_versions.txt")
+            if not os.path.isfile(versions_file) or os.path.getsize(versions_file) == 0:
+                # User didn't run data processing pipeline
+                logging.error(
+                    "No processed dataset found and no datasets have been processed yet. "
+                    "Please run the data processing pipeline first."
+                )
+            else:
+                # User didn't setup DEFAULT_DATASET correctly or forgot to specify version
+                logging.error(
+                    "DEFAULT_DATASET is configured as '%s' but is not found at '%s'. "
+                    "Either update DEFAULT_DATASET in configs/data.py or pass --dataset <version_name> explicitly.",
+                    DEFAULT_DATASET,
+                    dataset_path,
+                )
+        else: # User specified a version but file is missing
+            logging.error(
+                f"Processed dataset not found for version '{version}'. "
+            )
+        
     logging.info(f"Reading processed dataset: {dataset_path}")
     processed_series = pd.read_csv(dataset_path)
     # Identify year and non-year columns robustly
