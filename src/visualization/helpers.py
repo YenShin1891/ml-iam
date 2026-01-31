@@ -337,7 +337,7 @@ def sample_scenario_groups(
         sampled_idx = _np.random.choice(total_groups, max_sequences, replace=False)
         selected_group_keys = group_sizes.iloc[sampled_idx].index
         # Build a DataFrame of unique selected group keys for joining
-        group_df = _pd.DataFrame(list(selected_group_keys), columns=cols)
+        group_df = pd.DataFrame(list(selected_group_keys), columns=cols)
         logging.info(
             "%s: sampled %d of %d scenario groups (by %s)",
             log_prefix,
