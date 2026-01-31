@@ -1,4 +1,4 @@
-# ML-IAM: Machine Learning for Integrated Assessment Model Emulation
+# ML-IAM v1.0: Machine Learning for Integrated Assessment Model Emulation
 
 **A reproducible pipeline for emulating IAM scenario time-series using gradient boosted trees and deep learning.**
 
@@ -142,6 +142,7 @@ python scripts/train_xgb.py
 - `--skip_search`: Skip hyperparameter search, use previous best parameters
 - `--resume {search|train|test|plot} --run_id <id>`: Resume from a saved session
 - `--note "description"`: Add notes to the run
+- `--dataset <version_name>`: Use a specific processed dataset subdirectory under `DATA_PATH` (defaults to configured dataset if omitted)
 
 **Outputs** (saved to `./results/xgb/[run_id]/`):
 - Logs
@@ -339,10 +340,8 @@ DOI = {10.5194/egusphere-2025-5305}
 }
 ```
 
-**Additionally, please cite the AR6 Scenario Database** per the [citation guidance](https://data.ene.iiasa.ac.at/ar6/#/license).
-
 ---
 
 ## 📄 License
 
-This code is released under [LICENSE]. The AR6 data used by this pipeline has its own separate license and must be obtained and used in compliance with the [IIASA AR6 license](https://data.ene.iiasa.ac.at/ar6/#/license).
+This code is released under [`LICENSE`](LICENSE). The AR6 data used by this pipeline has its own separate license and must be obtained and used in compliance with the [IIASA AR6 license](https://data.ene.iiasa.ac.at/ar6/#/license).

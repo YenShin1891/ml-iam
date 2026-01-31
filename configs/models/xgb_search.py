@@ -36,6 +36,31 @@ STAGE_3_PARAMS: Dict[str, Any] = {
 
 
 @dataclass
+class XGBDefaultParams:
+    """Default XGBoost hyperparameters used when search is skipped.
+    """
+
+    max_depth: int = 5
+    min_child_weight: int = 10
+    gamma: float = 0.0
+    eta: float = 0.4
+    num_boost_round: int = 1000
+    reg_alpha: float = 5.0
+    reg_lambda: float = 0.1
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "max_depth": self.max_depth,
+            "min_child_weight": self.min_child_weight,
+            "gamma": self.gamma,
+            "eta": self.eta,
+            "num_boost_round": self.num_boost_round,
+            "reg_alpha": self.reg_alpha,
+            "reg_lambda": self.reg_lambda,
+        }
+
+
+@dataclass
 class XGBSearchSpace:
     """Dataclass wrapper for staged XGB search spaces with helpers."""
 
@@ -68,6 +93,7 @@ class XGBSearchSpace:
 
 
 __all__ = [
+    "XGBDefaultParams",
     "XGBSearchSpace",
     "STAGE_1_PARAMS",
     "STAGE_2_PARAMS",
