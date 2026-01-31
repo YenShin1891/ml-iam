@@ -139,7 +139,7 @@ def plot_xgb(session_state, run_id):
     plot_scatter(run_id, test_data, y_test, preds, targets, model_name="XGBoost")
     # Pass raw Region labels aligned to X_test rows for filtering inside SHAP plotting
     index_region = test_data['Region'] if isinstance(test_data, pd.DataFrame) and 'Region' in test_data.columns else None
-    plot_xgb_shap(run_id, X_test_with_index, features, targets, region="World", index_region=index_region)
+    plot_xgb_shap(run_id, X_test_with_index, features, targets, index_region=index_region)
 
 
 def parse_arguments():
