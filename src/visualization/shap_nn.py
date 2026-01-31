@@ -3,7 +3,15 @@ import os, logging, numpy as np, pandas as pd, shap, torch
 from typing import List, Optional, Dict, Iterable, Set
 from configs.paths import RESULTS_PATH
 from configs.data import CATEGORICAL_COLUMNS, NON_FEATURE_COLUMNS, OUTPUT_UNITS
-from .helpers import make_grid, render_external_plot, build_feature_display_names, draw_shap_beeswarm, filter_by_region, sample_scenario_groups, DEFAULT_REGION
+from configs.visualization import DEFAULT_REGION
+from .helpers import (
+    make_grid,
+    render_external_plot,
+    build_feature_display_names,
+    draw_shap_beeswarm,
+    filter_index_frame_by_region,
+    sample_scenario_groups,
+)
 
 __all__ = [
     'get_lstm_shap_values','plot_lstm_shap','draw_lstm_all_timesteps_shap_plot','draw_temporal_shap_plot','create_timestep_comparison_plots',
@@ -527,11 +535,10 @@ def plot_lstm_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str],
         logging.warning("Skipping LSTM SHAP plots: model checkpoint not found at %s", model_path)
         return
     # Optional region filter before scenario grouping (works on index frame)
-    X_filtered, pre_rows, post_rows, matched = filter_by_region(
+    X_filtered, _, pre_rows, post_rows, matched, _mode = filter_index_frame_by_region(
         X_test_with_index,
         region,
         log_prefix="Applied region filter",
-        mode="prefix" if isinstance(region, str) and region.startswith(DEFAULT_REGION) else "exact",
     )
 
     # Scenario-based sampling on the full index frame (Model/Scenario kept as indices)
@@ -589,11 +596,10 @@ def plot_tft_shap(
     time_known = ["Year", "DeltaYears"]  # From TFT config
     required_columns = set(features + targets + config.group_ids + CATEGORICAL_COLUMNS + [config.time_idx] + time_known)
     # Optional region filter prior to scenario sampling (robust, on index frame)
-    X_filtered, pre_rows, post_rows, matched = filter_by_region(
+    X_filtered, _, pre_rows, post_rows, matched, _mode = filter_index_frame_by_region(
         X_test_with_index,
         region,
         log_prefix="Applied region filter",
-        mode="prefix" if isinstance(region, str) and region.startswith(DEFAULT_REGION) else "exact",
     )
 
     # Scenario-based sampling on the filtered index frame using grouping columns
@@ -802,7 +808,7 @@ def plot_nn_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], t
         sequence_length = kwargs.get("sequence_length", 1)
         region = kwargs.get("region", DEFAULT_REGION)
         # Apply region filter if provided (robust)
-        X_input, _, _, _ = filter_by_region(
+        X_input, _, _, _, _, _mode = filter_index_frame_by_region(
             X_test_with_index, region, log_prefix="Applied region filter"
         )
         temporal_shap, averaged, X_proc, test_seq = get_lstm_shap_values(run_id, X_input, sequence_length)

@@ -3,7 +3,22 @@ import os, logging, numpy as np, pandas as pd, shap, xgboost as xgb
 from typing import List, Optional, Dict
 from configs.paths import RESULTS_PATH
 from configs.data import NON_FEATURE_COLUMNS, OUTPUT_UNITS, CATEGORICAL_COLUMNS, REGION_CATEGORIES
-from .helpers import make_grid, render_external_plot, build_feature_display_names, draw_shap_beeswarm, sample_scenario_groups, DEFAULT_REGION
+from configs.visualization import (
+    DEFAULT_REGION,
+    SHAP_FONT_SIZE,
+    SHAP_GRID_FIGSIZE,
+    SHAP_INDIVIDUAL_FIGSIZE,
+    SHAP_MAX_DISPLAY,
+    SHAP_MAX_DISPLAY_EXCLUDE_TOP,
+)
+from .helpers import (
+    make_grid,
+    render_external_plot,
+    build_feature_display_names,
+    draw_shap_beeswarm,
+    filter_index_frame_by_region,
+    sample_scenario_groups,
+)
 
 __all__ = ['get_shap_values','transform_outputs_to_former_inputs','draw_shap_plot','plot_shap']
 
@@ -57,12 +72,11 @@ def transform_outputs_to_former_inputs(run_id: str, shap_values: np.ndarray, tar
     return input_only
 
 def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, model_prefix="", xlim_range: Optional[tuple] = None):
-    # Show 7 features when excluding top (exclude_top=True), 8 features otherwise
-    n_display = 7 if exclude_top else 8
+    n_display = SHAP_MAX_DISPLAY_EXCLUDE_TOP if exclude_top else SHAP_MAX_DISPLAY
     import matplotlib.pyplot as plt
-    plt.rcParams.update({'font.size': 12})
+    plt.rcParams.update({'font.size': SHAP_FONT_SIZE})
     num_targets = len(targets)
-    fig, axes = make_grid(num_targets, base_figsize=(20, 20))
+    fig, axes = make_grid(num_targets, base_figsize=SHAP_GRID_FIGSIZE)
     X_proc = X_test.copy()
     cat_cols = [c for c in CATEGORICAL_COLUMNS if c in X_proc.columns]
     for c in cat_cols:
@@ -114,7 +128,7 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=F
         ax.set_title(f"Impact on {targets[i]} ({OUTPUT_UNITS[i]}){title_suffix}")
 
         # Save individual plot for this target
-        fig_indiv = plt.figure(figsize=(10, 8))
+        fig_indiv = plt.figure(figsize=SHAP_INDIVIDUAL_FIGSIZE)
         target_shap = shap_values[:, :, i]
         indices = np.arange(target_shap.shape[1])
         if exclude_top:
@@ -162,20 +176,26 @@ def plot_xgb_shap(
     if not os.path.exists(ckpt_path):
         logging.warning("Skipping SHAP plots: model checkpoint not found at %s", ckpt_path)
         return
-    # Apply region filtering using raw Region labels aligned via index_region, if provided
-    if region is not None and index_region is not None:
+    # Optional region filter (robust, supports prefix matching like "R10" -> "R10*").
+    # If index_region is provided, it is treated as the raw Region labels aligned to rows.
+    if region is not None and (index_region is not None or (isinstance(X_test_with_index, pd.DataFrame) and "Region" in X_test_with_index.columns)):
         try:
-            pre_rows = len(X_test_with_index)
-            mask = index_region.astype(str) == str(region)
-            matched = int(mask.sum())
-            if matched == 0:
-                logging.warning("Region '%s' matched 0 rows in raw Region labels; proceeding without filter.", region)
-            else:
-                import numpy as _np
-                _idx = _np.flatnonzero(mask.to_numpy())
-                X_test_with_index = X_test_with_index.iloc[_idx].reset_index(drop=True)
-                index_region = index_region.iloc[_idx].reset_index(drop=True)
-            logging.info("Applied raw label region filter '%s': %d -> %d rows", region, pre_rows, len(X_test_with_index))
+            X_test_with_index, idx, pre_rows, post_rows, matched_values, mode = filter_index_frame_by_region(
+                X_test_with_index,
+                region,
+                log_prefix="XGB SHAP region filter",
+                region_series=index_region,
+            )
+            if idx is not None and index_region is not None:
+                index_region = index_region.reset_index(drop=True).iloc[idx].reset_index(drop=True)
+            if matched_values:
+                logging.info(
+                    "Applied region filter '%s' (%s): %d -> %d rows",
+                    region,
+                    mode,
+                    pre_rows,
+                    post_rows,
+                )
         except Exception as e:
             logging.warning("Failed region filter using raw labels due to: %s; proceeding without filter", e)
     # Scenario-based sampling on the full index frame (Model/Scenario as group keys)
