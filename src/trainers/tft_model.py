@@ -13,6 +13,7 @@ from pytorch_forecasting.metrics import MultiLoss
 from configs.paths import RESULTS_PATH
 from configs.models.tft import TFTTrainerConfig
 from .tft_utils import get_default_num_workers
+from src.utils.utils import get_run_root
 
 
 def create_tft_model(
@@ -63,7 +64,7 @@ def create_dataloaders(
 
 def create_trial_checkpoint(run_id: str, trial_idx: int) -> ModelCheckpoint:
     """Create checkpoint callback for hyperparameter search trial."""
-    trial_dir = os.path.join(RESULTS_PATH, run_id, "search", f"trial_{trial_idx}")
+    trial_dir = os.path.join(get_run_root(run_id), "search", f"trial_{trial_idx}")
     os.makedirs(trial_dir, exist_ok=True)
     
     return ModelCheckpoint(
@@ -129,7 +130,7 @@ def create_inference_trainer() -> Trainer:
 
 def load_tft_checkpoint(run_id: str) -> TemporalFusionTransformer:
     """Load TFT model from checkpoint."""
-    final_dir = os.path.join(RESULTS_PATH, run_id, "final")
+    final_dir = os.path.join(get_run_root(run_id), "final")
     final_ckpt_path = os.path.join(final_dir, "best.ckpt")
     
     if not os.path.exists(final_ckpt_path):

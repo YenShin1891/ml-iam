@@ -229,7 +229,7 @@ def main():
 
     if resume is None:
         # New full run still performs preprocessing once, then executes chosen steps.
-        run_id = get_next_run_id()
+        run_id = get_next_run_id("lstm")
         # Only primary rank initializes logging to avoid duplication
         if os.getenv("PL_TRAINER_GLOBAL_RANK") in (None, "0") and os.getenv("GLOBAL_RANK") in (None, "0") and os.getenv("RANK") in (None, "0"):
             setup_logging(run_id)

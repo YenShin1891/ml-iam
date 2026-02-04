@@ -18,6 +18,7 @@ from xgboost import DMatrix
 
 from configs.paths import RESULTS_PATH
 from configs.data import INDEX_COLUMNS, NON_FEATURE_COLUMNS, N_LAG_FEATURES
+from src.utils.utils import get_run_root
 
 def group_test_data(X_test_with_index, cache=None):
     """
@@ -213,7 +214,7 @@ def test_xgb_autoregressively(X_test_with_index, y_test, run_id=None, model=None
         if run_id is None:
             raise ValueError("Either provide a preloaded `model` or a valid `run_id` to load from disk.")
         model = xgb.XGBRegressor()
-        ckpt_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", "final_best.json")
+        ckpt_path = os.path.join(get_run_root(run_id), "checkpoints", "final_best.json")
         model.load_model(ckpt_path)
 
     # Get feature column names
@@ -341,7 +342,7 @@ def save_metrics(run_id, y_true, y_pred, test_data=None):
     metrics = pd.DataFrame(all_metrics)
 
     # Save metrics
-    metrics_dir = os.path.join(RESULTS_PATH, run_id, "metrics")
+    metrics_dir = os.path.join(get_run_root(run_id), "metrics")
     os.makedirs(metrics_dir, exist_ok=True)
     metrics_file = os.path.join(metrics_dir, "performance.csv")
     metrics.to_csv(metrics_file, index=False)

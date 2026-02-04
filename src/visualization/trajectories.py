@@ -8,6 +8,8 @@ from matplotlib import cm
 from matplotlib.ticker import FuncFormatter, MaxNLocator
 import streamlit as st
 
+from src.utils.utils import get_run_root
+
 from configs.visualization import (
     AXIS_LABEL_FONTSIZE,
     AXIS_NBINS,
@@ -30,17 +32,8 @@ __all__ = [
 ]
 
 def get_model_type_from_log(run_id):
-    """Detect model type from log file name in RESULTS_PATH/run_id."""
-    run_dir = os.path.join(RESULTS_PATH, run_id)
-    try:
-        for fname in os.listdir(run_dir):
-            if fname.startswith("train_") and fname.endswith(".log"):
-                # e.g., train_lstm.log or train_xgb.log
-                model_name = fname[len("train_"):-len(".log")]
-                return model_name.lower()
-    except Exception as e:
-        logging.info(f"Could not determine model type for run {run_id}: {e}")
-    return None
+    """Infer model type from run_id prefix (e.g., "xgb_01" -> "xgb")."""
+    return run_id.split("_", 1)[0] if run_id else None
 
 def create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, target_index, targets, model_name, output_units):
     unique_years = sorted(test_data_valid['Year'].unique()) if len(test_data_valid) else []
@@ -259,7 +252,7 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[s
         test_data_valid, y_test_valid, preds_valid = preprocess_data(test_data, y_plot, preds_plot, i)
         create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, i, targets, model_name, OUTPUT_UNITS)
         # Save individual scatter plot for each output in indiv_plots dir (single plot per figure)
-        indiv_dir = os.path.join(RESULTS_PATH, run_id, "plots", "indiv_plots")
+        indiv_dir = os.path.join(get_run_root(run_id), "plots", "indiv_plots")
         os.makedirs(indiv_dir, exist_ok=True)
         indiv_filename = f"scatter_{i}_{targets[i] if i < len(targets) else 'unknown'}.png"
         indiv_path = os.path.join(indiv_dir, indiv_filename)
@@ -271,8 +264,8 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[s
     plt.tight_layout()
     if filename is None:
         filename = "scatter_plot.png"
-    os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots"), exist_ok=True)
-    plt.savefig(os.path.join(RESULTS_PATH, run_id, "plots", filename), bbox_inches='tight')
+    os.makedirs(os.path.join(get_run_root(run_id), "plots"), exist_ok=True)
+    plt.savefig(os.path.join(get_run_root(run_id), "plots", filename), bbox_inches='tight')
     plt.close()
 
 def plot_trajectories(
@@ -351,14 +344,14 @@ def plot_trajectories(
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         plot_filename = f"trajectories_{timestamp}.png"
         metadata_filename = f"trajectories_{timestamp}_metadata.json"
-        plots_dir = os.path.join(RESULTS_PATH, run_id, "saved_dashboard_plots")
+        plots_dir = os.path.join(get_run_root(run_id), "saved_dashboard_plots")
         os.makedirs(plots_dir, exist_ok=True)
         plt.savefig(os.path.join(plots_dir, plot_filename), bbox_inches='tight')
         with open(os.path.join(plots_dir, metadata_filename), 'w') as f:
             json.dump(filter_metadata, f, indent=2)
     if save_individual and run_id and filter_metadata:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        plots_dir = os.path.join(RESULTS_PATH, run_id, "saved_dashboard_plots")
+        plots_dir = os.path.join(get_run_root(run_id), "saved_dashboard_plots")
         for i in individual_indices:
             if 0 <= i < len(targets):
                 individual_fig = plt.figure(figsize=TRAJECTORY_INDIVIDUAL_FIGSIZE)
@@ -369,7 +362,7 @@ def plot_trajectories(
                 plt.close(individual_fig)
 
 def get_saved_plots_metadata(run_id):
-    plots_dir = os.path.join(RESULTS_PATH, run_id, "saved_dashboard_plots")
+    plots_dir = os.path.join(get_run_root(run_id), "saved_dashboard_plots")
     if not os.path.exists(plots_dir):
         return []
     metadata_files = glob.glob(os.path.join(plots_dir, "*_metadata.json"))

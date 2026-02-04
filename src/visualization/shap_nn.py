@@ -2,6 +2,7 @@
 import os, logging, numpy as np, pandas as pd, shap, torch
 from typing import List, Optional, Dict, Iterable, Set
 from configs.paths import RESULTS_PATH
+from src.utils.utils import get_run_root
 from configs.data import CATEGORICAL_COLUMNS, NON_FEATURE_COLUMNS, OUTPUT_UNITS
 from configs.visualization import DEFAULT_REGION
 from .helpers import (
@@ -144,7 +145,7 @@ def _to_numpy(x):
 def get_lstm_shap_values(run_id, X_test: pd.DataFrame, sequence_length=1):
     from src.trainers.lstm_trainer import LSTMModel
     logging.info("Loading LSTM model...")
-    model_path = os.path.join(RESULTS_PATH, run_id, "final", "best.ckpt")
+    model_path = os.path.join(get_run_root(run_id), "final", "best.ckpt")
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"LSTM model checkpoint not found: {model_path}")
     model = LSTMModel.load_from_checkpoint(model_path)
@@ -217,9 +218,9 @@ def get_lstm_shap_values(run_id, X_test: pd.DataFrame, sequence_length=1):
             shap_values = _np.expand_dims(shap_values, axis=-1)
     original_temporal_shap = shap_values.copy()
     averaged = _np.mean(shap_values, axis=1)
-    os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots"), exist_ok=True)
-    _np.save(os.path.join(RESULTS_PATH, run_id, "plots", "lstm_shap_values_temporal.npy"), original_temporal_shap)
-    _np.save(os.path.join(RESULTS_PATH, run_id, "plots", "lstm_shap_values.npy"), averaged)
+    os.makedirs(os.path.join(get_run_root(run_id), "plots"), exist_ok=True)
+    _np.save(os.path.join(get_run_root(run_id), "plots", "lstm_shap_values_temporal.npy"), original_temporal_shap)
+    _np.save(os.path.join(get_run_root(run_id), "plots", "lstm_shap_values.npy"), averaged)
     n_samples = averaged.shape[0]
     X_processed = X_test.iloc[:min(test_size, n_samples)].loc[:, features]
     test_sequences_np = _to_numpy(test_inputs)
@@ -235,7 +236,7 @@ def get_tft_shap_values(
     from src.trainers.tft_model import load_tft_checkpoint
     from src.trainers.tft_dataset import load_dataset_template, from_train_template
     logging.info("Loading TFT model...")
-    model_path = os.path.join(RESULTS_PATH, run_id, "final", "best.ckpt")
+    model_path = os.path.join(get_run_root(run_id), "final", "best.ckpt")
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"TFT model checkpoint not found: {model_path}")
 
@@ -247,7 +248,7 @@ def get_tft_shap_values(
     session_features = list(session_state.get("features") or [])
     targets = session_state.get("targets") or []
 
-    plots_dir = os.path.join(RESULTS_PATH, run_id, "plots")
+    plots_dir = os.path.join(get_run_root(run_id), "plots")
     cache_path = os.path.join(plots_dir, "tft_shap_cache.npz")
 
     if use_cached and os.path.exists(cache_path):
@@ -530,7 +531,7 @@ def get_tft_shap_values(
 
 def plot_lstm_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], targets: List[str], sequence_length=1, region: Optional[str] = DEFAULT_REGION):
     logging.info("Creating LSTM SHAP plots...")
-    model_path = os.path.join(RESULTS_PATH, run_id, "final", "best.ckpt")
+    model_path = os.path.join(get_run_root(run_id), "final", "best.ckpt")
     if not os.path.exists(model_path):
         logging.warning("Skipping LSTM SHAP plots: model checkpoint not found at %s", model_path)
         return
@@ -581,7 +582,7 @@ def plot_tft_shap(
     use_cached: bool = True,
 ):
     logging.info("Creating TFT SHAP plots...")
-    model_path = os.path.join(RESULTS_PATH, run_id, "final", "best.ckpt")
+    model_path = os.path.join(get_run_root(run_id), "final", "best.ckpt")
     if not os.path.exists(model_path):
         logging.warning("Skipping TFT SHAP plots: model checkpoint not found at %s", model_path)
         return
@@ -618,7 +619,7 @@ def plot_tft_shap(
     X_test = X_joined[available_columns].reset_index(drop=True)
 
     if use_cached:
-        cache_path = os.path.join(RESULTS_PATH, run_id, "plots", "tft_shap_cache.npz")
+        cache_path = os.path.join(get_run_root(run_id), "plots", "tft_shap_cache.npz")
         if os.path.exists(cache_path):
             logging.info("Found cached TFT SHAP data at %s; will reuse it for plotting.", cache_path)
 
@@ -657,7 +658,7 @@ def draw_shap_all_timesteps_plot(run_id: str, temporal_shap_values, test_sequenc
     fig, axes = make_grid(num_targets, base_figsize=(20, 20))
 
     # Create directory for individual plots
-    indiv_plots_dir = os.path.join(RESULTS_PATH, run_id, 'plots', 'indiv_plots', 'shap')
+    indiv_plots_dir = os.path.join(get_run_root(run_id), 'plots', 'indiv_plots', 'shap')
     os.makedirs(indiv_plots_dir, exist_ok=True)
 
     for i, ax in enumerate(axes):
@@ -704,9 +705,9 @@ def draw_shap_all_timesteps_plot(run_id: str, temporal_shap_values, test_sequenc
         plt.close(fig_indiv)
 
     fig.tight_layout()
-    os.makedirs(os.path.join(RESULTS_PATH, run_id, 'plots'), exist_ok=True)
+    os.makedirs(os.path.join(get_run_root(run_id), 'plots'), exist_ok=True)
     filename = f'{model_type}_shap_plot_match_xgb_range.png' if xlim_range is not None else f'{model_type}_shap_plot.png'
-    fig.savefig(os.path.join(RESULTS_PATH, run_id, 'plots', filename))
+    fig.savefig(os.path.join(get_run_root(run_id), 'plots', filename))
     plt.close(fig)
 
 def draw_temporal_shap_plot(run_id: str, temporal_shap_values, X_test: pd.DataFrame, features: List[str], targets: List[str], sequence_length: int, model_type: str = "lstm") -> None:
@@ -737,8 +738,8 @@ def draw_temporal_shap_plot(run_id: str, temporal_shap_values, X_test: pd.DataFr
     ax.set_ylabel("Features", fontsize=12)
     plt.colorbar(im, ax=ax, shrink=0.6)
     fig.tight_layout()
-    os.makedirs(os.path.join(RESULTS_PATH, run_id, 'plots'), exist_ok=True)
-    fig.savefig(os.path.join(RESULTS_PATH, run_id, 'plots', f'{model_type}_temporal_shap_heatmap.png'), dpi=300, bbox_inches='tight')
+    os.makedirs(os.path.join(get_run_root(run_id), 'plots'), exist_ok=True)
+    fig.savefig(os.path.join(get_run_root(run_id), 'plots', f'{model_type}_temporal_shap_heatmap.png'), dpi=300, bbox_inches='tight')
     plt.close(fig)
     create_timestep_comparison_plots(run_id, temporal_shap_values, features, targets, sequence_length, model_type)
 
@@ -765,7 +766,7 @@ def create_timestep_comparison_plots(run_id: str, temporal_shap_values, features
             h = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., h + h*0.01, f"{h:.3f}", ha='center', va='bottom', fontsize=10)
     fig.tight_layout()
-    fig.savefig(os.path.join(RESULTS_PATH, run_id, 'plots', f'{model_type}_timestep_importance.png'), dpi=300, bbox_inches='tight')
+    fig.savefig(os.path.join(get_run_root(run_id), 'plots', f'{model_type}_timestep_importance.png'), dpi=300, bbox_inches='tight')
     plt.close(fig)
     logging.info("Temporal SHAP plots saved")
 
@@ -774,11 +775,11 @@ def get_shap_values(run_id, X_test: pd.DataFrame, model_type: str = "auto", **kw
     """Get SHAP values for any supported model type (auto-detects if not specified)."""
     if model_type == "auto":
         # Auto-detect model type based on checkpoint location
-        lstm_path = os.path.join(RESULTS_PATH, run_id, "final", "best.ckpt")
-        tft_path = os.path.join(RESULTS_PATH, run_id, "final", "best.ckpt")
+        lstm_path = os.path.join(get_run_root(run_id), "final", "best.ckpt")
+        tft_path = os.path.join(get_run_root(run_id), "final", "best.ckpt")
 
         # Check for TFT-specific files first
-        dataset_template_path = os.path.join(RESULTS_PATH, run_id, "final", "dataset_template.pt")
+        dataset_template_path = os.path.join(get_run_root(run_id), "final", "dataset_template.pt")
         if os.path.exists(dataset_template_path):
             model_type = "tft"
         elif os.path.exists(lstm_path):
