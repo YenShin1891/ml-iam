@@ -19,6 +19,7 @@ from xgboost import XGBRegressor
 from xgboost.dask import DaskDMatrix, train as dask_train
 
 from configs.paths import RESULTS_PATH
+from src.utils.utils import get_run_root
 from configs.models import (
     XGBRuntimeConfig,
     XGBTrainerConfig,
@@ -400,11 +401,11 @@ def hyperparameter_search(
         if X_val is None or y_val is None or X_val_with_index is None:
             raise ValueError("X_val, y_val, and X_val_with_index must be provided when use_cv=False")
     
-    os.makedirs(os.path.join(RESULTS_PATH, run_id, "checkpoints"), exist_ok=True)
+    os.makedirs(os.path.join(get_run_root(run_id), "checkpoints"), exist_ok=True)
     checkpoint_subdir = "staged_search" if use_cv else "staged_search_single_val"
     if not use_dask:
         checkpoint_subdir += "_no_dask"
-    checkpoint_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints", checkpoint_subdir)
+    checkpoint_dir = os.path.join(get_run_root(run_id), "checkpoints", checkpoint_subdir)
     os.makedirs(checkpoint_dir, exist_ok=True)
     
     all_results = {
@@ -597,7 +598,7 @@ def train_and_save_model(
                         verbose_eval=25
                     )
 
-                    model_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", f"final_best.json")
+                    model_path = os.path.join(get_run_root(run_id), "checkpoints", f"final_best.json")
                     booster = model['booster']
                     booster.save_model(model_path)
                     logging.info(f"Model saved to {model_path}")
@@ -610,7 +611,7 @@ def train_and_save_model(
                 
                 model.fit(X_train, y_train_df, verbose=25)
                 
-                model_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", f"final_best.json")
+                model_path = os.path.join(get_run_root(run_id), "checkpoints", f"final_best.json")
                 model.save_model(model_path)
                 logging.info(f"Model saved to {model_path}")
 

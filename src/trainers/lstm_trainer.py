@@ -16,6 +16,7 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset, DataLoader
 
 from configs.paths import RESULTS_PATH
+from src.utils.utils import get_run_root
 from configs.models import LSTMTrainerConfig, LSTMSearchSpace, LSTMDatasetConfig
 
 
@@ -653,7 +654,7 @@ def hyperparameter_search_lstm_parallel(
 
                 # Create trainer for single GPU
                 search_checkpoint = ModelCheckpoint(
-                    dirpath=os.path.join(RESULTS_PATH, run_id, "search", f"trial_{trial_id}"),
+                    dirpath=os.path.join(get_run_root(run_id), "search", f"trial_{trial_id}"),
                     filename="best",
                     monitor="val_loss",
                     mode="min",
@@ -716,7 +717,7 @@ def hyperparameter_search_lstm_parallel(
 
     # Save search results
     search_results_df = pd.DataFrame(search_results)
-    search_results_path = os.path.join(RESULTS_PATH, run_id, "search_results.csv")
+    search_results_path = os.path.join(get_run_root(run_id), "search_results.csv")
     os.makedirs(os.path.dirname(search_results_path), exist_ok=True)
     search_results_df.to_csv(search_results_path, index=False)
     logging.info(f"Search results saved to: {search_results_path}")
@@ -727,7 +728,7 @@ def hyperparameter_search_lstm_parallel(
         if not finite_df.empty:
             idx = finite_df.groupby("sequence_length")["val_loss"].idxmin()
             best_by_seq = finite_df.loc[idx].sort_values("sequence_length")
-            best_by_seq_path = os.path.join(RESULTS_PATH, run_id, "search_best_by_seq_len.csv")
+            best_by_seq_path = os.path.join(get_run_root(run_id), "search_best_by_seq_len.csv")
             best_by_seq.to_csv(best_by_seq_path, index=False)
             logging.info("Best params per sequence_length:")
             for _, row in best_by_seq.iterrows():
@@ -820,7 +821,7 @@ def hyperparameter_search_lstm_sequential(
 
         # Create trainer for search
         search_checkpoint = ModelCheckpoint(
-            dirpath=os.path.join(RESULTS_PATH, run_id, "search", f"trial_{i}"),
+            dirpath=os.path.join(get_run_root(run_id), "search", f"trial_{i}"),
             filename="best",
             monitor="val_loss",
             mode="min",
@@ -844,7 +845,7 @@ def hyperparameter_search_lstm_sequential(
 
     # Save search results like TFT
     search_results_df = pd.DataFrame(search_results)
-    search_results_path = os.path.join(RESULTS_PATH, run_id, "search_results.csv")
+    search_results_path = os.path.join(get_run_root(run_id), "search_results.csv")
     os.makedirs(os.path.dirname(search_results_path), exist_ok=True)
     search_results_df.to_csv(search_results_path, index=False)
     logging.info(f"Search results saved to: {search_results_path}")
@@ -855,7 +856,7 @@ def hyperparameter_search_lstm_sequential(
         if not finite_df.empty:
             idx = finite_df.groupby("sequence_length")["val_loss"].idxmin()
             best_by_seq = finite_df.loc[idx].sort_values("sequence_length")
-            best_by_seq_path = os.path.join(RESULTS_PATH, run_id, "search_best_by_seq_len.csv")
+            best_by_seq_path = os.path.join(get_run_root(run_id), "search_best_by_seq_len.csv")
             best_by_seq.to_csv(best_by_seq_path, index=False)
             logging.info("Best params per sequence_length:")
             for _, row in best_by_seq.iterrows():
@@ -930,7 +931,7 @@ def train_final_lstm(
     model = create_lstm_model(features, output_size, config)
 
     # Create final trainer
-    final_dir = os.path.join(RESULTS_PATH, run_id, "final")
+    final_dir = os.path.join(get_run_root(run_id), "final")
     os.makedirs(final_dir, exist_ok=True)
 
     trainer = create_lstm_final_trainer(config)
@@ -969,7 +970,7 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
 
 
     # Load model
-    final_ckpt_path = os.path.join(RESULTS_PATH, run_id, "final", "best.ckpt")
+    final_ckpt_path = os.path.join(get_run_root(run_id), "final", "best.ckpt")
 
     if not os.path.exists(final_ckpt_path):
         raise FileNotFoundError(f"Final model checkpoint not found: {final_ckpt_path}")

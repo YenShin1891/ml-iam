@@ -212,7 +212,7 @@ def main():
 
     if resume is None:
         # Full pipeline: process -> search -> train -> test -> plot
-        run_id = get_next_run_id()
+        run_id = get_next_run_id("tft")
         setup_logging(run_id)
 
         if use_two_window:

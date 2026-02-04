@@ -1,7 +1,7 @@
 # XGBoost SHAP plotting (migrated from utils.plot_shap_xgb)
 import os, logging, numpy as np, pandas as pd, shap, xgboost as xgb
 from typing import List, Optional, Dict
-from configs.paths import RESULTS_PATH
+from src.utils.utils import get_run_root
 from configs.data import NON_FEATURE_COLUMNS, OUTPUT_UNITS, CATEGORICAL_COLUMNS, REGION_CATEGORIES
 from configs.visualization import (
     DEFAULT_REGION,
@@ -27,13 +27,13 @@ __all__ = ['get_shap_values','transform_outputs_to_former_inputs','draw_shap_plo
 def get_shap_values(run_id, X_test: pd.DataFrame):
     logging.info("Loading XGBoost model...")
     model = xgb.XGBRegressor()
-    model.load_model(os.path.join(RESULTS_PATH, run_id, "checkpoints", "final_best.json"))
+    model.load_model(os.path.join(get_run_root(run_id), "checkpoints", "final_best.json"))
     logging.info("Creating SHAP explainer...")
     explainer = shap.TreeExplainer(model, approximate=True)
     logging.info("Calculating SHAP values...")
     shap_values = explainer.shap_values(X_test)
-    os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots"), exist_ok=True)
-    np.save(os.path.join(RESULTS_PATH, run_id, "plots", "shap_values.npy"), shap_values)
+    os.makedirs(os.path.join(get_run_root(run_id), "plots"), exist_ok=True)
+    np.save(os.path.join(get_run_root(run_id), "plots", "shap_values.npy"), shap_values)
     logging.info("SHAP values saved to shap_values.npy")
 
 def transform_outputs_to_former_inputs(run_id: str, shap_values: np.ndarray, targets: List[str], features: List[str]) -> np.ndarray:
@@ -46,8 +46,8 @@ def transform_outputs_to_former_inputs(run_id: str, shap_values: np.ndarray, tar
         importance = mean_shap_values / target_value
         sorted_df = pd.DataFrame({"Feature": features, "Importance": importance}).sort_values(by="Importance", ascending=False)
         sorted_df_list.append(sorted_df)
-        os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots", "csv"), exist_ok=True)
-        sorted_df.to_csv(os.path.join(RESULTS_PATH, run_id, "plots", "csv", f"shap{i+1}_{target}.csv"), index=False)
+        os.makedirs(os.path.join(get_run_root(run_id), "plots", "csv"), exist_ok=True)
+        sorted_df.to_csv(os.path.join(get_run_root(run_id), "plots", "csv", f"shap{i+1}_{target}.csv"), index=False)
         shap_values[:, :, i] = shap_values[:, :, i] / target_value
     input_only = shap_values.copy()
     feature_renaming = {}
@@ -67,7 +67,7 @@ def transform_outputs_to_former_inputs(run_id: str, shap_values: np.ndarray, tar
                         input_only[:, j, i] = new_features
                         feature_renaming[target][output] = ("prev_" if num == 1 else f"prev{num}_") + new_input
                         break
-    with open(os.path.join(RESULTS_PATH, run_id, "plots", "csv", "feature_renaming.json"), 'w') as json_file:
+    with open(os.path.join(get_run_root(run_id), "plots", "csv", "feature_renaming.json"), 'w') as json_file:
         json.dump(feature_renaming, json_file, indent=4)
     return input_only
 
@@ -90,7 +90,7 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=F
     X_values = X_proc.values.astype(np.float64)
 
     # Create directory for individual plots
-    indiv_plots_dir = os.path.join(RESULTS_PATH, run_id, 'plots', 'indiv_plots', 'shap')
+    indiv_plots_dir = os.path.join(get_run_root(run_id), 'plots', 'indiv_plots', 'shap')
     os.makedirs(indiv_plots_dir, exist_ok=True)
 
     for i, ax in enumerate(axes):
@@ -156,10 +156,10 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=F
         plt.close(fig_indiv)
 
     fig.tight_layout()
-    os.makedirs(os.path.join(RESULTS_PATH, run_id, 'plots'), exist_ok=True)
+    os.makedirs(os.path.join(get_run_root(run_id), 'plots'), exist_ok=True)
     prefix = f"{model_prefix}_" if model_prefix else ""
     filename = f"{prefix}shap_plot_no_first.png" if exclude_top else f"{prefix}shap_plot.png"
-    fig.savefig(os.path.join(RESULTS_PATH, run_id, 'plots', filename))
+    fig.savefig(os.path.join(get_run_root(run_id), 'plots', filename))
     plt.close(fig)
 
 def plot_xgb_shap(
@@ -172,7 +172,7 @@ def plot_xgb_shap(
     index_region: Optional[pd.Series] = None,
 ):
     logging.info("Creating SHAP plots...")
-    ckpt_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", "final_best.json")
+    ckpt_path = os.path.join(get_run_root(run_id), "checkpoints", "final_best.json")
     if not os.path.exists(ckpt_path):
         logging.warning("Skipping SHAP plots: model checkpoint not found at %s", ckpt_path)
         return
@@ -220,7 +220,7 @@ def plot_xgb_shap(
         ",".join(group_cols) if group_cols else "<none>",
     )
     get_shap_values(run_id, X_test)
-    shap_values = np.load(os.path.join(RESULTS_PATH, run_id, "plots", "shap_values.npy"), allow_pickle=True)
+    shap_values = np.load(os.path.join(get_run_root(run_id), "plots", "shap_values.npy"), allow_pickle=True)
     shap_values = transform_outputs_to_former_inputs(run_id, shap_values, targets, features)
     draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, xlim_range=xlim_range)
     draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=True, xlim_range=xlim_range)

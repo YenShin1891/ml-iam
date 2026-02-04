@@ -16,6 +16,16 @@ from configs.data import REGION_CODE_TO_LABEL
 # constants
 CHECKPOINT_FILE_NAME = "session_state.pkl"
 
+
+def get_run_root(run_id: str) -> str:
+    """Return the root directory for a run.
+
+    Expected run_id format: "{model}_{nn}" (e.g., "xgb_01", "lstm_03", "tft_12").
+    Results are stored under: RESULTS_PATH/{model}/{run_id}
+    """
+    model_type = run_id.split("_", 1)[0]
+    return os.path.join(RESULTS_PATH, model_type, run_id)
+
 # for logging
 class KSTFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
@@ -79,7 +89,7 @@ def setup_logging(run_id, log_file=None):
         caller_filename = inspect.stack()[1].filename
         log_file = os.path.basename(caller_filename).split('.')[0] + ".log"
 
-    log_dir = os.path.join(RESULTS_PATH, run_id, "logs")
+    log_dir = os.path.join(get_run_root(run_id), "logs")
     os.makedirs(log_dir, exist_ok=True)
 
     handlers = [
@@ -94,23 +104,28 @@ def setup_logging(run_id, log_file=None):
 # for model checkpoints (legacy simple pickle helpers retained below)
 
 
-def get_next_run_id():
+def get_next_run_id(model_type: str) -> str:
     """
-    Generate the next run_id by checking existing run directories in the results folder.
+    Generate the next run_id for a given model by checking existing run directories.
+
+    Returns a model-prefixed id like "xgb_01".
     """
-    os.makedirs(RESULTS_PATH, exist_ok=True)
+    model_results_dir = os.path.join(RESULTS_PATH, model_type)
+    os.makedirs(model_results_dir, exist_ok=True)
 
     existing_runs = [
-        d for d in os.listdir(RESULTS_PATH)
-        if os.path.isdir(os.path.join(RESULTS_PATH, d)) and d.startswith("run_")
+        d
+        for d in os.listdir(model_results_dir)
+        if os.path.isdir(os.path.join(model_results_dir, d)) and d.startswith(f"{model_type}_")
     ]
 
-    # Extract numeric parts of run IDs and find the next available number
     run_numbers = [
-        int(d.split("_")[1]) for d in existing_runs if d.split("_")[1].isdigit()
+        int(d.split("_", 1)[1])
+        for d in existing_runs
+        if d.split("_", 1)[1].isdigit()
     ]
     next_run_number = max(run_numbers, default=0) + 1
-    return f"run_{next_run_number:02d}"
+    return f"{model_type}_{next_run_number:02d}"
 
 
 # for model checkpoints
@@ -118,7 +133,7 @@ def save_session_state(session_state, run_id, checkpoint_file_name=CHECKPOINT_FI
     """
     Save the session state to a file under the specified run directory.
     """
-    run_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints")
+    run_dir = os.path.join(get_run_root(run_id), "checkpoints")
     os.makedirs(run_dir, exist_ok=True)
     file_path = os.path.join(run_dir, checkpoint_file_name)
     with open(file_path, "wb") as f:
@@ -143,7 +158,7 @@ class DowngradeUnpickler(pickle.Unpickler):
     
 
 def load_session_state(run_id, checkpoint_file_name=CHECKPOINT_FILE_NAME):
-    file_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", checkpoint_file_name)
+    file_path = os.path.join(get_run_root(run_id), "checkpoints", checkpoint_file_name)
     try:
         with open(file_path, "rb") as f:
             session_state = DowngradeUnpickler(f).load()
@@ -192,7 +207,7 @@ def _decode_saved_categoricals(session_state: dict) -> None:
             _decode_region_column(value)
     
 def load_model(run_id):
-    run_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints")
+    run_dir = os.path.join(get_run_root(run_id), "checkpoints")
     file_path = os.path.join(run_dir, "final_best.json")
     try:
         import xgboost as xgb

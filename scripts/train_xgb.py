@@ -195,7 +195,7 @@ def main():
 
     if resume is None:
         # Full pipeline: process -> search -> train -> test -> plot
-        run_id = get_next_run_id()
+        run_id = get_next_run_id("xgb")
         setup_logging(run_id)
         lag_required = True if lag_required_arg is None else lag_required_arg
         session_state = preprocessing(run_id, dataset, lag_required)
