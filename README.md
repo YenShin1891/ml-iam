@@ -59,7 +59,7 @@ We train three model architectures on IPCC AR6 scenario data:
 
 This pipeline requires the **IPCC AR6 Scenario Explorer Database (v1.1)**:
 
-1. Visit the [AR6 Scenario Explorer](https://data.ene.iiasa.ac.at/ar6/)
+1. Visit the [AR6 Scenario Explorer](https://data.ene.iiasa.ac.at/ar6/) *(You can download without creating an account by clicking “Guest login”.)*
 2. Download the following files:
   - `AR6_Scenarios_Database_ISO3_v1.1.csv`
   - `AR6_Scenarios_Database_R6_regions_v1.1.csv`
