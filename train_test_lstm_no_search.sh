@@ -3,7 +3,7 @@
 # LSTM training and testing script with proper phase separation
 # Search phase uses multi-device, train/test phases use single device
 
-run_id=$(python ./scripts/get_run_id.py)
+run_id=$(python ./scripts/get_run_id.py --model lstm)
 echo "Starting LSTM training with run_id: $run_id"
 
 

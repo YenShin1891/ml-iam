@@ -6,7 +6,7 @@
 source /root/conda/etc/profile.d/conda.sh
 conda activate xgb2
 
-run_id=$(python ./scripts/get_run_id.py)
+run_id=$(python ./scripts/get_run_id.py --model lstm)
 echo "Starting LSTM training with run_id: $run_id"
 
 

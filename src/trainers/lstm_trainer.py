@@ -20,6 +20,69 @@ from src.utils.utils import get_run_root
 from configs.models import LSTMTrainerConfig, LSTMSearchSpace, LSTMDatasetConfig
 
 
+def _infer_non_numeric_feature_columns(df: pd.DataFrame, features: List[str]) -> List[str]:
+    """Return feature columns that are not numeric in the provided dataframe."""
+    non_numeric: List[str] = []
+    for col in features:
+        if col not in df.columns:
+            # Missing columns will be created as NaN later via reindex; treat as numeric.
+            continue
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            non_numeric.append(col)
+    return non_numeric
+
+
+def _one_hot_encode_and_align_features(
+    train_data: pd.DataFrame,
+    other_data: List[pd.DataFrame],
+    features: List[str],
+) -> Tuple[pd.DataFrame, List[pd.DataFrame], List[str], List[str]]:
+    """One-hot encode non-numeric feature columns based on train_data and align others.
+
+    Returns:
+      (encoded_train_data, encoded_other_data_list, encoded_feature_columns, non_numeric_feature_columns)
+    """
+    non_numeric_cols = _infer_non_numeric_feature_columns(train_data, features)
+    if not non_numeric_cols:
+        return train_data, other_data, features, []
+
+    # Encode train
+    X_train = train_data.reindex(columns=features)
+    X_train_enc = pd.get_dummies(X_train, columns=non_numeric_cols, dummy_na=True)
+    # Ensure stable float dtype for dummy columns; keep numeric columns as-is.
+    for col in X_train_enc.columns:
+        if X_train_enc[col].dtype == bool:
+            X_train_enc[col] = X_train_enc[col].astype(np.float32)
+        elif pd.api.types.is_integer_dtype(X_train_enc[col]):
+            X_train_enc[col] = X_train_enc[col].astype(np.float32)
+
+    encoded_features = list(X_train_enc.columns)
+    encoded_train = pd.concat([train_data.drop(columns=features, errors="ignore"), X_train_enc], axis=1)
+
+    encoded_others: List[pd.DataFrame] = []
+    for df in other_data:
+        X_other = df.reindex(columns=features)
+        X_other_enc = pd.get_dummies(X_other, columns=non_numeric_cols, dummy_na=True)
+        # Align to training columns (unknown categories become all-zeros)
+        X_other_enc = X_other_enc.reindex(columns=encoded_features, fill_value=0.0)
+        for col in X_other_enc.columns:
+            if X_other_enc[col].dtype == bool:
+                X_other_enc[col] = X_other_enc[col].astype(np.float32)
+            elif pd.api.types.is_integer_dtype(X_other_enc[col]):
+                X_other_enc[col] = X_other_enc[col].astype(np.float32)
+        encoded_other = pd.concat([df.drop(columns=features, errors="ignore"), X_other_enc], axis=1)
+        encoded_others.append(encoded_other)
+
+    logging.warning(
+        "Detected non-numeric LSTM features %s; applying one-hot encoding (%d -> %d columns)",
+        non_numeric_cols,
+        len(features),
+        len(encoded_features),
+    )
+
+    return encoded_train, encoded_others, encoded_features, non_numeric_cols
+
+
 class LSTMDataset(Dataset):
     """PyTorch Dataset for LSTM sequences with proper group handling like TFT."""
 
@@ -50,7 +113,7 @@ class LSTMDataset(Dataset):
         X = data[features].copy()
         y = data[targets].values.copy()
 
-        # Handle NaN values directly - let LSTM handle categorical features as-is
+        # Handle NaN values; any categorical features should have been encoded upstream.
         X_filled = X.fillna(mask_value).astype(np.float32)
 
         # Ensure y is 2D
@@ -402,8 +465,15 @@ def create_lstm_datasets(
 ) -> Tuple[LSTMDataset, LSTMDataset]:
     """Create LSTM datasets for training and validation with proper group handling."""
 
+    # Ensure all feature columns are numeric and aligned between train/val
+    train_data_enc, (val_data_enc,), encoded_features, _ = _one_hot_encode_and_align_features(
+        train_data,
+        [val_data],
+        features,
+    )
+
     train_dataset = LSTMDataset(
-        train_data, features, targets,
+        train_data_enc, encoded_features, targets,
         sequence_length=sequence_length,
         target_offset=target_offset,
         mask_value=mask_value,
@@ -411,7 +481,7 @@ def create_lstm_datasets(
     )
 
     val_dataset = LSTMDataset(
-        val_data, features, targets,
+        val_data_enc, encoded_features, targets,
         sequence_length=sequence_length,
         target_offset=target_offset,
         mask_value=mask_value,
@@ -420,7 +490,7 @@ def create_lstm_datasets(
         fit_scalers=False
     )
 
-    return train_dataset, val_dataset
+    return train_dataset, val_dataset, encoded_features
 
 
 def create_lstm_dataloaders(
@@ -622,7 +692,7 @@ def hyperparameter_search_lstm_parallel(
             try:
                 # Create datasets
                 sequence_length = params.get("sequence_length", LSTMTrainerConfig().sequence_length)
-                train_dataset, val_dataset = create_lstm_datasets(
+                train_dataset, val_dataset, model_features = create_lstm_datasets(
                     train_data, val_data, features, targets, sequence_length=sequence_length, target_offset=LSTMTrainerConfig().target_offset
                 )
 
@@ -650,7 +720,7 @@ def hyperparameter_search_lstm_parallel(
                 )
 
                 output_size = len(targets)
-                model = create_lstm_model(features, output_size, config)
+                model = create_lstm_model(model_features, output_size, config)
 
                 # Create trainer for single GPU
                 search_checkpoint = ModelCheckpoint(
@@ -788,7 +858,7 @@ def hyperparameter_search_lstm_sequential(
 
         # Create datasets
         sequence_length = params.get("sequence_length", LSTMTrainerConfig().sequence_length)
-        train_dataset, val_dataset = create_lstm_datasets(
+        train_dataset, val_dataset, model_features = create_lstm_datasets(
             train_data, val_data, features, targets, sequence_length=sequence_length, target_offset=LSTMTrainerConfig().target_offset
         )
 
@@ -817,7 +887,7 @@ def hyperparameter_search_lstm_sequential(
 
         output_size = len(targets)
 
-        model = create_lstm_model(features, output_size, config)
+        model = create_lstm_model(model_features, output_size, config)
 
         # Create trainer for search
         search_checkpoint = ModelCheckpoint(
@@ -894,8 +964,15 @@ def train_final_lstm(
     # Create dataset with combined data
     sequence_length = best_params.get("sequence_length", LSTMTrainerConfig().sequence_length)
     target_offset = best_params.get("target_offset", LSTMTrainerConfig().target_offset)
+
+    # Encode any remaining non-numeric feature columns on the combined dataset
+    combined_data_enc, _, encoded_features, non_numeric_cols = _one_hot_encode_and_align_features(
+        combined_data,
+        [],
+        features,
+    )
     combined_dataset = LSTMDataset(
-        combined_data, features, targets,
+        combined_data_enc, encoded_features, targets,
         sequence_length=sequence_length,
         target_offset=target_offset,
         fit_scalers=True
@@ -928,7 +1005,7 @@ def train_final_lstm(
 
     output_size = len(targets)
 
-    model = create_lstm_model(features, output_size, config)
+    model = create_lstm_model(encoded_features, output_size, config)
 
     # Create final trainer
     final_dir = os.path.join(get_run_root(run_id), "final")
@@ -955,6 +1032,9 @@ def train_final_lstm(
         session_state["lstm_scaler_X"] = combined_dataset.scaler_X
         session_state["lstm_scaler_y"] = combined_dataset.scaler_y
         session_state["lstm_config"] = config
+        session_state["lstm_raw_features"] = features
+        session_state["lstm_features"] = encoded_features
+        session_state["lstm_non_numeric_features"] = non_numeric_cols
     session_state["lstm_sequence_length"] = sequence_length
     session_state["lstm_target_offset"] = target_offset
 
@@ -966,7 +1046,9 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
     # Get data from session state (stored as DataFrames like TFT)
     test_data = session_state["test_data"]
     targets = session_state["targets"]
-    features = session_state["features"]  # Use features from preprocessing, just like TFT
+    # Prefer encoded LSTM features from final training (ensures scaler/model input size match)
+    raw_features = session_state.get("lstm_raw_features", session_state["features"])
+    features = session_state.get("lstm_features", session_state["features"])
 
 
     # Load model
@@ -989,10 +1071,19 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
     model = LSTMModel.load_from_checkpoint(final_ckpt_path)
     model.eval()
 
+    # Ensure test_data has the same encoded feature columns as during training
+    non_numeric_cols = session_state.get("lstm_non_numeric_features", [])
+    if non_numeric_cols and features != raw_features:
+        X_test = test_data.reindex(columns=raw_features)
+        X_test_enc = pd.get_dummies(X_test, columns=[c for c in non_numeric_cols if c in X_test.columns], dummy_na=True)
+        X_test_enc = X_test_enc.reindex(columns=features, fill_value=0.0)
+        test_data_enc = pd.concat([test_data.drop(columns=raw_features, errors="ignore"), X_test_enc], axis=1)
+    else:
+        test_data_enc = test_data
+
     # Create test dataset - autoregressive prediction during inference
-    # Note: Categorical encoding happens inside LSTMDataset constructor
     test_dataset = LSTMDataset(
-        test_data, features, targets,
+        test_data_enc, features, targets,
         sequence_length=sequence_length,
         target_offset=target_offset,
         scaler_X=scaler_X,

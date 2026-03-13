@@ -8,7 +8,7 @@ source /root/conda/etc/profile.d/conda.sh
 conda activate xgb2
 DATASET="$1"
 
-run_id=$(python ./scripts/get_run_id.py)
+run_id=$(python ./scripts/get_run_id.py --model tft)
 echo "Starting TFT training with run_id: $run_id"
 
 if [ -z "$DATASET" ]; then

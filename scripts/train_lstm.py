@@ -144,7 +144,7 @@ def plot_lstm(session_state, run_id):
     logging.info("Plotting LSTM predictions...")
     preds = session_state.get("preds")
     targets = session_state["targets"]
-    features = session_state["features"]
+    features = session_state.get("lstm_features", session_state["features"])
 
     if preds is None:
         raise ValueError("No predictions found in session state. Please run the test step first.")
