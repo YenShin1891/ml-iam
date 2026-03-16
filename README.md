@@ -2,7 +2,7 @@
 
 **A reproducible pipeline for emulating IAM scenario time-series using gradient boosted trees and deep learning.**
 
-📄 [**Preprint**](https://egusphere.copernicus.org/preprints/2026/egusphere-2025-5305/) | 🌐 [**Emulation Viewer**](https://mliam.dev/) | 📊 **Dataset** (coming soon) | [![DOI](https://zenodo.org/badge/974767132.svg)](https://doi.org/10.5281/zenodo.17390677)
+📄 [**Preprint**](https://egusphere.copernicus.org/preprints/2026/egusphere-2025-5305/) | 🌐 [**Emulation Viewer**](https://mliam.dev/) | [![DOI](https://zenodo.org/badge/974767132.svg)](https://doi.org/10.5281/zenodo.17390677)
 
 ---
 
@@ -134,8 +134,19 @@ This command:
 ### Step 4: Train XGBoost Model
 
 ```bash
-# Run full pipeline: hyperparameter search → train → test → visualize
-python scripts/train_xgb.py
+# Recommended: unified Makefile training using a YAML/JSON run config
+# 1) Edit an example config under configs/runs/
+# 2) Run training via make
+make train RUN=configs/runs/xgb_example.yaml
+
+# Per-phase GPU visibility (optional): in the YAML you can set
+# cuda_visible_devices: {default: "0", search: "0,1,2,3", train: "0", test: "0", plot: "0"}
+
+# Background (nohup) run with log + pid under ./logs/
+make train-bg RUN=configs/runs/xgb_example.yaml
+
+# You can still run the script directly if you prefer:
+# python scripts/train_xgb.py
 ```
 
 **Command options:**
@@ -179,8 +190,11 @@ python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
 ### Training LSTM
 
 ```bash
-# Full pipeline: search → train → test → plot
-python scripts/train_lstm.py
+# Recommended: unified Makefile training using a YAML/JSON run config
+make train RUN=configs/runs/lstm_example.yaml
+
+# You can still run the script directly if you prefer:
+# python scripts/train_lstm.py
 ```
 
 **Command options (LSTM):**
@@ -199,8 +213,11 @@ python scripts/train_lstm.py --resume train --run_id run_01
 ### Training TFT (Temporal Fusion Transformer)
 
 ```bash
-# Full pipeline: search → train → test → plot
-python scripts/train_tft.py
+# Recommended: unified Makefile training using a YAML/JSON run config
+make train RUN=configs/runs/tft_example.yaml
+
+# You can still run the script directly if you prefer:
+# python scripts/train_tft.py
 ```
 
 **Command options (TFT):**
@@ -208,6 +225,8 @@ python scripts/train_tft.py
 - `--dataset <version_name>`: Use a specific processed dataset subdirectory under `DATA_PATH`
 - `--lag-required/--no-lag-required`: Control whether full lag history is required
 - `--two-window`: Use the two-window prediction variant
+- `--skip_search`: Skip hyperparameter search and use default config from `configs/models/tft_search.py`
+- `--note "description"`: Add a note to the run metadata
 
 Example resume:
 
@@ -222,6 +241,10 @@ python scripts/train_tft.py --resume train --run_id run_01
 If you don’t want to keep a terminal open, you can run training in the background and log everything to a file:
 
 ```bash
+# Makefile helper (recommended): creates a timestamped log + pidfile under ./logs/
+make train-bg RUN=configs/runs/lstm_example.yaml
+
+# Or manual nohup:
 nohup python scripts/train_lstm.py > train.log 2>&1 &
 ```
 

@@ -1,0 +1,18 @@
+# XGB example: run with a dataset + skip search (uses defaults)
+
+model: xgb
+
+dataset: pipeline-min10100-comp0.4-out=9vars-apply-base-year-2025-09-26
+
+cuda_visible_devices:
+  default: "0"
+  search: "0,1,2,3"
+  train: "0"
+  test: "0"
+  plot: "0"
+
+phases: [search, train, test, plot]
+
+skip_search: true
+
+note: "xgb defaults, dataset override"

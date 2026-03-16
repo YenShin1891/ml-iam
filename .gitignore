@@ -177,6 +177,7 @@ cython_debug/
 configs/paths.py
 
 nohup.out
+logs/
 lightning_logs/
 processed/
 results/

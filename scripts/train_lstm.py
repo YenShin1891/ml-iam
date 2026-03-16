@@ -31,6 +31,25 @@ np.random.seed(0)
 seed_everything(42, workers=True)
 
 
+def _default_best_params_from_config() -> dict:
+    from configs.models.lstm import LSTMTrainerConfig
+
+    default_config = LSTMTrainerConfig()
+    return {
+        "hidden_size": default_config.hidden_size,
+        "num_layers": default_config.num_layers,
+        "dropout": default_config.dropout,
+        "bidirectional": default_config.bidirectional,
+        "dense_hidden_size": default_config.dense_hidden_size,
+        "dense_dropout": default_config.dense_dropout,
+        "learning_rate": default_config.learning_rate,
+        "batch_size": default_config.batch_size,
+        "weight_decay": default_config.weight_decay,
+        "sequence_length": default_config.sequence_length,
+        "target_offset": default_config.target_offset,
+    }
+
+
 def process_data(dataset_version=None, lag_required=True):
     """Load and process data for LSTM training."""
     data = load_and_process_data(version=dataset_version)
@@ -73,8 +92,13 @@ def process_data(dataset_version=None, lag_required=True):
     }
 
 
-def search_lstm(session_state, run_id):
-    """Run hyperparameter search and store best_params in session_state."""
+def search_lstm(session_state, run_id, skip_search: bool = False):
+    """Run hyperparameter search and store best_params in session_state.
+
+    If skip_search is True, this becomes an initialization step:
+    - ensures preprocessing has been run
+    - injects default params into session_state["best_params"]
+    """
     logging.info("Starting hyperparameter search for LSTM...")
     REQUIRED_KEYS = ["features", "targets", "train_data", "val_data", "test_data"]
     missing = [k for k in REQUIRED_KEYS if k not in session_state]
@@ -91,6 +115,12 @@ def search_lstm(session_state, run_id):
         session_state.update(data_bundle)
         save_session_state(session_state, run_id)
 
+    if skip_search:
+        session_state["best_params"] = _default_best_params_from_config()
+        logging.info("skip_search enabled; using default LSTM parameters: %s", session_state["best_params"])
+        save_session_state(session_state, run_id)
+        return session_state["best_params"]
+
     train_data = session_state["train_data"]
     val_data = session_state["val_data"]
     targets = session_state["targets"]
@@ -104,7 +134,7 @@ def search_lstm(session_state, run_id):
     return best_params
 
 
-def train_lstm(session_state, run_id):
+def train_lstm(session_state, run_id, skip_search: bool = False):
     """Final training using best_params already present in session_state."""
     REQUIRED_KEYS = ["features", "targets", "train_data", "val_data", "test_data"]
     missing = [k for k in REQUIRED_KEYS if k not in session_state]
@@ -114,7 +144,15 @@ def train_lstm(session_state, run_id):
             "Preprocess first (run without --resume) or resume from search after data is saved."
         )
     if "best_params" not in session_state:
-        raise ValueError("best_params not found in session state. Run the 'search' step first or inject best_params manually.")
+        if skip_search:
+            session_state["best_params"] = _default_best_params_from_config()
+            logging.info(
+                "best_params missing but skip_search enabled; using default LSTM parameters: %s",
+                session_state["best_params"],
+            )
+            save_session_state(session_state, run_id)
+        else:
+            raise ValueError("best_params not found in session state. Run the 'search' step first or pass --skip_search to use defaults.")
 
     best_params = session_state["best_params"]
     logging.info("Starting final LSTM training with best params: %s", best_params)
@@ -238,21 +276,7 @@ def main():
         save_session_state(session_state, run_id)
         resume = "train" if skip_search else "search"
         if skip_search:
-            from configs.models.lstm import LSTMTrainerConfig
-            default_config = LSTMTrainerConfig()
-            session_state["best_params"] = {
-                "hidden_size": default_config.hidden_size,
-                "num_layers": default_config.num_layers,
-                "dropout": default_config.dropout,
-                "bidirectional": default_config.bidirectional,
-                "dense_hidden_size": default_config.dense_hidden_size,
-                "dense_dropout": default_config.dense_dropout,
-                "learning_rate": default_config.learning_rate,
-                "batch_size": default_config.batch_size,
-                "weight_decay": default_config.weight_decay,
-                "sequence_length": default_config.sequence_length,
-                "target_offset": default_config.target_offset,
-            }
+            session_state["best_params"] = _default_best_params_from_config()
             logging.info("Using default LSTM parameters (search skipped): %s", session_state["best_params"])
             save_session_state(session_state, run_id)
     else:
@@ -279,10 +303,10 @@ def main():
 
     # Step-wise execution when resuming - each phase runs independently
     if resume == "search":
-        search_lstm(session_state, run_id)
+        search_lstm(session_state, run_id, skip_search=skip_search)
         save_session_state(session_state, run_id)
     elif resume == "train":
-        train_lstm(session_state, run_id)
+        train_lstm(session_state, run_id, skip_search=skip_search)
         save_session_state(session_state, run_id)
     elif resume == "test":
         test_lstm(session_state, run_id)
