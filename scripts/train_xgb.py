@@ -5,20 +5,20 @@ import pandas as pd
 
 np.random.seed(0)
 
-def preprocessing(run_id, dataset=None, lag_required=True):
+def preprocessing(run_id, dataset=None):
     """
-    Preprocessing for XGBoost with configurable lag requirement.
+    Preprocessing for XGBoost.
 
     Args:
         run_id: Run identifier
         dataset: Dataset version to use
-        lag_required: When True, drop rows without a full history of lag features.
     """
     from src.data.preprocess import prepare_data, load_and_process_data, prepare_features_and_targets
     from src.utils.utils import save_session_state
 
     data = load_and_process_data(version=dataset)
-    prepared, features, targets = prepare_features_and_targets(data, lag_required=lag_required)
+    # XGBoost requires lag features for autoregressive evaluation; enforce full lag history.
+    prepared, features, targets = prepare_features_and_targets(data, lag_required=True)
     prepared = prepared.dropna(subset=targets)
     (
         X_train, y_train, X_train_index_columns,
@@ -46,7 +46,6 @@ def preprocessing(run_id, dataset=None, lag_required=True):
         "test_data": test_data,
         "train_groups": train_groups,
         "val_groups": val_groups,
-        "lag_required": lag_required,
     }
 
 
@@ -75,8 +74,7 @@ def search_xgb(session_state, run_id):
             missing,
         )
         stored_dataset = session_state.get("dataset_version", None)
-        lag_required = session_state.get("lag_required", True)
-        data_bundle = preprocessing(run_id, dataset=stored_dataset, lag_required=lag_required)
+        data_bundle = preprocessing(run_id, dataset=stored_dataset)
         session_state.update(data_bundle)
         from src.utils.utils import save_session_state
         save_session_state(session_state, run_id)
@@ -242,12 +240,6 @@ def parse_arguments():
         help="Dataset subdirectory name to use for processed_series.csv. Falls back to DEFAULT_DATASET if not specified.",
         required=False,
     )
-    parser.add_argument(
-        "--lag-required",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Require complete lag features (use --no-lag-required to allow missing lag history).",
-    )
     args = parser.parse_args()
 
     # Validation: if resume is specified, run_id must be provided
@@ -258,19 +250,18 @@ def parse_arguments():
     if not args.resume and args.run_id:
         parser.error("--run_id should only be specified when using --resume")
 
-    return args.run_id, args.resume, args.note, args.skip_search, args.dataset, args.lag_required
+    return args.run_id, args.resume, args.note, args.skip_search, args.dataset
 
 
 def main():
-    run_id, resume, note, skip_search, dataset, lag_required_arg = parse_arguments()
+    run_id, resume, note, skip_search, dataset = parse_arguments()
     from src.utils.utils import setup_logging, save_session_state, load_session_state, get_next_run_id
 
     if resume is None:
         # Full pipeline: process -> (search) -> train -> test -> plot
         run_id = get_next_run_id("xgb")
         setup_logging(run_id)
-        lag_required = True if lag_required_arg is None else lag_required_arg
-        session_state = preprocessing(run_id, dataset, lag_required)
+        session_state = preprocessing(run_id, dataset)
         save_session_state(session_state, run_id)
         if skip_search:
             from configs.models.xgb_search import XGBDefaultParams
@@ -297,17 +288,12 @@ def main():
     if dataset is not None:
         session_state["dataset_version"] = dataset
         logging.info("Overriding dataset_version for resumed run: %s", dataset)
-    if lag_required_arg is not None:
-        session_state["lag_required"] = lag_required_arg
-        logging.info("Overriding lag_required for resumed run: %s", lag_required_arg)
     save_session_state(session_state, run_id)
 
     if note:
         session_state["note"] = note
         logging.info("Run note: %s", note)
         save_session_state(session_state, run_id)
-
-    logging.info("XGBoost lag_required: %s", session_state.get("lag_required", True))
 
     if resume == "search":
         search_xgb(session_state, run_id)

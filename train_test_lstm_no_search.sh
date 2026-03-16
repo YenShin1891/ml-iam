@@ -33,10 +33,10 @@ else
 	python ./scripts/train_lstm.py --skip_search --resume=train --run_id=$run_id --dataset=$DATASET
 
 	echo "Phase 3: Running testing..."
-	python ./scripts/train_lstm.py --resume=test --run_id=$run_id --dataset=$DATASET
+	python ./scripts/train_lstm.py --resume=test --run_id=$run_id
 
 	echo "Phase 4: Plotting results..."
-	python ./scripts/train_lstm.py --resume=plot --run_id=$run_id --dataset=$DATASET
+	python ./scripts/train_lstm.py --resume=plot --run_id=$run_id
 fi
 
 echo "LSTM training pipeline completed for run_id: $run_id"
