@@ -7,7 +7,6 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import pandas as pd
-from dask.distributed import Client
 from pandas.api.types import is_numeric_dtype
 
 from configs.paths import RESULTS_PATH
@@ -166,7 +165,7 @@ def load_session_state(run_id, checkpoint_file_name=CHECKPOINT_FILE_NAME):
         return session_state
         
     except FileNotFoundError:
-        logging.error("No saved session state found at %s.", file_path)
+        logging.warning("No saved session state found at %s; starting with empty session state.", file_path)
         return {}
 
 
@@ -236,20 +235,6 @@ def load_best_params(session_state):
     logging.info("Loaded best_params from best_params.json: %s", best_params)
     
     return session_state
-
-# dask
-def create_dask_client():
-    """
-    Create a Dask client for distributed computing.
-    """
-    return Client(
-        n_workers=1,
-        threads_per_worker=2,
-        memory_limit='4GB',
-        silence_logs=logging.WARNING,
-        dashboard_address=None,
-        local_directory='/tmp/dask-worker-space'  
-    )
 
 def masked_mse(y_true, y_pred):
     import tensorflow as tf

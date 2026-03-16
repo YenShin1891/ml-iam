@@ -4,9 +4,13 @@
 # Search phase uses multi-device, train/test phases use single device
 # Usage: ./train_test_tft.sh [DATASET_NAME]
 
+set -e
+set -o pipefail
+
 source /root/conda/etc/profile.d/conda.sh
-conda activate xgb2
-DATASET="$1"
+eval "$(mamba shell hook --shell bash)"
+mamba activate xgb2
+DATASET="${1-}"
 
 run_id=$(python ./scripts/get_run_id.py --model tft)
 echo "Starting TFT training with run_id: $run_id"
