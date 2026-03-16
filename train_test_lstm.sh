@@ -41,13 +41,13 @@ else
 	python ./scripts/train_lstm.py --resume=search --run_id=$run_id --dataset=$DATASET $lag_flag
 
 	echo "Phase 2: Running final training..."
-	python ./scripts/train_lstm.py --resume=train --run_id=$run_id --dataset=$DATASET $lag_flag
+	python ./scripts/train_lstm.py --resume=train --run_id=$run_id $lag_flag
 
 	echo "Phase 3: Running testing..."
-	python ./scripts/train_lstm.py --resume=test --run_id=$run_id --dataset=$DATASET $lag_flag
+	python ./scripts/train_lstm.py --resume=test --run_id=$run_id $lag_flag
 
 	echo "Phase 4: Plotting results..."
-	python ./scripts/train_lstm.py --resume=plot --run_id=$run_id --dataset=$DATASET $lag_flag
+	python ./scripts/train_lstm.py --resume=plot --run_id=$run_id $lag_flag
 fi
 
 echo "LSTM training pipeline completed for run_id: $run_id"

@@ -34,13 +34,13 @@ else
 	python ./scripts/train_tft.py --resume=search --run_id=$run_id --dataset=$DATASET --two-window
 
 	echo "Phase 2: Running final training..."
-	python ./scripts/train_tft.py --resume=train --run_id=$run_id --dataset=$DATASET --two-window
+	python ./scripts/train_tft.py --resume=train --run_id=$run_id --two-window
 
 	echo "Phase 3: Running testing..."
-	python ./scripts/train_tft.py --resume=test --run_id=$run_id --dataset=$DATASET --two-window
+	python ./scripts/train_tft.py --resume=test --run_id=$run_id --two-window
 
 	echo "Phase 4: Plotting results..."
-	python ./scripts/train_tft.py --resume=plot --run_id=$run_id --dataset=$DATASET --two-window
+	python ./scripts/train_tft.py --resume=plot --run_id=$run_id --two-window
 fi
 
 echo "TFT training pipeline completed for run_id: $run_id"
