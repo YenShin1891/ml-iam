@@ -1,19 +1,21 @@
-from sklearn.model_selection import ParameterSampler
-from sklearn.metrics import mean_squared_error
-import os
-import logging
-import pandas as pd
-import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
-import json
-from typing import List, Tuple, Dict, Optional
-import time
 import gc
+import json
+import logging
+import os
+import queue
+import subprocess
+import time
 from contextlib import contextmanager
+from typing import Dict, List, Optional, Tuple
+
+import multiprocessing as mp
+import numpy as np
+import pandas as pd
+from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import ParameterSampler
 from xgboost import XGBRegressor
 
-from configs.paths import RESULTS_PATH
+from src.utils.utils import get_run_root
 from configs.models import (
     XGBTrainerConfig,
     XGBSearchSpace,
@@ -79,14 +81,52 @@ def cuda_device(device_id: str):
             os.environ.pop('CUDA_VISIBLE_DEVICES', None)
 
 
-def _first_visible_gpu() -> str:
-    """Return the first GPU ID from CUDA_VISIBLE_DEVICES, or '0' if not set or invalid."""
-    cuda_visible = os.environ.get('CUDA_VISIBLE_DEVICES', '').strip()
+def _parse_cuda_visible_devices(value: str) -> List[str]:
+    return [tok.strip() for tok in value.split(',') if tok.strip()]
+
+
+def _visible_gpu_pool() -> List[str]:
+    """Return a list of GPU tokens that should be used for multi-GPU search.
+
+    Priority:
+    1) Respect CUDA_VISIBLE_DEVICES if set (tokens may be indices or UUIDs).
+    2) Otherwise, fall back to enumerating GPUs via `nvidia-smi -L`.
+
+    Returns at least one token (defaults to ['0']).
+    """
+    cuda_visible = os.environ.get('CUDA_VISIBLE_DEVICES')
     if cuda_visible:
-        first = cuda_visible.split(',')[0].strip()
-        if first.lstrip('-').isdigit():
-            return first
-    return '0'
+        tokens = _parse_cuda_visible_devices(cuda_visible)
+        if tokens:
+            return tokens
+
+    try:
+        out = subprocess.check_output(['nvidia-smi', '-L'], stderr=subprocess.DEVNULL, text=True)
+        gpu_lines = [ln for ln in out.splitlines() if ln.strip().startswith('GPU ')]
+        if gpu_lines:
+            return [str(i) for i in range(len(gpu_lines))]
+    except Exception:
+        pass
+
+    return ['0']
+
+
+def _first_visible_gpu_token(gpu_pool: Optional[List[str]] = None) -> str:
+    pool = gpu_pool or _visible_gpu_pool()
+    return pool[0] if pool else '0'
+
+
+def _cap_search_cpu_threads() -> None:
+    """Cap CPU thread usage inside search workers.
+
+    Parallel search runs multiple GPU workers concurrently; leaving BLAS/OMP and
+    XGBoost threading uncapped can easily oversubscribe CPUs.
+    """
+    os.environ['OMP_NUM_THREADS'] = '1'
+    os.environ['MKL_NUM_THREADS'] = '1'
+    os.environ['OPENBLAS_NUM_THREADS'] = '1'
+    os.environ['NUMEXPR_NUM_THREADS'] = '1'
+    os.environ['VECLIB_MAXIMUM_THREADS'] = '1'
 
 
 def get_xgb_params(base_params: dict, trainer_cfg: Optional[XGBTrainerConfig] = None) -> dict:
@@ -104,9 +144,22 @@ def get_xgb_params(base_params: dict, trainer_cfg: Optional[XGBTrainerConfig] = 
 
 
 def train_and_evaluate_single_config(
-    X, y, X_with_index, train_groups, targets, params, gpu_id,
-    use_cv=True, X_val=None, y_val=None, X_val_with_index=None, n_folds=5,
-    early_stopping_rounds: int = 15, trainer_cfg: Optional[XGBTrainerConfig] = None,
+    X,
+    y,
+    X_with_index,
+    train_groups,
+    targets,
+    params,
+    *,
+    use_cv: bool = True,
+    X_val=None,
+    y_val=None,
+    X_val_with_index=None,
+    n_folds: int = 5,
+    early_stopping_rounds: int = 15,
+    trainer_cfg: Optional[XGBTrainerConfig] = None,
+    show_autoreg_progress: bool = False,
+    n_jobs: Optional[int] = None,
 ) -> Tuple[Dict, float]:
     """
     Train and evaluate a single parameter configuration using either k-fold CV or single validation set.
@@ -125,8 +178,6 @@ def train_and_evaluate_single_config(
         Target column names
     params : dict
         XGBoost parameters
-    gpu_id : int
-        GPU device ID
     use_cv : bool, default=True
         If True, use k-fold cross-validation. If False, use single validation set.
     X_val : pd.DataFrame, optional
@@ -142,61 +193,80 @@ def train_and_evaluate_single_config(
     --------
     Tuple[Dict, float]: A tuple containing the parameters and the negative RMSE score.
     """
-    with cuda_device(str(gpu_id)):
-        try:
-            if use_cv:
-                # Cross-validation mode
-                scores = []
-                fold_cache = {}
-                for fold, (train_idx, val_idx) in enumerate(group_k_fold_split(train_groups, n_splits=n_folds, shuffle=True, random_state=42)):
-                    logging.info(f"Fold {fold+1}/{n_folds} for params: {params}")
-                    
-                    X_train, X_val_fold = X.iloc[train_idx], X.iloc[val_idx]
-                    X_val_with_index_fold = X_with_index.iloc[val_idx]
-                    y_train, y_val_fold = y[train_idx], y[val_idx]
-                    
-                    cache_key = f"fold_{fold}"
-                    if cache_key not in fold_cache:
-                        fold_cache[cache_key] = {}
-                    
-                    fold_score = _train_single_fold(
-                        X_train, y_train, X_val_fold, y_val_fold, X_val_with_index_fold,
-                        targets, params, fold_cache[cache_key], fold+1,
-                        early_stopping_rounds=early_stopping_rounds, trainer_cfg=trainer_cfg,
-                    )
-                    scores.append(fold_score)
-                    
-                avg_rmse = np.mean(scores)
-                score = -avg_rmse
-                
-            else:
-                # Single validation set mode
-                if X_val is None or y_val is None or X_val_with_index is None:
-                    raise ValueError("X_val, y_val, and X_val_with_index must be provided when use_cv=False")
-                
-                logging.info(f"Training with params: {params}")
-                fold_score = _train_single_fold(
-                    X, y, X_val, y_val, X_val_with_index,
-                    targets, params, {}, 1,
-                    early_stopping_rounds=early_stopping_rounds, trainer_cfg=trainer_cfg,
-                )
-                score = -fold_score
+    try:
+        if use_cv:
+            scores: List[float] = []
+            fold_cache: Dict[str, Dict] = {}
+            for fold, (train_idx, val_idx) in enumerate(
+                group_k_fold_split(train_groups, n_splits=n_folds, shuffle=True, random_state=42)
+            ):
+                logging.info("Fold %d/%d for params: %s", fold + 1, n_folds, params)
 
-            return params, score
-            
-        except Exception as e:
-            logging.error(f"Error training config {params}: {str(e)}", exc_info=True)
-            raise
-        finally:
-            try:
-                gc.collect()
-            except:
-                pass
+                X_train, X_val_fold = X.iloc[train_idx], X.iloc[val_idx]
+                X_val_with_index_fold = X_with_index.iloc[val_idx]
+                y_train, y_val_fold = y[train_idx], y[val_idx]
+
+                cache_key = f"fold_{fold}"
+                if cache_key not in fold_cache:
+                    fold_cache[cache_key] = {}
+
+                fold_rmse = _train_single_fold(
+                    X_train,
+                    y_train,
+                    X_val_fold,
+                    y_val_fold,
+                    X_val_with_index_fold,
+                    targets,
+                    params,
+                    fold_cache[cache_key],
+                    fold + 1,
+                    early_stopping_rounds=early_stopping_rounds,
+                    trainer_cfg=trainer_cfg,
+                    show_autoreg_progress=show_autoreg_progress,
+                    n_jobs=n_jobs,
+                )
+                scores.append(fold_rmse)
+
+            avg_rmse = float(np.mean(scores))
+            score = -avg_rmse
+        else:
+            if X_val is None or y_val is None or X_val_with_index is None:
+                raise ValueError("X_val, y_val, and X_val_with_index must be provided when use_cv=False")
+
+            logging.info("Training with params: %s", params)
+            rmse = _train_single_fold(
+                X,
+                y,
+                X_val,
+                y_val,
+                X_val_with_index,
+                targets,
+                params,
+                {},
+                1,
+                early_stopping_rounds=early_stopping_rounds,
+                trainer_cfg=trainer_cfg,
+                show_autoreg_progress=show_autoreg_progress,
+                n_jobs=n_jobs,
+            )
+            score = -rmse
+
+        return params, float(score)
+    except Exception as e:
+        logging.error("Error training config %s: %s", params, str(e), exc_info=True)
+        raise
+    finally:
+        try:
+            gc.collect()
+        except Exception:
+            pass
 
 
 def _train_single_fold(
     X_train, y_train, X_val, y_val, X_val_with_index, targets, params, cache, fold_num,
     early_stopping_rounds: int = 15, trainer_cfg: Optional[XGBTrainerConfig] = None,
+    show_autoreg_progress: bool = False,
+    n_jobs: Optional[int] = None,
 ):
     """
     Helper function to train and evaluate a single fold/validation set.
@@ -209,6 +279,8 @@ def _train_single_fold(
     y_val_df = pd.DataFrame(y_val, columns=targets)
     
     xgb_params = get_xgb_params(params, trainer_cfg=trainer_cfg)
+    if n_jobs is not None:
+        xgb_params['n_jobs'] = int(n_jobs)
     num_boost_round = xgb_params.pop('num_boost_round')
 
     regular_model = XGBRegressor(
@@ -216,18 +288,38 @@ def _train_single_fold(
         early_stopping_rounds=early_stopping_rounds,
         **xgb_params
     )
+    fit_t0 = time.perf_counter()
     regular_model.fit(
-        X_train, y_train_df,
+        X_train,
+        y_train_df,
         eval_set=[(X_val, y_val_df)],
-        verbose=25
+        verbose=25,
     )
-    
+    fit_dt = time.perf_counter() - fit_t0
+    logging.info(
+        "Fold %d fit() done in %.2fs (train_rows=%d, val_rows=%d, num_boost_round=%s)",
+        fold_num,
+        fit_dt,
+        int(getattr(X_train, 'shape', [len(X_train)])[0]),
+        int(getattr(X_val, 'shape', [len(X_val)])[0]),
+        str(params.get('num_boost_round')),
+    )
+
+    ar_t0 = time.perf_counter()
     predictions = test_xgb_autoregressively(
-        X_val_with_index, 
-        y_val, 
-        model=regular_model, 
-        disable_progress=True, 
-        cache=cache
+        X_val_with_index,
+        y_val,
+        model=regular_model,
+        disable_progress=(not show_autoreg_progress),
+        max_workers=1,
+        cache=cache,
+    )
+    ar_dt = time.perf_counter() - ar_t0
+    logging.info(
+        "Fold %d autoregressive validation done in %.2fs (show_progress=%s)",
+        fold_num,
+        ar_dt,
+        str(show_autoreg_progress),
     )
     
     # Calculate RMSE
@@ -243,6 +335,88 @@ def _train_single_fold(
 
 
 # build_param_dist is provided by XGBSearchSpace to keep config logic with configs
+
+
+def _search_worker(
+    gpu_token: str,
+    assignments: List[Tuple[int, Dict]],
+    X_train: pd.DataFrame,
+    y_train: np.ndarray,
+    X_train_with_index: pd.DataFrame,
+    train_groups: np.ndarray,
+    targets: List[str],
+    *,
+    use_cv: bool,
+    X_val: Optional[pd.DataFrame],
+    y_val: Optional[np.ndarray],
+    X_val_with_index: Optional[pd.DataFrame],
+    n_folds: int,
+    early_stopping_rounds: int,
+    trainer_cfg: XGBTrainerConfig,
+    stage_num: int,
+    score_key: str,
+    result_queue,
+) -> None:
+    """Worker process: pinned to exactly one GPU via CUDA_VISIBLE_DEVICES."""
+    with cuda_device(gpu_token):
+        _cap_search_cpu_threads()
+
+        for trial_idx, params in assignments:
+            params_copy, score = train_and_evaluate_single_config(
+                X_train,
+                y_train,
+                X_train_with_index,
+                train_groups,
+                targets,
+                params,
+                use_cv=use_cv,
+                X_val=X_val,
+                y_val=y_val,
+                X_val_with_index=X_val_with_index,
+                n_folds=n_folds,
+                early_stopping_rounds=early_stopping_rounds,
+                trainer_cfg=trainer_cfg,
+                show_autoreg_progress=trainer_cfg.search_show_autoreg_progress,
+                n_jobs=1,
+            )
+            result = params_copy.copy()
+            result[score_key] = float(score)
+            result['stage'] = int(stage_num)
+            result['gpu'] = str(gpu_token)
+            result['trial'] = int(trial_idx)
+            result_queue.put(result)
+
+
+def _collect_worker_results(processes: List[mp.Process], result_queue) -> List[Dict]:
+    results: List[Dict] = []
+
+    # Drain results while workers run (avoid queue backpressure).
+    while True:
+        alive = any(p.is_alive() for p in processes)
+        try:
+            results.append(result_queue.get(timeout=0.5 if alive else 0.1))
+        except queue.Empty:
+            if not alive:
+                break
+
+    for p in processes:
+        p.join()
+
+    # Drain any remaining items
+    while True:
+        try:
+            results.append(result_queue.get_nowait())
+        except queue.Empty:
+            break
+
+    bad = [p for p in processes if p.exitcode not in (0, None)]
+    if bad:
+        raise RuntimeError(
+            "One or more XGB search workers crashed: "
+            + ", ".join(f"pid={p.pid} exitcode={p.exitcode}" for p in bad)
+        )
+
+    return results
 
 
 def hyperparameter_search(
@@ -306,9 +480,10 @@ def hyperparameter_search(
         if X_val is None or y_val is None or X_val_with_index is None:
             raise ValueError("X_val, y_val, and X_val_with_index must be provided when use_cv=False")
     
-    os.makedirs(os.path.join(RESULTS_PATH, run_id, "checkpoints"), exist_ok=True)
+    run_root = get_run_root(run_id)
+    os.makedirs(os.path.join(run_root, "checkpoints"), exist_ok=True)
     checkpoint_subdir = "staged_search" if use_cv else "staged_search_single_val"
-    checkpoint_dir = os.path.join(RESULTS_PATH, run_id, "checkpoints", checkpoint_subdir)
+    checkpoint_dir = os.path.join(run_root, "checkpoints", checkpoint_subdir)
     os.makedirs(checkpoint_dir, exist_ok=True)
     
     all_results = {
@@ -318,6 +493,8 @@ def hyperparameter_search(
     }
     
     trainer_cfg = XGBTrainerConfig()
+    gpu_pool = _visible_gpu_pool()
+    logging.info("XGB search GPU pool: %s (CUDA_VISIBLE_DEVICES=%s)", gpu_pool, os.environ.get('CUDA_VISIBLE_DEVICES'))
 
     best_params = {}
     overall_best_score = float('-inf')
@@ -362,55 +539,111 @@ def hyperparameter_search(
             stage_best_score = float('-inf')
             stage_best_params = None
             
-            param_sampler = ParameterSampler(
-                current_param_dist,
-                n_iter=trainer_cfg.search_iter_n_per_stage,
-                random_state=stage_idx,
+            params_list = list(
+                ParameterSampler(
+                    current_param_dist,
+                    n_iter=trainer_cfg.search_iter_n_per_stage,
+                    random_state=stage_idx,
+                )
             )
-            
-            for i, params in enumerate(param_sampler):
-                logging.info(f"{stage_name} - Iteration {i+1}/{trainer_cfg.search_iter_n_per_stage}")
-                
-                # Select GPU from configured pool round-robin
-                gpu_id = trainer_cfg.gpu_ids[i % len(trainer_cfg.gpu_ids)]
-                
+
+            score_key = 'mean_test_score' if use_cv else 'val_score'
+            expected_results = len(params_list)
+
+            if len(gpu_pool) <= 1:
+                # Single GPU visible (or forced): run sequentially, but still cap threads.
+                with cuda_device(_first_visible_gpu_token(gpu_pool)):
+                    _cap_search_cpu_threads()
+                    for i, params in enumerate(params_list):
+                        logging.info(
+                            "%s - Iteration %d/%d",
+                            stage_name,
+                            i + 1,
+                            expected_results,
+                        )
+                        params_copy, score = train_and_evaluate_single_config(
+                            X_train,
+                            y_train,
+                            X_train_with_index,
+                            train_groups,
+                            targets,
+                            params,
+                            use_cv=use_cv,
+                            X_val=X_val,
+                            y_val=y_val,
+                            X_val_with_index=X_val_with_index,
+                            n_folds=trainer_cfg.n_folds,
+                            early_stopping_rounds=trainer_cfg.early_stopping_rounds,
+                            trainer_cfg=trainer_cfg,
+                            show_autoreg_progress=trainer_cfg.search_show_autoreg_progress,
+                            n_jobs=1,
+                        )
+                        result = params_copy.copy()
+                        result[score_key] = float(score)
+                        result['stage'] = stage_num
+                        stage_results.append(result)
+            else:
+                # Multi-GPU: one worker process per GPU.
                 try:
-                    if use_cv:
-                        params_copy, score = train_and_evaluate_single_config(
-                            X_train, y_train, X_train_with_index, train_groups, targets, params, gpu_id,
-                            use_cv=use_cv,
-                            n_folds=trainer_cfg.n_folds,
-                            early_stopping_rounds=trainer_cfg.early_stopping_rounds,
-                            trainer_cfg=trainer_cfg,
-                        )
-                    else:
-                        params_copy, score = train_and_evaluate_single_config(
-                            X_train, y_train, X_train_with_index, train_groups, targets, params, gpu_id,
-                            use_cv=use_cv,
-                            X_val=X_val, y_val=y_val, X_val_with_index=X_val_with_index,
-                            n_folds=trainer_cfg.n_folds,
-                            early_stopping_rounds=trainer_cfg.early_stopping_rounds,
-                            trainer_cfg=trainer_cfg,
-                        )
-                    result = params_copy.copy()
-                    score_key = 'mean_test_score' if use_cv else 'val_score'
-                    result[score_key] = score
-                    result['stage'] = stage_num
-                    stage_results.append(result)
-                    
-                    if score > stage_best_score:
-                        stage_best_score = score
-                        stage_best_params = params_copy.copy()
-                    
-                    if score > overall_best_score:
-                        overall_best_score = score
-                        overall_best_params = params_copy.copy()
-                        
-                    logging.info(f"RMSE: {-score:.4f}")
-                    
-                except Exception as e:
-                    logging.error(f"Error in {stage_name} iteration {i+1}: {str(e)}", exc_info=True)
-                    raise
+                    ctx = mp.get_context('fork')
+                except Exception:
+                    ctx = mp.get_context()
+
+                result_queue = ctx.Queue()
+                assignments: List[List[Tuple[int, Dict]]] = [[] for _ in gpu_pool]
+                for i, params in enumerate(params_list):
+                    assignments[i % len(gpu_pool)].append((i, params))
+
+                processes: List[mp.Process] = []
+                for gpu_token, trials in zip(gpu_pool, assignments):
+                    if not trials:
+                        continue
+                    p = ctx.Process(
+                        target=_search_worker,
+                        args=(
+                            gpu_token,
+                            trials,
+                            X_train,
+                            y_train,
+                            X_train_with_index,
+                            train_groups,
+                            targets,
+                        ),
+                        kwargs={
+                            'use_cv': use_cv,
+                            'X_val': X_val,
+                            'y_val': y_val,
+                            'X_val_with_index': X_val_with_index,
+                            'n_folds': trainer_cfg.n_folds,
+                            'early_stopping_rounds': trainer_cfg.early_stopping_rounds,
+                            'trainer_cfg': trainer_cfg,
+                            'stage_num': stage_num,
+                            'score_key': score_key,
+                            'result_queue': result_queue,
+                        },
+                    )
+                    p.start()
+                    processes.append(p)
+
+                stage_results = _collect_worker_results(processes, result_queue)
+
+            if len(stage_results) != expected_results:
+                raise RuntimeError(
+                    f"XGB search stage {stage_num} produced {len(stage_results)}/{expected_results} results"
+                )
+
+            # Determine best params for this stage and overall.
+            for r in stage_results:
+                score = float(r[score_key])
+                if score > stage_best_score:
+                    stage_best_score = score
+                    stage_best_params = {k: v for k, v in r.items() if k in current_param_dist}
+                if score > overall_best_score:
+                    overall_best_score = score
+                    overall_best_params = {k: v for k, v in r.items() if k in current_param_dist or k in best_params}
+
+            for r in stage_results:
+                logging.info("%s trial=%s gpu=%s RMSE: %.4f", stage_name, r.get('trial'), r.get('gpu'), -float(r[score_key]))
         
             # Update best_params with stage results
             if stage_best_params:
@@ -460,7 +693,7 @@ def train_and_save_model(
     ) -> None:
     logging.info("Training final model with best parameters...")
 
-    with cuda_device(_first_visible_gpu()):
+    with cuda_device(_first_visible_gpu_token()):
         try:
             y_train_df = pd.DataFrame(y_train, columns=targets)
             trainer_cfg = XGBTrainerConfig()
@@ -474,7 +707,9 @@ def train_and_save_model(
 
             model.fit(X_train, y_train_df, verbose=25)
 
-            model_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", FINAL_MODEL_FILENAME)
+            run_root = get_run_root(run_id)
+            os.makedirs(os.path.join(run_root, "checkpoints"), exist_ok=True)
+            model_path = os.path.join(run_root, "checkpoints", FINAL_MODEL_FILENAME)
             model.save_model(model_path)
             logging.info(f"Model saved to {model_path}")
 

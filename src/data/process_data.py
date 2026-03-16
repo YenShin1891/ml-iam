@@ -24,9 +24,8 @@ import pandas as pd
 
 # Local config (new consolidated modules)
 from configs.paths import DATA_PATH, RESULTS_PATH, RAW_DATA_PATH
-from configs.data import YEAR_STARTS_AT
 from configs import data as dp
-from src.utils.utils import setup_console_logging
+from src.utils.utils import setup_console_logging, KSTFormatter
 
 
 # ---------- Paths & constants ----------
@@ -36,6 +35,7 @@ METADATA_DIR = REPO_ROOT / "metadata"
 VAR_CLASSIFICATION_CSV = METADATA_DIR / "variable_classification_1019.csv"
 SCENARIO_CATEGORY_CSV = METADATA_DIR / "scenario_category.csv"
 MODEL_BASE_YEAR_CSV = METADATA_DIR / "iam_base_years.csv"
+SSP_FAMILY_CSV = METADATA_DIR / "ssp_families.csv"
 
 
 # ---------- Utilities ----------
@@ -68,6 +68,15 @@ def load_metadata() -> Tuple[pd.DataFrame, pd.DataFrame]:
     var_class = pd.read_csv(VAR_CLASSIFICATION_CSV, dtype=str)
     scenario_cat = pd.read_csv(SCENARIO_CATEGORY_CSV, dtype=str)
     return var_class, scenario_cat
+
+
+def load_ssp_families(csv_path: Path = SSP_FAMILY_CSV) -> pd.DataFrame:
+    if not csv_path.exists():
+        raise FileNotFoundError(
+            f"SSP families CSV not found: {csv_path}; ensure metadata/ssp_families.csv is available."
+        )
+    df = pd.read_csv(csv_path, dtype=str)
+    return df
 
 
 # ---------- Core transforms ----------
@@ -112,11 +121,36 @@ def add_scenario_category(df: pd.DataFrame, scenario_cat: pd.DataFrame) -> pd.Da
     return cast(pd.DataFrame, out)
 
 
-def resolve_units(df: pd.DataFrame, year_starts_at: int):
-    """Normalize units and return (df_without_unit, unit_table)."""
+def _split_year_and_non_year_columns(df: pd.DataFrame) -> Tuple[List[str], List[str]]:
+    """Return (year_columns, non_year_columns) inferred from column names.
+
+    A year column is any column whose name can be parsed as an integer year
+    in a reasonable range (e.g. 1800-2300).
+    """
+    year_cols: List[str] = []
+    for c in df.columns:
+        try:
+            year = int(str(c))
+        except (TypeError, ValueError):
+            continue
+        if 1800 <= year <= 2300:
+            year_cols.append(c)
+
+    if not year_cols:
+        raise ValueError("Could not detect any year-like columns in input DataFrame")
+
+    non_year_cols = [c for c in df.columns if c not in year_cols]
+    return year_cols, non_year_cols
+
+
+def resolve_units(df: pd.DataFrame):
+    """Normalize units and return (df_without_unit, unit_table).
+
+    Year columns are inferred from column names rather than a fixed index.
+    """
     df = df.copy(deep=True)
 
-    year_cols = list(df.columns[year_starts_at:])
+    year_cols, non_year_cols = _split_year_and_non_year_columns(df)
 
     # EJ/yr → PJ/yr (×1000)
     mask = df["Unit"] == "EJ/yr"
@@ -142,16 +176,14 @@ def resolve_units(df: pd.DataFrame, year_starts_at: int):
         bad = unit_check[unit_check > 1]
         raise ValueError(f"Unit mismatch found for {len(bad)} combinations. Sample: {bad.head(5)}")
 
-    # Keep the leading columns up to and including 'Unit' for the unit table
-    leading_cols = list(df.columns[: (year_starts_at + 1)])
-    unit_table = df.loc[:, leading_cols].copy()
+    # Keep all non-year columns (including Unit) for the unit table
+    unit_table = df.loc[:, non_year_cols].copy()
     df = df.drop(columns=["Unit"])  # remove Unit after capturing unit_table
     return df, unit_table
 
 
-def melt_and_pivot_year(df: pd.DataFrame, year_starts_at: int) -> pd.DataFrame:
-    year_columns = list(df.columns[year_starts_at:])
-    non_year_columns = list(df.columns[:year_starts_at])
+def melt_and_pivot_year(df: pd.DataFrame) -> pd.DataFrame:
+    year_columns, non_year_columns = _split_year_and_non_year_columns(df)
     df_year = df.melt(id_vars=non_year_columns, value_vars=year_columns, var_name="Year", value_name="value")
     out = (
         df_year.pivot_table(
@@ -270,6 +302,38 @@ def to_series_wide(processed_df_year: pd.DataFrame) -> pd.DataFrame:
     return year_pivoted
 
 
+def add_ssp_family_column(df: pd.DataFrame, ssp_meta: pd.DataFrame) -> pd.DataFrame:
+    """Attach SSP family metadata as a categorical column based on (Model, Scenario).
+
+    Expects ssp_meta to have columns ["Model", "Scenario", "Ssp_family"].
+    """
+    required_cols = {"Model", "Scenario", "Ssp_family"}
+    if not required_cols.issubset(ssp_meta.columns):
+        missing = required_cols - set(ssp_meta.columns)
+        raise KeyError(f"SSP families metadata missing columns: {sorted(missing)}")
+
+    # if there are any duplicates in ssp_meta, warn and drop duplicates
+    dup_mask = ssp_meta.duplicated(subset=["Model", "Scenario"], keep='first')
+    if dup_mask.any():
+        logging.warning(f"SSP families metadata has {dup_mask.sum()} duplicate (Model, Scenario) entries; keeping first occurrence.")
+        ssp_meta = ssp_meta.drop_duplicates(subset=["Model", "Scenario"], keep='first')
+    out = df.merge(ssp_meta[["Model", "Scenario", "Ssp_family"]], on=["Model", "Scenario"], how="left")
+
+    # Place Ssp_family immediately after Scenario and log missing count
+    if "Ssp_family" in out.columns:
+        na_count = int(out["Ssp_family"].isna().sum())
+        logging.info(f"SSP family column has {na_count}/{len(out)} missing values after merge.")
+
+        ssp_col = out.pop("Ssp_family")
+        if "Scenario" in out.columns:
+            insert_pos = list(out.columns).index("Scenario") + 1
+        else:
+            insert_pos = len(out.columns)
+        out.insert(insert_pos, "Ssp_family", ssp_col)
+
+    return out
+
+
 # ---------- Orchestration ----------
 def run_pipeline(
     raw_dir: Path,
@@ -296,6 +360,8 @@ def run_pipeline(
     logging.info(f"Loaded {len(df_list)} frames; rows per file: {[len(df) for df in df_list]}")
     var_class, scenario_cat = load_metadata()
     logging.info(f"Loaded metadata: var_class={len(var_class)} rows, scenario_cat={len(scenario_cat)} rows")
+    ssp_families = load_ssp_families()
+    logging.info(f"Loaded SSP families metadata: {len(ssp_families)} rows")
 
     # Stats and selection
     stat_table_raw = build_stat_table(df_list)
@@ -322,7 +388,7 @@ def run_pipeline(
     processed_list: List[pd.DataFrame] = []
     unit_tables: List[pd.DataFrame] = []
     for i, d in enumerate(filtered, start=1):
-        proc, unit_tbl = resolve_units(d, YEAR_STARTS_AT)
+        proc, unit_tbl = resolve_units(d)
         processed_list.append(proc)
         unit_tables.append(cast(pd.DataFrame, unit_tbl))
 
@@ -331,7 +397,7 @@ def run_pipeline(
 
     # Year-wise wide frame
     logging.info("Melting and pivoting into year-indexed wide frames…")
-    processed_year_frames = [melt_and_pivot_year(d, YEAR_STARTS_AT) for d in processed_list]
+    processed_year_frames = [melt_and_pivot_year(d) for d in processed_list]
     processed_df_year = pd.concat(processed_year_frames, axis=0, ignore_index=True)
     logging.info(f"Year-wise concatenated shape: {processed_df_year.shape}")
 
@@ -357,14 +423,17 @@ def run_pipeline(
     # Final time-series wide dataset
     logging.info("Creating final time-series wide dataset…")
     final_series = to_series_wide(processed_df_year)
+    final_series = add_ssp_family_column(final_series, ssp_families)
+    if "with-ssp" not in tags:
+        tags.append("with-ssp")
     logging.info(f"Final series shape: {final_series.shape}")
 
     # Build version label and versioned directory name
     from datetime import datetime
     if dataset_name is None:
         parts = [dp.NAME_PREFIX, f"min{min_count or dp.MIN_COUNT}", f"comp{(completeness_ratio or dp.COMPLETENESS_RATIO):.1f}"]
-        if dp.TAGS:
-            parts.extend(dp.TAGS)
+        if tags:
+            parts.extend(tags)
         if dp.INCLUDE_DATE:
             parts.append(datetime.now().strftime(dp.DATE_FMT))
         version_label = "-".join(parts)  # no extension
@@ -394,9 +463,8 @@ def run_pipeline(
             "filenames": list(filenames),
             "min_count": int(min_count or dp.MIN_COUNT),
             "completeness_ratio": float(completeness_ratio or dp.COMPLETENESS_RATIO),
-            "year_starts_at": int(YEAR_STARTS_AT),
             "output_variables": list(output_variables),
-            "tags": list(getattr(dp, "TAGS", [])),
+            "tags": list(tags),
         }
         # Write manifest alongside the dataset using the version label in the filename
         (version_dir / f"{version_label}-manifest.json").write_text(json.dumps(manifest, indent=2))
@@ -462,7 +530,18 @@ def main() -> None:
     args = parse_args()
 
     # Configure console logging with shared format (default INFO)
-    setup_console_logging(level=logging.INFO)
+    logger = setup_console_logging(level=logging.INFO)
+
+    # Also log to a per-run file under data_dir/logs
+    from datetime import datetime
+    log_dir = Path(args.data_dir) / "logs"
+    ensure_dirs(log_dir)
+    log_file = log_dir / f"process_data_{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(KSTFormatter('%(asctime)s - %(levelname)s - %(message)s'))
+    logger.addHandler(file_handler)
+    logging.info(f"File logging enabled: {log_file}")
 
     # Use OUTPUT_VARIABLES from unified config
     output_vars = dp.OUTPUT_VARIABLES

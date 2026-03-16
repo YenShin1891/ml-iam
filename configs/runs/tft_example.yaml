@@ -1,0 +1,25 @@
+# Example run config for TFT
+# Usage (after implementation): make train RUN=configs/runs/tft_example.yaml
+
+model: tft
+
+dataset: null
+
+cuda_visible_devices:
+  default: "0"
+  search: "0,1,2,3"
+  train: "0"
+  test: "0"
+  plot: "0"
+
+# TFT-specific: whether to require full lag history
+lag_required: true
+
+# TFT-specific: enable two-window prediction mode
+# (affects test phase only)
+two_window: true
+
+phases: [search, train, test, plot]
+
+# If true, skip hyperparameter search and use default params from configs/models/tft_search.py
+skip_search: false

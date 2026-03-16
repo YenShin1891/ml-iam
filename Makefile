@@ -1,6 +1,9 @@
-# Simple task runner for data processing
+# Simple task runner for data processing + training
 
-.PHONY: process-data
+SHELL := /bin/bash
+.ONESHELL:
+
+.PHONY: process-data train train-bg
 
 # Allow overrides via environment variables
 RAW_DIR ?= $(shell python -c 'import configs.paths as c; print(c.RAW_DATA_PATH)')
@@ -12,3 +15,49 @@ process-data:
 		--raw-dir "$(RAW_DIR)" \
 		--data-dir "$(DATA_DIR)" \
 		--results-dir "$(RESULTS_DIR)"
+
+
+# ----------------------
+# Unified training entrypoints
+# ----------------------
+
+# Run config file (YAML/JSON) used by scripts/train_from_config.py
+RUN ?=
+
+# Conda/mamba activation (mirrors existing train_test_*.sh scripts)
+CONDA_SH ?= /root/conda/etc/profile.d/conda.sh
+CONDA_ENV ?= xgb2
+
+# Foreground training (prints run_id to stdout)
+train:
+	set -e
+	set -o pipefail
+	@if [ -z "$(RUN)" ]; then \
+		echo "ERROR: RUN is required (e.g. RUN=configs/runs/xgb_example.yaml)"; \
+		exit 2; \
+	fi
+	source "$(CONDA_SH)"
+	eval "$$(mamba shell hook --shell bash)"
+	mamba activate "$(CONDA_ENV)"
+	python scripts/train_from_config.py --run "$(RUN)"
+
+
+# Background training via nohup; writes logs + pid under ./logs/
+LOG_DIR ?= logs
+train-bg:
+	set -e
+	set -o pipefail
+	@if [ -z "$(RUN)" ]; then \
+		echo "ERROR: RUN is required (e.g. RUN=configs/runs/xgb_example.yaml)"; \
+		exit 2; \
+	fi
+	@mkdir -p "$(LOG_DIR)"
+	@ts=$$(date +%Y%m%d_%H%M%S); \
+	log="$(LOG_DIR)/train_$${ts}.log"; \
+	pid="$(LOG_DIR)/train_$${ts}.pid"; \
+	nohup $(MAKE) train RUN="$(RUN)" > "$$log" 2>&1 & \
+	echo $$! > "$$pid"; \
+	echo "Started background training"; \
+	echo "- pidfile: $$pid"; \
+	echo "- logfile:  $$log"; \
+	echo "Tip: tail -f $$log"

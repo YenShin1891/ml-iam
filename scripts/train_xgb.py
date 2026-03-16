@@ -3,25 +3,22 @@ import logging
 import numpy as np
 import pandas as pd
 
-from src.data.preprocess import prepare_data, load_and_process_data, prepare_features_and_targets
-from src.trainers.xgb_trainer import hyperparameter_search, train_and_save_model
-from src.trainers.evaluation import test_xgb_autoregressively, save_metrics
-from src.utils.utils import setup_logging, save_session_state, load_session_state, load_model, get_next_run_id, load_best_params
-from src.visualization import plot_scatter, plot_xgb_shap
-
 np.random.seed(0)
 
-def preprocessing(run_id, dataset=None, lag_required=True):
+def preprocessing(run_id, dataset=None):
     """
-    Preprocessing for XGBoost with configurable lag requirement.
+    Preprocessing for XGBoost.
 
     Args:
         run_id: Run identifier
         dataset: Dataset version to use
-        lag_required: When True, drop rows without a full history of lag features.
     """
+    from src.data.preprocess import prepare_data, load_and_process_data, prepare_features_and_targets
+    from src.utils.utils import save_session_state
+
     data = load_and_process_data(version=dataset)
-    prepared, features, targets = prepare_features_and_targets(data, lag_required=lag_required)
+    # XGBoost requires lag features for autoregressive evaluation; enforce full lag history.
+    prepared, features, targets = prepare_features_and_targets(data, lag_required=True)
     prepared = prepared.dropna(subset=targets)
     (
         X_train, y_train, X_train_index_columns,
@@ -37,6 +34,7 @@ def preprocessing(run_id, dataset=None, lag_required=True):
     return {
         "features": features,
         "targets": targets,
+        "dataset_version": dataset,
         "X_train": X_train,
         "y_train": y_train,
         "X_train_index_columns": X_train_index_columns,
@@ -48,13 +46,55 @@ def preprocessing(run_id, dataset=None, lag_required=True):
         "test_data": test_data,
         "train_groups": train_groups,
         "val_groups": val_groups,
-        "lag_required": lag_required,
     }
 
 
-def search_xgb(session_state, run_id):
-    """Run hyperparameter search and store best_params in session_state."""
+def search_xgb(session_state, run_id, skip_search: bool = False):
+    """Run hyperparameter search and store best_params in session_state.
+
+    If skip_search is True, this becomes an initialization step:
+    - ensures preprocessing has been run
+    - injects default params into session_state["best_params"]
+    """
     logging.info("Starting hyperparameter search for XGBoost...")
+    REQUIRED_KEYS = [
+        "features",
+        "targets",
+        "X_train",
+        "y_train",
+        "X_train_index_columns",
+        "X_val",
+        "y_val",
+        "X_val_index_columns",
+        "X_test_with_index",
+        "y_test",
+        "test_data",
+        "train_groups",
+        "val_groups",
+    ]
+    missing = [k for k in REQUIRED_KEYS if k not in session_state]
+    if missing:
+        logging.info(
+            "Session state missing keys %s for search; running preprocessing now...",
+            missing,
+        )
+        stored_dataset = session_state.get("dataset_version", None)
+        data_bundle = preprocessing(run_id, dataset=stored_dataset)
+        session_state.update(data_bundle)
+        from src.utils.utils import save_session_state
+        save_session_state(session_state, run_id)
+
+    if skip_search:
+        from configs.models.xgb_search import XGBDefaultParams
+        default_cfg = XGBDefaultParams()
+        session_state["best_params"] = default_cfg.to_dict()
+        logging.info(
+            "skip_search enabled; using default XGBoost parameters: %s",
+            session_state["best_params"],
+        )
+        return session_state["best_params"]
+
+    from src.trainers.xgb_trainer import hyperparameter_search
     targets = session_state["targets"]
     X_train = session_state["X_train"]
     y_train = session_state["y_train"]
@@ -80,9 +120,35 @@ def search_xgb(session_state, run_id):
 
 def train_xgb(session_state, run_id):
     """Final training using best_params already present in session_state."""
+    from src.trainers.xgb_trainer import train_and_save_model
+    REQUIRED_KEYS = [
+        "features",
+        "targets",
+        "X_train",
+        "y_train",
+        "X_train_index_columns",
+        "X_val",
+        "y_val",
+        "X_val_index_columns",
+        "train_groups",
+        "val_groups",
+    ]
+    missing = [k for k in REQUIRED_KEYS if k not in session_state]
+    if missing:
+        raise RuntimeError(
+            f"Session state missing required data keys for training: {missing}. "
+            "Run the 'search' step first (it will preprocess if needed), or start a new run without --resume."
+        )
+
     if "best_params" not in session_state:
-        logging.info("best_params not searched from search step. Loading from external best_params.json.")
-        session_state = load_best_params(session_state)
+        from configs.models.xgb_search import XGBDefaultParams
+
+        logging.info(
+            "best_params not found in session state. "
+            "Using default XGBoost parameters from configs.models.xgb_search.XGBDefaultParams"
+        )
+        default_cfg = XGBDefaultParams()
+        session_state["best_params"] = default_cfg.to_dict()
     best_params = session_state["best_params"]
     logging.info("Starting final XGBoost training with best params: %s", best_params)
     targets = session_state["targets"]
@@ -108,10 +174,22 @@ def train_xgb(session_state, run_id):
     return best_params
 
 def test_xgb(session_state, run_id):
+    REQUIRED_KEYS = [
+        "X_test_with_index",
+        "y_test",
+        "test_data",
+    ]
+    missing = [k for k in REQUIRED_KEYS if k not in session_state]
+    if missing:
+        raise RuntimeError(
+            f"Session state missing required keys for testing: {missing}. "
+            "Run preprocessing/search first."
+        )
     X_test_with_index = session_state["X_test_with_index"]
     y_test = session_state["y_test"]
     test_data = session_state["test_data"]
     logging.info("Testing the model...")
+    from src.trainers.evaluation import test_xgb_autoregressively, save_metrics
     preds = test_xgb_autoregressively(X_test_with_index, y_test, run_id)
     session_state["preds"] = preds
     save_metrics(run_id, y_test, preds, test_data)
@@ -120,6 +198,22 @@ def test_xgb(session_state, run_id):
 
 
 def plot_xgb(session_state, run_id):
+    REQUIRED_KEYS = [
+        "features",
+        "targets",
+        "X_test_with_index",
+        "y_test",
+        "preds",
+        "test_data",
+    ]
+    missing = [k for k in REQUIRED_KEYS if k not in session_state]
+    if missing:
+        raise RuntimeError(
+            f"Session state missing required keys for plotting: {missing}. "
+            "Run the 'test' step first to generate predictions."
+        )
+    from src.visualization import plot_scatter, plot_xgb_shap
+
     features = session_state["features"]
     targets = session_state["targets"]
     X_test_with_index = session_state["X_test_with_index"]
@@ -130,7 +224,7 @@ def plot_xgb(session_state, run_id):
     plot_scatter(run_id, test_data, y_test, preds, targets, model_name="XGBoost")
     # Pass raw Region labels aligned to X_test rows for filtering inside SHAP plotting
     index_region = test_data['Region'] if isinstance(test_data, pd.DataFrame) and 'Region' in test_data.columns else None
-    plot_xgb_shap(run_id, X_test_with_index, features, targets, region="World", index_region=index_region)
+    plot_xgb_shap(run_id, X_test_with_index, features, targets, index_region=index_region)
 
 
 def parse_arguments():
@@ -161,12 +255,6 @@ def parse_arguments():
         help="Dataset subdirectory name to use for processed_series.csv. Falls back to DEFAULT_DATASET if not specified.",
         required=False,
     )
-    parser.add_argument(
-        "--lag-required",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Require complete lag features (use --no-lag-required to allow missing lag history).",
-    )
     args = parser.parse_args()
 
     # Validation: if resume is specified, run_id must be provided
@@ -177,50 +265,62 @@ def parse_arguments():
     if not args.resume and args.run_id:
         parser.error("--run_id should only be specified when using --resume")
 
-    return args.run_id, args.resume, args.note, args.skip_search, args.dataset, args.lag_required
+    return args.run_id, args.resume, args.note, args.skip_search, args.dataset
 
 
 def main():
-    run_id, resume, note, skip_search, dataset, lag_required_arg = parse_arguments()
+    run_id, resume, note, skip_search, dataset = parse_arguments()
+    from src.utils.utils import setup_logging, save_session_state, load_session_state, get_next_run_id
 
     if resume is None:
-        # Full pipeline: process -> search -> train -> test -> plot
-        run_id = get_next_run_id()
+        # Full pipeline: process -> (search) -> train -> test -> plot
+        run_id = get_next_run_id("xgb")
         setup_logging(run_id)
-        lag_required = True if lag_required_arg is None else lag_required_arg
-        session_state = preprocessing(run_id, dataset, lag_required)
+        session_state = preprocessing(run_id, dataset)
         save_session_state(session_state, run_id)
-        resume = "train" if skip_search else "search"  # Start from train step if skipping search
-    else:
-        setup_logging(run_id)
-        session_state = load_session_state(run_id)
-        if session_state is None:
-            session_state = {}
-        if lag_required_arg is None:
-            lag_required = session_state.get("lag_required", True)
-        else:
-            lag_required = lag_required_arg
-            session_state["lag_required"] = lag_required
+        if skip_search:
+            from configs.models.xgb_search import XGBDefaultParams
+            default_cfg = XGBDefaultParams()
+            session_state["best_params"] = default_cfg.to_dict()
+            logging.info("Using default XGBoost parameters (search skipped): %s", session_state["best_params"])
             save_session_state(session_state, run_id)
+        else:
+            search_xgb(session_state, run_id)
+            save_session_state(session_state, run_id)
+
+        train_xgb(session_state, run_id)
+        save_session_state(session_state, run_id)
+        test_xgb(session_state, run_id)
+        save_session_state(session_state, run_id)
+        plot_xgb(session_state, run_id)
+        save_session_state(session_state, run_id)
+        return
+
+    # Resume mode: each phase runs independently (for safe phase separation)
+    setup_logging(run_id)
+    session_state = load_session_state(run_id) or {}
+
+    if dataset is not None:
+        session_state["dataset_version"] = dataset
+        logging.info("Overriding dataset_version for resumed run: %s", dataset)
+    save_session_state(session_state, run_id)
 
     if note:
         session_state["note"] = note
         logging.info("Run note: %s", note)
+        save_session_state(session_state, run_id)
 
-    # Log the prediction start mode
-    used_lag_required = session_state.get("lag_required", True)
-    logging.info("XGBoost lag_required: %s", used_lag_required)
-
-    pipeline_steps = ["search", "train", "test", "plot"]
-    step_functions = {
-        "search": search_xgb,
-        "train": train_xgb,
-        "test": test_xgb,
-        "plot": plot_xgb
-    }
-    start_index = pipeline_steps.index(resume)
-    for step in pipeline_steps[start_index:]:
-        step_functions[step](session_state, run_id)
+    if resume == "search":
+        search_xgb(session_state, run_id, skip_search=skip_search)
+        save_session_state(session_state, run_id)
+    elif resume == "train":
+        train_xgb(session_state, run_id)
+        save_session_state(session_state, run_id)
+    elif resume == "test":
+        test_xgb(session_state, run_id)
+        save_session_state(session_state, run_id)
+    elif resume == "plot":
+        plot_xgb(session_state, run_id)
         save_session_state(session_state, run_id)
 
 

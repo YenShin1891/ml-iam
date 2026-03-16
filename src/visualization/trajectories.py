@@ -8,23 +8,32 @@ from matplotlib import cm
 from matplotlib.ticker import FuncFormatter, MaxNLocator
 import streamlit as st
 
+from src.utils.utils import get_run_root
+
+from configs.visualization import (
+    AXIS_LABEL_FONTSIZE,
+    AXIS_NBINS,
+    LEGEND_FONTSIZE,
+    PLOT_FONT_SIZE,
+    PLOT_GRID_COLS,
+    PLOT_GRID_ROWS,
+    R2_ANNOTATION_FONTSIZE,
+    SCATTER_GRID_FIGSIZE,
+    SCATTER_INDIVIDUAL_FIGSIZE,
+    TICK_LABELSIZE,
+    TRAJECTORY_GRID_FIGSIZE,
+    TRAJECTORY_INDIVIDUAL_FIGSIZE,
+    Y_AXIS_NBINS_TRAJECTORY,
+)
+
 __all__ = [
     'preprocess_data','format_large_numbers','create_single_trajectory_plot','create_single_scatter_plot','configure_axes',
     'plot_scatter','plot_trajectories','get_saved_plots_metadata','apply_inverse_scaling','compute_r2'
 ]
 
 def get_model_type_from_log(run_id):
-    """Detect model type from log file name in RESULTS_PATH/run_id."""
-    run_dir = os.path.join(RESULTS_PATH, run_id)
-    try:
-        for fname in os.listdir(run_dir):
-            if fname.startswith("train_") and fname.endswith(".log"):
-                # e.g., train_lstm.log or train_xgb.log
-                model_name = fname[len("train_"):-len(".log")]
-                return model_name.lower()
-    except Exception as e:
-        logging.info(f"Could not determine model type for run {run_id}: {e}")
-    return None
+    """Infer model type from run_id prefix (e.g., "xgb_01" -> "xgb")."""
+    return run_id.split("_", 1)[0] if run_id else None
 
 def create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, target_index, targets, model_name, output_units):
     unique_years = sorted(test_data_valid['Year'].unique()) if len(test_data_valid) else []
@@ -38,7 +47,7 @@ def create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, t
         ax.scatter(group_y_test, group_preds, alpha=0.5, color=color, label=year)
     unit = output_units[target_index] if target_index < len(output_units) else ""
     if target_index < len(targets):
-        ax.set_title(targets[target_index], fontsize=19)
+        ax.set_title(targets[target_index], fontsize=AXIS_LABEL_FONTSIZE)
     if len(y_test_valid) and len(preds_valid):
         min_val = float(min(y_test_valid.min(), preds_valid.min()))
         max_val = float(max(y_test_valid.max(), preds_valid.max()))
@@ -52,10 +61,10 @@ def create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, t
         ylabel = model_name
     configure_axes(ax, min_val, max_val, xlabel, ylabel)
     if unique_years:
-        ax.legend(title='Year', loc='upper left', bbox_to_anchor=(1, 1), fontsize=11)
+        ax.legend(title='Year', loc='upper left', bbox_to_anchor=(1, 1), fontsize=LEGEND_FONTSIZE)
     r2_val = compute_r2(y_test_valid, preds_valid)
     if not np.isnan(r2_val):
-        ax.text(0.05, 0.95, f'R² = {r2_val:.3f}', transform=ax.transAxes, fontsize=17,
+        ax.text(0.05, 0.95, f'R² = {r2_val:.3f}', transform=ax.transAxes, fontsize=R2_ANNOTATION_FONTSIZE,
                 verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
 # ... (content copied verbatim from original) ...
@@ -105,12 +114,12 @@ def create_single_trajectory_plot(ax, test_data, y_test, preds, target_index, ta
         ax.plot(group_years, group_preds, label='XGBoost', alpha=alpha, linewidth=linewidth)
         ax.fill_between(group_years, group_y_test, group_preds, alpha=0.1)
     ylabel_with_unit = f"{targets[target_index]} ({OUTPUT_UNITS[target_index]})"
-    ax.set_xlabel("Year", fontsize=19)
-    ax.set_ylabel(ylabel_with_unit, fontsize=19)
-    ax.tick_params(axis='both', which='major', labelsize=15)
+    ax.set_xlabel("Year", fontsize=AXIS_LABEL_FONTSIZE)
+    ax.set_ylabel(ylabel_with_unit, fontsize=AXIS_LABEL_FONTSIZE)
+    ax.tick_params(axis='both', which='major', labelsize=TICK_LABELSIZE)
     formatter = FuncFormatter(format_large_numbers)
     ax.yaxis.set_major_formatter(formatter)
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=Y_AXIS_NBINS_TRAJECTORY))
 
 def compute_r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     """Compute coefficient of determination R^2 with basic safety checks.
@@ -210,14 +219,14 @@ def configure_axes(ax, min_val: float, max_val: float, xlabel: str, ylabel: str)
     ax.set_xlim(min_val, max_val)
     ax.set_ylim(min_val, max_val)
     ax.set_aspect('equal', adjustable='box')
-    ax.set_xlabel(xlabel, fontsize=19)
-    ax.set_ylabel(ylabel, fontsize=19)
-    ax.tick_params(axis='both', which='major', labelsize=15)
+    ax.set_xlabel(xlabel, fontsize=AXIS_LABEL_FONTSIZE)
+    ax.set_ylabel(ylabel, fontsize=AXIS_LABEL_FONTSIZE)
+    ax.tick_params(axis='both', which='major', labelsize=TICK_LABELSIZE)
     formatter = FuncFormatter(format_large_numbers)
     ax.xaxis.set_major_formatter(formatter)
     ax.yaxis.set_major_formatter(formatter)
-    ax.xaxis.set_major_locator(MaxNLocator(nbins=5))
-    ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=AXIS_NBINS))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=AXIS_NBINS))
 
 def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[str] = None, model_name: str = "Model"):
     logging.info("Creating scatter plot (model-aware inverse scaling)...")
@@ -236,18 +245,18 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[s
         y_plot, preds_plot, scaler_key = apply_inverse_scaling(y_plot, preds_plot, run_id)
         if scaler_key:
             logging.info(f"Scatter: applied inverse scaling using scaler key '{scaler_key}'")
-    rows, cols = 3, 3
-    fig, axes = plt.subplots(rows, cols, figsize=(20, 20))
-    plt.rcParams.update({'font.size': 16})
+    rows, cols = PLOT_GRID_ROWS, PLOT_GRID_COLS
+    fig, axes = plt.subplots(rows, cols, figsize=SCATTER_GRID_FIGSIZE)
+    plt.rcParams.update({'font.size': PLOT_FONT_SIZE})
     for i, ax in enumerate(axes.flatten()):
         test_data_valid, y_test_valid, preds_valid = preprocess_data(test_data, y_plot, preds_plot, i)
         create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, i, targets, model_name, OUTPUT_UNITS)
         # Save individual scatter plot for each output in indiv_plots dir (single plot per figure)
-        indiv_dir = os.path.join(RESULTS_PATH, run_id, "plots", "indiv_plots")
+        indiv_dir = os.path.join(get_run_root(run_id), "plots", "indiv_plots")
         os.makedirs(indiv_dir, exist_ok=True)
         indiv_filename = f"scatter_{i}_{targets[i] if i < len(targets) else 'unknown'}.png"
         indiv_path = os.path.join(indiv_dir, indiv_filename)
-        fig_indiv, ax_indiv = plt.subplots(figsize=(7, 7))
+        fig_indiv, ax_indiv = plt.subplots(figsize=SCATTER_INDIVIDUAL_FIGSIZE)
         create_single_scatter_plot(ax_indiv, test_data_valid, y_test_valid, preds_valid, i, targets, model_name, OUTPUT_UNITS)
         fig_indiv.tight_layout()
         fig_indiv.savefig(indiv_path, bbox_inches='tight')
@@ -255,8 +264,8 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[s
     plt.tight_layout()
     if filename is None:
         filename = "scatter_plot.png"
-    os.makedirs(os.path.join(RESULTS_PATH, run_id, "plots"), exist_ok=True)
-    plt.savefig(os.path.join(RESULTS_PATH, run_id, "plots", filename), bbox_inches='tight')
+    os.makedirs(os.path.join(get_run_root(run_id), "plots"), exist_ok=True)
+    plt.savefig(os.path.join(get_run_root(run_id), "plots", filename), bbox_inches='tight')
     plt.close()
 
 def plot_trajectories(
@@ -298,9 +307,9 @@ def plot_trajectories(
     """
     if individual_indices is None:
         individual_indices = []
-    rows, cols = 3, 3
-    fig, axes = plt.subplots(rows, cols, figsize=(15, 15))
-    plt.rcParams.update({'font.size': 16})
+    rows, cols = PLOT_GRID_ROWS, PLOT_GRID_COLS
+    fig, axes = plt.subplots(rows, cols, figsize=TRAJECTORY_GRID_FIGSIZE)
+    plt.rcParams.update({'font.size': PLOT_FONT_SIZE})
     # NOTE: Previously filtered years to 2015-2100. Commented out to retain full historical range.
     # if test_data is not None and 'Year' in test_data.columns:
     #     year_mask = (test_data['Year'] >= 2015) & (test_data['Year'] <= 2100)
@@ -335,17 +344,17 @@ def plot_trajectories(
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         plot_filename = f"trajectories_{timestamp}.png"
         metadata_filename = f"trajectories_{timestamp}_metadata.json"
-        plots_dir = os.path.join(RESULTS_PATH, run_id, "saved_dashboard_plots")
+        plots_dir = os.path.join(get_run_root(run_id), "saved_dashboard_plots")
         os.makedirs(plots_dir, exist_ok=True)
         plt.savefig(os.path.join(plots_dir, plot_filename), bbox_inches='tight')
         with open(os.path.join(plots_dir, metadata_filename), 'w') as f:
             json.dump(filter_metadata, f, indent=2)
     if save_individual and run_id and filter_metadata:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        plots_dir = os.path.join(RESULTS_PATH, run_id, "saved_dashboard_plots")
+        plots_dir = os.path.join(get_run_root(run_id), "saved_dashboard_plots")
         for i in individual_indices:
             if 0 <= i < len(targets):
-                individual_fig = plt.figure(figsize=(6, 6))
+                individual_fig = plt.figure(figsize=TRAJECTORY_INDIVIDUAL_FIGSIZE)
                 individual_ax = individual_fig.add_subplot(111)
                 create_single_trajectory_plot(individual_ax, test_data, y_plot, preds_plot, i, targets, alpha, linewidth)
                 individual_filename = f"trajectories_{timestamp}_individual_{i}.png"
@@ -353,7 +362,7 @@ def plot_trajectories(
                 plt.close(individual_fig)
 
 def get_saved_plots_metadata(run_id):
-    plots_dir = os.path.join(RESULTS_PATH, run_id, "saved_dashboard_plots")
+    plots_dir = os.path.join(get_run_root(run_id), "saved_dashboard_plots")
     if not os.path.exists(plots_dir):
         return []
     metadata_files = glob.glob(os.path.join(plots_dir, "*_metadata.json"))
