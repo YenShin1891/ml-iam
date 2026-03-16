@@ -72,7 +72,6 @@ def search_xgb(session_state, run_id):
         X_train, y_train, X_train_with_index, train_groups,
         targets, run_id, start_stage=1, use_cv=False,
         X_val=X_val, y_val=y_val, X_val_with_index=X_val_with_index, val_groups=val_groups,
-        use_dask=False
     )
     session_state["best_params"] = best_params
     logging.info("Hyperparameter search complete. Best params: %s", best_params)
@@ -104,7 +103,7 @@ def train_xgb(session_state, run_id):
     X_combined_with_index = pd.concat([X_train_with_index, X_val_with_index], axis=0, ignore_index=True)
     combined_groups = np.concatenate([train_groups, val_groups], axis=0)
     
-    train_and_save_model(X_combined, y_combined, combined_groups, targets, best_params, run_id, use_dask=False)
+    train_and_save_model(X_combined, y_combined, combined_groups, targets, best_params, run_id)
     logging.info("Final XGBoost training complete.")
     return best_params
 
