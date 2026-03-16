@@ -105,26 +105,45 @@ def setup_logging(run_id, log_file=None):
 
 def get_next_run_id(model_type: str) -> str:
     """
-    Generate the next run_id for a given model by checking existing run directories.
+    Generate the next run_id for a given model.
+
+    This function is concurrency-safe: it reserves the run directory atomically to
+    avoid collisions when multiple jobs start at the same time (e.g. via nohup).
 
     Returns a model-prefixed id like "xgb_01".
     """
     model_results_dir = os.path.join(RESULTS_PATH, model_type)
     os.makedirs(model_results_dir, exist_ok=True)
 
+    # Start from current max+1 to avoid O(N) retries in the common case.
     existing_runs = [
         d
         for d in os.listdir(model_results_dir)
         if os.path.isdir(os.path.join(model_results_dir, d)) and d.startswith(f"{model_type}_")
     ]
+    run_numbers = []
+    for d in existing_runs:
+        try:
+            suffix = d.split("_", 1)[1]
+        except Exception:
+            continue
+        if suffix.isdigit():
+            try:
+                run_numbers.append(int(suffix))
+            except Exception:
+                continue
+    candidate = max(run_numbers, default=0) + 1
 
-    run_numbers = [
-        int(d.split("_", 1)[1])
-        for d in existing_runs
-        if d.split("_", 1)[1].isdigit()
-    ]
-    next_run_number = max(run_numbers, default=0) + 1
-    return f"{model_type}_{next_run_number:02d}"
+    # Atomically reserve a unique run directory.
+    # If another process races us, mkdir will fail with FileExistsError and we retry.
+    while True:
+        run_id = f"{model_type}_{candidate:02d}"
+        run_root = os.path.join(model_results_dir, run_id)
+        try:
+            os.makedirs(run_root, exist_ok=False)
+            return run_id
+        except FileExistsError:
+            candidate += 1
 
 
 # for model checkpoints

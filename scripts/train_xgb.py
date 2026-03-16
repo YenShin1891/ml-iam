@@ -49,8 +49,13 @@ def preprocessing(run_id, dataset=None):
     }
 
 
-def search_xgb(session_state, run_id):
-    """Run hyperparameter search and store best_params in session_state."""
+def search_xgb(session_state, run_id, skip_search: bool = False):
+    """Run hyperparameter search and store best_params in session_state.
+
+    If skip_search is True, this becomes an initialization step:
+    - ensures preprocessing has been run
+    - injects default params into session_state["best_params"]
+    """
     logging.info("Starting hyperparameter search for XGBoost...")
     REQUIRED_KEYS = [
         "features",
@@ -78,6 +83,16 @@ def search_xgb(session_state, run_id):
         session_state.update(data_bundle)
         from src.utils.utils import save_session_state
         save_session_state(session_state, run_id)
+
+    if skip_search:
+        from configs.models.xgb_search import XGBDefaultParams
+        default_cfg = XGBDefaultParams()
+        session_state["best_params"] = default_cfg.to_dict()
+        logging.info(
+            "skip_search enabled; using default XGBoost parameters: %s",
+            session_state["best_params"],
+        )
+        return session_state["best_params"]
 
     from src.trainers.xgb_trainer import hyperparameter_search
     targets = session_state["targets"]
@@ -296,7 +311,7 @@ def main():
         save_session_state(session_state, run_id)
 
     if resume == "search":
-        search_xgb(session_state, run_id)
+        search_xgb(session_state, run_id, skip_search=skip_search)
         save_session_state(session_state, run_id)
     elif resume == "train":
         train_xgb(session_state, run_id)
