@@ -186,26 +186,34 @@ def load_and_process_data(version=None) -> pd.DataFrame:
 
     # Validate dataset path
     if not os.path.isfile(dataset_path):
-        if version is None: # User wants DEFAULT_DATASET but file is missing
-            versions_file = os.path.join(DATA_PATH, "dataset_versions.txt")
-            if not os.path.isfile(versions_file) or os.path.getsize(versions_file) == 0:
-                # User didn't run data processing pipeline
-                logging.error(
-                    "No processed dataset found and no datasets have been processed yet. "
-                    "Please run the data processing pipeline first."
-                )
-            else:
-                # User didn't setup DEFAULT_DATASET correctly or forgot to specify version
-                logging.error(
-                    "DEFAULT_DATASET is configured as '%s' but is not found at '%s'. "
-                    "Either update DEFAULT_DATASET in configs/data.py or pass --dataset <version_name> explicitly.",
-                    DEFAULT_DATASET,
-                    dataset_path,
-                )
-        else: # User specified a version but file is missing
-            logging.error(
-                f"Processed dataset not found for version '{version}'. "
+        versions_file = os.path.join(DATA_PATH, "dataset_versions.txt")
+        available_versions = None
+        try:
+            if os.path.isfile(versions_file) and os.path.getsize(versions_file) > 0:
+                with open(versions_file, "r") as f:
+                    versions = [ln.strip() for ln in f if ln.strip()]
+                if versions:
+                    available_versions = versions[-10:]
+        except Exception:
+            available_versions = None
+
+        abs_path = os.path.abspath(dataset_path)
+        if version is None:
+            hint = (
+                f"DEFAULT_DATASET is configured as '{DEFAULT_DATASET}', but no file was found at: {abs_path}. "
+                "Set DATA_PATH in configs/paths.py and run `make process-data`, or pass --dataset <version_name>."
             )
+        else:
+            hint = (
+                f"Processed dataset not found for version '{version}'. Expected file at: {abs_path}. "
+                "Set DATA_PATH in configs/paths.py to the directory that contains processed datasets, "
+                "or run `make process-data` to generate it."
+            )
+
+        if available_versions:
+            hint += f" Available versions (last 10): {available_versions}"
+
+        raise FileNotFoundError(hint)
         
     logging.info(f"Reading processed dataset: {dataset_path}")
     processed_series = pd.read_csv(dataset_path)

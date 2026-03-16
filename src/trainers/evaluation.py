@@ -16,6 +16,8 @@ from tqdm import tqdm
 import xgboost as xgb
 from xgboost import DMatrix
 
+from typing import Optional
+
 from configs.paths import RESULTS_PATH
 from configs.data import INDEX_COLUMNS, NON_FEATURE_COLUMNS, N_LAG_FEATURES
 from src.utils.utils import get_run_root
@@ -187,7 +189,17 @@ def autoregressive_predictions(model, group_indices, group_matrix, lag_indices_d
     return preds_target
 
 
-def test_xgb_autoregressively(X_test_with_index, y_test, run_id=None, model=None, disable_progress=False, cache=None, y_scaler=None, x_scaler=None):
+def test_xgb_autoregressively(
+    X_test_with_index,
+    y_test,
+    run_id=None,
+    model=None,
+    disable_progress: bool = False,
+    cache=None,
+    y_scaler=None,
+    x_scaler=None,
+    max_workers: Optional[int] = None,
+):
     """
     Test the model autoregressively on the test set.
     """
@@ -230,7 +242,7 @@ def test_xgb_autoregressively(X_test_with_index, y_test, run_id=None, model=None
     index_to_pos = {idx: pos for pos, idx in enumerate(X_test_with_index.index)}
     groups = list(zip(group_indices_list, group_matrices))
     futures = []
-    with concurrent.futures.ThreadPoolExecutor() as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         for group in groups:
             futures.append(executor.submit(process_group, group))
             

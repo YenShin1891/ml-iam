@@ -3,12 +3,19 @@
 # LSTM training and testing script with proper phase separation
 # Search phase uses multi-device, train/test phases use single device
 
+set -e
+set -o pipefail
+
+source /root/conda/etc/profile.d/conda.sh
+eval "$(mamba shell hook --shell bash)"
+mamba activate xgb2
+
 run_id=$(python ./scripts/get_run_id.py --model lstm)
 echo "Starting LSTM training with run_id: $run_id"
 
 
 
-if [ -z "$DATASET" ]; then
+if [ -z "${DATASET:-}" ]; then
     echo "DATASET not set, using default dataset."
 	echo "Skipping Phase 1 (no_search script)"
 	echo "Phase 2: Running final training..."
