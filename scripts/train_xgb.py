@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 import numpy as np
 import pandas as pd
 
@@ -49,13 +50,8 @@ def preprocessing(run_id, dataset=None):
     }
 
 
-def search_xgb(session_state, run_id, skip_search: bool = False):
-    """Run hyperparameter search and store best_params in session_state.
-
-    If skip_search is True, this becomes an initialization step:
-    - ensures preprocessing has been run
-    - injects default params into session_state["best_params"]
-    """
+def search_xgb(session_state, run_id):
+    """Run hyperparameter search and store best_params in session_state."""
     logging.info("Starting hyperparameter search for XGBoost...")
     REQUIRED_KEYS = [
         "features",
@@ -84,12 +80,13 @@ def search_xgb(session_state, run_id, skip_search: bool = False):
         from src.utils.utils import save_session_state
         save_session_state(session_state, run_id)
 
+    skip_search = os.environ.get("SKIP_SEARCH") == "1"
     if skip_search:
         from configs.models.xgb_search import XGBDefaultParams
         default_cfg = XGBDefaultParams()
         session_state["best_params"] = default_cfg.to_dict()
         logging.info(
-            "skip_search enabled; using default XGBoost parameters: %s",
+            "Using default XGBoost parameters (search skipped): %s",
             session_state["best_params"],
         )
         return session_state["best_params"]
@@ -244,12 +241,6 @@ def parse_arguments():
         required=False,
     )
     parser.add_argument(
-        "--skip_search",
-        action="store_true",
-        help="Skip hyperparameter search step when running full pipeline.",
-        required=False,
-    )
-    parser.add_argument(
         "--dataset",
         type=str,
         help="Dataset subdirectory name to use for processed_series.csv. Falls back to DEFAULT_DATASET if not specified.",
@@ -265,11 +256,12 @@ def parse_arguments():
     if not args.resume and args.run_id:
         parser.error("--run_id should only be specified when using --resume")
 
-    return args.run_id, args.resume, args.note, args.skip_search, args.dataset
+    return args.run_id, args.resume, args.note, args.dataset
 
 
 def main():
-    run_id, resume, note, skip_search, dataset = parse_arguments()
+    run_id, resume, note, dataset = parse_arguments()
+    skip_search = os.environ.get("SKIP_SEARCH") == "1"
     from src.utils.utils import setup_logging, save_session_state, load_session_state, get_next_run_id
 
     if resume is None:
@@ -311,7 +303,7 @@ def main():
         save_session_state(session_state, run_id)
 
     if resume == "search":
-        search_xgb(session_state, run_id, skip_search=skip_search)
+        search_xgb(session_state, run_id)
         save_session_state(session_state, run_id)
     elif resume == "train":
         train_xgb(session_state, run_id)

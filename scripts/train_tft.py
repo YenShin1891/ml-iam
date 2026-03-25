@@ -78,6 +78,18 @@ def search_tft(session_state, run_id):
         data_state = process_data()
         session_state.update(data_state)
         save_session_state(session_state, run_id)
+
+    skip_search = os.environ.get("SKIP_SEARCH") == "1"
+    if skip_search:
+        from configs.models.tft_search import TFTDefaultParams
+        default_cfg = TFTDefaultParams()
+        session_state["best_params"] = default_cfg.to_dict()
+        logging.info(
+            "Using default TFT parameters (search skipped): %s",
+            session_state["best_params"],
+        )
+        return session_state["best_params"]
+
     train_dataset, val_dataset = build_datasets(session_state)
     targets = session_state["targets"]
     best_params = hyperparameter_search_tft(
@@ -195,12 +207,6 @@ def parse_arguments():
         help="Use two-window prediction approach (early + late windows with weighted averaging).",
     )
     parser.add_argument(
-        "--skip_search",
-        action="store_true",
-        help="Skip hyperparameter search step and use default params.",
-        required=False,
-    )
-    parser.add_argument(
         "--note",
         type=str,
         help="Note describing the run condition/type for later reference.",
@@ -216,11 +222,12 @@ def parse_arguments():
     if not args.resume and args.run_id:
         parser.error("--run_id should only be specified when using --resume")
 
-    return args.run_id, args.resume, args.dataset, args.two_window, args.lag_required, args.skip_search, args.note
+    return args.run_id, args.resume, args.dataset, args.two_window, args.lag_required, args.note
 
 
 def main():
-    run_id, resume, dataset_version, use_two_window, lag_required_arg, skip_search, note = parse_arguments()
+    run_id, resume, dataset_version, use_two_window, lag_required_arg, note = parse_arguments()
+    skip_search = os.environ.get("SKIP_SEARCH") == "1"
 
     if resume is None:
         # Full pipeline: process -> search -> train -> test -> plot
@@ -236,19 +243,8 @@ def main():
             session_state["note"] = note
             logging.info("Run note: %s", note)
         save_session_state(session_state, run_id)
-        if skip_search:
-            from configs.models.tft_search import TFTDefaultParams
-
-            default_cfg = TFTDefaultParams()
-            session_state["best_params"] = default_cfg.to_dict()
-            logging.info(
-                "skip_search enabled; using default TFT parameters: %s",
-                session_state["best_params"],
-            )
-            save_session_state(session_state, run_id)
-        else:
-            search_tft(session_state, run_id)
-            save_session_state(session_state, run_id)
+        search_tft(session_state, run_id)
+        save_session_state(session_state, run_id)
         train_tft(session_state, run_id, dataset_version=dataset_version)
         save_session_state(session_state, run_id)
         test_tft(session_state, run_id, use_two_window=use_two_window, dataset_version=dataset_version)
@@ -278,17 +274,7 @@ def main():
 
     # Step-wise execution when resuming - each phase runs independently
     if resume == "search":
-        if skip_search:
-            from configs.models.tft_search import TFTDefaultParams
-
-            default_cfg = TFTDefaultParams()
-            session_state["best_params"] = default_cfg.to_dict()
-            logging.info(
-                "skip_search enabled; using default TFT parameters: %s",
-                session_state["best_params"],
-            )
-        else:
-            search_tft(session_state, run_id)
+        search_tft(session_state, run_id)
         save_session_state(session_state, run_id)
     elif resume == "train":
         train_tft(session_state, run_id, dataset_version=dataset_version)

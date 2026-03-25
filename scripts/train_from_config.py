@@ -36,7 +36,6 @@ class RunConfig:
     cuda_visible_devices_by_phase: Dict[str, Optional[str]] = field(default_factory=dict)
     lag_required: Optional[bool] = None
     two_window: bool = False
-    skip_search: bool = False
     note: Optional[str] = None
 
 
@@ -184,7 +183,6 @@ def _parse_config(obj: Dict[str, Any], *, config_path: Path) -> RunConfig:
         raise ValueError("'lag_required' must be boolean when provided")
 
     two_window = bool(obj.get("two_window", False))
-    skip_search = bool(obj.get("skip_search", False))
 
     note = obj.get("note")
     if note is not None and not isinstance(note, str):
@@ -199,7 +197,6 @@ def _parse_config(obj: Dict[str, Any], *, config_path: Path) -> RunConfig:
         cuda_visible_devices_by_phase=cuda_visible_devices_by_phase,
         lag_required=lag_required,
         two_window=two_window,
-        skip_search=skip_search,
         note=note,
     )
 
@@ -225,11 +222,6 @@ def _build_phase_argv(cfg: RunConfig, *, phase: str, run_id: str) -> List[str]:
 
     if cfg.model == "tft" and cfg.two_window:
         argv.append("--two-window")
-
-    # skip_search is only meaningful for search phase but we pass it through so
-    # scripts can decide how to interpret it per-phase.
-    if cfg.skip_search:
-        argv.append("--skip_search")
 
     if cfg.note and cfg.model in {"xgb", "lstm", "tft"}:
         argv.extend(["--note", cfg.note])
@@ -273,7 +265,6 @@ def _write_run_metadata(
         "cuda_visible_devices_resolved_by_phase": dict(cuda_by_phase_resolved),
         "lag_required": cfg.lag_required,
         "two_window": cfg.two_window,
-        "skip_search": cfg.skip_search,
         "note": cfg.note,
         "phases": list(cfg.phases),
     }
@@ -298,8 +289,16 @@ def _write_run_metadata(
 
 
 def _effective_phases(cfg: RunConfig) -> Tuple[str, ...]:
-    # Keep phases as specified; model scripts decide how to interpret skip_search.
-    return tuple(cfg.phases)
+    """Return the phases that will actually execute.
+
+    If the user omitted 'search' but included later phases (train/test/plot),
+    we auto-prepend a search phase (with SKIP_SEARCH=1 env var) so that
+    preprocessing and default-param injection still happen.
+    """
+    phases = list(cfg.phases)
+    if "search" not in phases and any(p in phases for p in ("train", "test", "plot")):
+        phases.insert(0, "search")
+    return tuple(phases)
 
 
 def _validate_model_constraints(cfg: RunConfig) -> None:
@@ -366,11 +365,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     run_id = _allocate_run_id(cfg)
 
+    # Derive skip_search from whether 'search' is in the user's phases list.
+    skip_search = "search" not in cfg.phases
     phases = _effective_phases(cfg)
 
     # Prepare env for subprocesses
     child_env = dict(os.environ)
-    if cfg.skip_search:
+    if skip_search:
         child_env["SKIP_SEARCH"] = "1"
 
     # Apply global/default CUDA setting (if provided) so phases that don't override are stable.
