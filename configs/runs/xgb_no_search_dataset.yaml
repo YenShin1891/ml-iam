@@ -2,7 +2,7 @@
 
 model: xgb
 
-dataset: pipeline-min10100-comp0.4-out=9vars-apply-base-year-2025-09-26
+dataset: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-2025-09-24
 
 cuda_visible_devices:
   default: "0"

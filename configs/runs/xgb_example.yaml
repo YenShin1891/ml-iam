@@ -1,5 +1,6 @@
 # Example run config for XGBoost
 # Usage (after implementation): make train RUN=configs/runs/xgb_example.yaml
+# Bg traning: make train-bg RUN=configs/runs/xgb_example.yaml
 
 model: xgb
 
@@ -7,7 +8,7 @@ model: xgb
 # Example: pipeline-min10100-comp0.4-out=9vars-apply-base-year-2025-09-26
 # dataset: pipeline-...
 
-dataset: null
+dataset: pipeline-min10100-comp0.4-out=9vars-apply-base-year-2025-09-26
 
 # Optional: GPUs to expose for this run.
 # You can set a single value (applies to all phases) or a per-phase mapping.
@@ -26,4 +27,4 @@ phases: [search, train, test, plot]
 skip_search: false
 
 # Optional note saved into session state (supported by xgb launcher)
-note: ""
+note: "Lets measure how long it takes."
