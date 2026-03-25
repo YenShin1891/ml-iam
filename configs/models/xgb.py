@@ -15,7 +15,6 @@ class XGBTrainerConfig:
     # Training loop controls
     early_stopping_rounds: int = 15
     n_folds: int = 5
-    search_iter_n_per_stage: int = 15
 
     # Diagnostics
     # When True, show tqdm progress bars inside autoregressive validation during search.

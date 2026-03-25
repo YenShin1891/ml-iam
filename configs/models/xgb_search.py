@@ -41,7 +41,7 @@ class XGBDefaultParams:
     """
 
     max_depth: int = 5
-    min_child_weight: int = 10
+    min_child_weight: int = 1
     gamma: float = 0.0
     eta: float = 0.4
     num_boost_round: int = 1000
@@ -68,11 +68,15 @@ class XGBSearchSpace:
     stage_2: Dict[str, Any] = field(default_factory=lambda: dict(STAGE_2_PARAMS))
     stage_3: Dict[str, Any] = field(default_factory=lambda: dict(STAGE_3_PARAMS))
 
-    def stages(self) -> List[Tuple[str, Dict[str, Any]]]:
+    stage_1_n_iter: int = 16
+    stage_2_n_iter: int = 16
+    stage_3_n_iter: int = 24
+
+    def stages(self) -> List[Tuple[str, Dict[str, Any], int]]:
         return [
-            ("Stage 1: Tree Structure", self.stage_1),
-            ("Stage 2: Learning Rate & Trees", self.stage_2),
-            ("Stage 3: Regularization", self.stage_3),
+            ("Stage 1: Tree Structure", self.stage_1, self.stage_1_n_iter),
+            ("Stage 2: Learning Rate & Trees", self.stage_2, self.stage_2_n_iter),
+            ("Stage 3: Regularization", self.stage_3, self.stage_3_n_iter),
         ]
 
     @staticmethod

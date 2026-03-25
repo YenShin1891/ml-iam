@@ -160,6 +160,7 @@ def train_and_evaluate_single_config(
     trainer_cfg: Optional[XGBTrainerConfig] = None,
     show_autoreg_progress: bool = False,
     n_jobs: Optional[int] = None,
+    use_autoregressive_eval: bool = True,
 ) -> Tuple[Dict, float]:
     """
     Train and evaluate a single parameter configuration using either k-fold CV or single validation set.
@@ -224,6 +225,7 @@ def train_and_evaluate_single_config(
                     trainer_cfg=trainer_cfg,
                     show_autoreg_progress=show_autoreg_progress,
                     n_jobs=n_jobs,
+                    use_autoregressive_eval=use_autoregressive_eval,
                 )
                 scores.append(fold_rmse)
 
@@ -248,6 +250,7 @@ def train_and_evaluate_single_config(
                 trainer_cfg=trainer_cfg,
                 show_autoreg_progress=show_autoreg_progress,
                 n_jobs=n_jobs,
+                use_autoregressive_eval=use_autoregressive_eval,
             )
             score = -rmse
 
@@ -267,6 +270,7 @@ def _train_single_fold(
     early_stopping_rounds: int = 15, trainer_cfg: Optional[XGBTrainerConfig] = None,
     show_autoreg_progress: bool = False,
     n_jobs: Optional[int] = None,
+    use_autoregressive_eval: bool = True,
 ):
     """
     Helper function to train and evaluate a single fold/validation set.
@@ -306,21 +310,26 @@ def _train_single_fold(
     )
 
     ar_t0 = time.perf_counter()
-    predictions = test_xgb_autoregressively(
-        X_val_with_index,
-        y_val,
-        model=regular_model,
-        disable_progress=(not show_autoreg_progress),
-        max_workers=1,
-        cache=cache,
-    )
-    ar_dt = time.perf_counter() - ar_t0
-    logging.info(
-        "Fold %d autoregressive validation done in %.2fs (show_progress=%s)",
-        fold_num,
-        ar_dt,
-        str(show_autoreg_progress),
-    )
+    if use_autoregressive_eval:
+        predictions = test_xgb_autoregressively(
+            X_val_with_index,
+            y_val,
+            model=regular_model,
+            disable_progress=(not show_autoreg_progress),
+            max_workers=1,
+            cache=cache,
+        )
+        ar_dt = time.perf_counter() - ar_t0
+        logging.info(
+            "Fold %d autoregressive validation done in %.2fs (show_progress=%s)",
+            fold_num,
+            ar_dt,
+            str(show_autoreg_progress),
+        )
+    else:
+        predictions = regular_model.predict(X_val)
+        ar_dt = time.perf_counter() - ar_t0
+        logging.info("Fold %d standard validation done in %.2fs", fold_num, ar_dt)
     
     # Calculate RMSE
     rmse = np.sqrt(mean_squared_error(y_val, predictions))
@@ -378,6 +387,7 @@ def _search_worker(
                 trainer_cfg=trainer_cfg,
                 show_autoreg_progress=trainer_cfg.search_show_autoreg_progress,
                 n_jobs=1,
+                use_autoregressive_eval=False,
             )
             result = params_copy.copy()
             result[score_key] = float(score)
@@ -518,7 +528,7 @@ def hyperparameter_search(
             raise FileNotFoundError(f"Cannot start from stage {start_stage} without completing stage {stage_num}")
     
     try:
-        for stage_idx, (stage_name, stage_params) in enumerate(stages):
+        for stage_idx, (stage_name, stage_params, stage_n_iter) in enumerate(stages):
             stage_num = stage_idx + 1
             
             if stage_num < start_stage:
@@ -542,7 +552,7 @@ def hyperparameter_search(
             params_list = list(
                 ParameterSampler(
                     current_param_dist,
-                    n_iter=trainer_cfg.search_iter_n_per_stage,
+                    n_iter=stage_n_iter,
                     random_state=stage_idx,
                 )
             )
@@ -577,6 +587,7 @@ def hyperparameter_search(
                             trainer_cfg=trainer_cfg,
                             show_autoreg_progress=trainer_cfg.search_show_autoreg_progress,
                             n_jobs=1,
+                            use_autoregressive_eval=False,
                         )
                         result = params_copy.copy()
                         result[score_key] = float(score)
