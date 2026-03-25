@@ -78,6 +78,18 @@ def search_tft(session_state, run_id):
         data_state = process_data()
         session_state.update(data_state)
         save_session_state(session_state, run_id)
+
+    skip_search = os.environ.get("SKIP_SEARCH") == "1"
+    if skip_search:
+        from configs.models.tft_search import TFTDefaultParams
+        default_cfg = TFTDefaultParams()
+        session_state["best_params"] = default_cfg.to_dict()
+        logging.info(
+            "Using default TFT parameters (search skipped): %s",
+            session_state["best_params"],
+        )
+        return session_state["best_params"]
+
     train_dataset, val_dataset = build_datasets(session_state)
     targets = session_state["targets"]
     best_params = hyperparameter_search_tft(
@@ -194,6 +206,12 @@ def parse_arguments():
         action="store_true",
         help="Use two-window prediction approach (early + late windows with weighted averaging).",
     )
+    parser.add_argument(
+        "--note",
+        type=str,
+        help="Note describing the run condition/type for later reference.",
+        required=False,
+    )
     args = parser.parse_args()
 
     # Validation: if resume is specified, run_id must be provided
@@ -204,15 +222,16 @@ def parse_arguments():
     if not args.resume and args.run_id:
         parser.error("--run_id should only be specified when using --resume")
 
-    return args.run_id, args.resume, args.dataset, args.two_window, args.lag_required
+    return args.run_id, args.resume, args.dataset, args.two_window, args.lag_required, args.note
 
 
 def main():
-    run_id, resume, dataset_version, use_two_window, lag_required_arg = parse_arguments()
+    run_id, resume, dataset_version, use_two_window, lag_required_arg, note = parse_arguments()
+    skip_search = os.environ.get("SKIP_SEARCH") == "1"
 
     if resume is None:
         # Full pipeline: process -> search -> train -> test -> plot
-        run_id = get_next_run_id()
+        run_id = get_next_run_id("tft")
         setup_logging(run_id)
 
         if use_two_window:
@@ -220,6 +239,9 @@ def main():
 
         lag_required = True if lag_required_arg is None else lag_required_arg
         session_state = process_data(dataset_version=dataset_version, lag_required=lag_required)
+        if note:
+            session_state["note"] = note
+            logging.info("Run note: %s", note)
         save_session_state(session_state, run_id)
         search_tft(session_state, run_id)
         save_session_state(session_state, run_id)
@@ -245,6 +267,9 @@ def main():
             logging.info("Overriding lag_required for resumed run: %s", lag_required)
         data_state = process_data(dataset_version=dataset_version, lag_required=lag_required)
         session_state.update(data_state)
+        if note:
+            session_state["note"] = note
+            logging.info("Run note: %s", note)
         save_session_state(session_state, run_id)
 
     # Step-wise execution when resuming - each phase runs independently

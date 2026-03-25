@@ -1,8 +1,8 @@
-# ML-IAM: Machine Learning for Integrated Assessment Model Emulation
+# ML-IAM v1.0: Machine Learning for Integrated Assessment Model Emulation
 
 **A reproducible pipeline for emulating IAM scenario time-series using gradient boosted trees and deep learning.**
 
-📄 [**Preprint**](https://egusphere.copernicus.org/preprints/2026/egusphere-2025-5305/) | 🌐 [**Emulation Viewer**](https://mliam.dev/) | 📊 **Dataset** (coming soon) | [![DOI](https://zenodo.org/badge/974767132.svg)](https://doi.org/10.5281/zenodo.17390677)
+📄 [**Preprint**](https://egusphere.copernicus.org/preprints/2026/egusphere-2025-5305/) | 🌐 [**Emulation Viewer**](https://mliam.dev/) | [![DOI](https://zenodo.org/badge/974767132.svg)](https://doi.org/10.5281/zenodo.17390677)
 
 ---
 
@@ -59,7 +59,7 @@ We train three model architectures on IPCC AR6 scenario data:
 
 This pipeline requires the **IPCC AR6 Scenario Explorer Database (v1.1)**:
 
-1. Visit the [AR6 Scenario Explorer](https://data.ene.iiasa.ac.at/ar6/)
+1. Visit the [AR6 Scenario Explorer](https://data.ene.iiasa.ac.at/ar6/) *(You can download without creating an account by clicking “Guest login”.)*
 2. Download the following files:
   - `AR6_Scenarios_Database_ISO3_v1.1.csv`
   - `AR6_Scenarios_Database_R6_regions_v1.1.csv`
@@ -95,9 +95,13 @@ pip install -r requirements.txt
 
 ### Step 2: Configure Paths
 
-Set default data locations by editing `configs/paths.py`.
+First, create your local paths config from the template:
 
-Open `configs/paths.py` and update the paths for:
+```bash
+cp configs/paths-template.py configs/paths.py
+```
+
+Then open `configs/paths.py` and update the paths for:
 - `RAW_DATA_PATH` – where you saved the AR6 CSVs
 - `DATA_PATH` – where you want the processed data saved
 - `RESULTS_PATH` – where you want the model outputs saved
@@ -130,14 +134,25 @@ This command:
 ### Step 4: Train XGBoost Model
 
 ```bash
-# Run full pipeline: hyperparameter search → train → test → visualize
-python scripts/train_xgb.py
+# Recommended: unified Makefile training using a YAML/JSON run config
+# 1) Edit an example config under configs/runs/
+# 2) Run training via make
+make train RUN=configs/runs/xgb_example.yaml
+
+# Per-phase GPU visibility (optional): in the YAML you can set
+# cuda_visible_devices: {default: "0", search: "0,1,2,3", train: "0", test: "0", plot: "0"}
+
+# Background (nohup) run with log + pid under ./logs/
+make train-bg RUN=configs/runs/xgb_example.yaml
+
+# You can still run the script directly if you prefer:
+# python scripts/train_xgb.py
 ```
 
 **Command options:**
-- `--skip_search`: Skip hyperparameter search, use previous best parameters
 - `--resume {search|train|test|plot} --run_id <id>`: Resume from a saved session
 - `--note "description"`: Add notes to the run
+- `--dataset <version_name>`: Use a specific processed dataset subdirectory under `DATA_PATH` (defaults to configured dataset if omitted)
 
 **Outputs** (saved to `./results/xgb/[run_id]/`):
 - Logs
@@ -174,12 +189,14 @@ python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
 ### Training LSTM
 
 ```bash
-# Full pipeline: search → train → test → plot
-python scripts/train_lstm.py
+# Recommended: unified Makefile training using a YAML/JSON run config
+make train RUN=configs/runs/lstm_example.yaml
+
+# You can still run the script directly if you prefer:
+# python scripts/train_lstm.py
 ```
 
 **Command options (LSTM):**
-- `--skip_search`: Skip hyperparameter search, use default config from `configs/models/lstm.py`
 - `--resume {search|train|test|plot} --run_id <id>`: Resume a saved run from a specific stage
 - `--dataset <version_name>`: Use a specific processed dataset subdirectory under `DATA_PATH`
 - `--lag-required/--no-lag-required`: Control whether full lag history is required
@@ -194,8 +211,11 @@ python scripts/train_lstm.py --resume train --run_id run_01
 ### Training TFT (Temporal Fusion Transformer)
 
 ```bash
-# Full pipeline: search → train → test → plot
-python scripts/train_tft.py
+# Recommended: unified Makefile training using a YAML/JSON run config
+make train RUN=configs/runs/tft_example.yaml
+
+# You can still run the script directly if you prefer:
+# python scripts/train_tft.py
 ```
 
 **Command options (TFT):**
@@ -203,6 +223,7 @@ python scripts/train_tft.py
 - `--dataset <version_name>`: Use a specific processed dataset subdirectory under `DATA_PATH`
 - `--lag-required/--no-lag-required`: Control whether full lag history is required
 - `--two-window`: Use the two-window prediction variant
+- `--note "description"`: Add a note to the run metadata
 
 Example resume:
 
@@ -217,6 +238,10 @@ python scripts/train_tft.py --resume train --run_id run_01
 If you don’t want to keep a terminal open, you can run training in the background and log everything to a file:
 
 ```bash
+# Makefile helper (recommended): creates a timestamped log + pidfile under ./logs/
+make train-bg RUN=configs/runs/lstm_example.yaml
+
+# Or manual nohup:
 nohup python scripts/train_lstm.py > train.log 2>&1 &
 ```
 
@@ -335,10 +360,8 @@ DOI = {10.5194/egusphere-2025-5305}
 }
 ```
 
-**Additionally, please cite the AR6 Scenario Database** per the [citation guidance](https://data.ene.iiasa.ac.at/ar6/#/license).
-
 ---
 
 ## 📄 License
 
-This code is released under [LICENSE]. The AR6 data used by this pipeline has its own separate license and must be obtained and used in compliance with the [IIASA AR6 license](https://data.ene.iiasa.ac.at/ar6/#/license).
+This code is released under [`LICENSE`](LICENSE). The AR6 data used by this pipeline has its own separate license and must be obtained and used in compliance with the [IIASA AR6 license](https://data.ene.iiasa.ac.at/ar6/#/license).

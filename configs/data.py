@@ -2,9 +2,6 @@
 Data processing configuration: single source of truth for pipeline knobs.
 """
 
-# Column index (0-based) where the first year column begins in raw AR6 CSVs
-YEAR_STARTS_AT = 5
-
 # Variable selection targets (single source of truth)
 OUTPUT_VARIABLES = [
     "Primary Energy|Coal",
@@ -49,7 +46,7 @@ MIN_COUNT = 10100
 COMPLETENESS_RATIO = 0.4
 
 # Deterministic splitting seed to stabilize train/val/test cohorts
-SPLIT_SEED = 42
+SPLIT_SEED = 0
 
 # Versioning / naming
 NAME_PREFIX = "pipeline"
@@ -57,13 +54,13 @@ INCLUDE_DATE = True
 DATE_FMT = "%Y-%m-%d"
 # Tags include dynamic count of output variables
 # Pre-defined tags: include-intermediate, apply-base-year
-TAGS = [f"out={len(OUTPUT_VARIABLES)}vars", "exclude-year", "apply-base-year"]
+TAGS = [f"out={len(OUTPUT_VARIABLES)}vars", "exclude-year", "apply-base-year", "with-ssp"]
 SAVE_ANALYSIS = True
 
 # Optional data structure hints (used by TFT & plotting)
 INDEX_COLUMNS = ['Model', 'Scenario', 'Region']
 NON_FEATURE_COLUMNS = ['Model', 'Scenario', 'Scenario_Category', 'Year']
-CATEGORICAL_COLUMNS = ['Region', 'Model_Family']
+CATEGORICAL_COLUMNS = ['Region', 'Model_Family', 'Ssp_family']
 
 # Feature engineering knobs for downstream (kept here for single stop)
 MAX_SERIES_LENGTH = 15  # try not to exceed average length(=17) for tft

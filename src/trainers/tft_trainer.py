@@ -12,6 +12,7 @@ from sklearn.model_selection import ParameterSampler
 
 from configs.paths import RESULTS_PATH
 from configs.models import TFTSearchSpace, TFTTrainerConfig
+from src.utils.utils import get_run_root
 from .tft_dataset import (
     build_datasets,
     create_combined_dataset,
@@ -80,7 +81,7 @@ def train_final_tft(
     """Train final TFT on combined train+val and save checkpoint."""
     trainer_cfg = TFTTrainerConfig()
 
-    final_dir = os.path.join(RESULTS_PATH, run_id, "final")
+    final_dir = os.path.join(get_run_root(run_id), "final")
     os.makedirs(final_dir, exist_ok=True)
     final_ckpt_path = os.path.join(final_dir, "best.ckpt")
 
@@ -384,7 +385,7 @@ def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
             "removed_groups_count": removed_count,
             "removed_groups_sample": removed_groups[:5] if removed_groups else [],
         }
-        prediction_summary_path = os.path.join(RESULTS_PATH, run_id, "final", "prediction_summary.json")
+        prediction_summary_path = os.path.join(get_run_root(run_id), "final", "prediction_summary.json")
         try:
             os.makedirs(os.path.dirname(prediction_summary_path), exist_ok=True)
             with open(prediction_summary_path, "w", encoding="utf-8") as fp:
