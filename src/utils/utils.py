@@ -184,7 +184,7 @@ def load_session_state(run_id, checkpoint_file_name=CHECKPOINT_FILE_NAME):
         return session_state
         
     except FileNotFoundError:
-        logging.warning("No saved session state found at %s; starting with empty session state.", file_path)
+        logging.debug("No saved session state found at %s; starting fresh.", file_path)
         return {}
 
 

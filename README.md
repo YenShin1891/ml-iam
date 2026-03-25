@@ -150,7 +150,6 @@ make train-bg RUN=configs/runs/xgb_example.yaml
 ```
 
 **Command options:**
-- `--skip_search`: Skip hyperparameter search, use previous best parameters
 - `--resume {search|train|test|plot} --run_id <id>`: Resume from a saved session
 - `--note "description"`: Add notes to the run
 - `--dataset <version_name>`: Use a specific processed dataset subdirectory under `DATA_PATH` (defaults to configured dataset if omitted)
@@ -198,7 +197,6 @@ make train RUN=configs/runs/lstm_example.yaml
 ```
 
 **Command options (LSTM):**
-- `--skip_search`: Skip hyperparameter search, use default config from `configs/models/lstm.py`
 - `--resume {search|train|test|plot} --run_id <id>`: Resume a saved run from a specific stage
 - `--dataset <version_name>`: Use a specific processed dataset subdirectory under `DATA_PATH`
 - `--lag-required/--no-lag-required`: Control whether full lag history is required
@@ -225,7 +223,6 @@ make train RUN=configs/runs/tft_example.yaml
 - `--dataset <version_name>`: Use a specific processed dataset subdirectory under `DATA_PATH`
 - `--lag-required/--no-lag-required`: Control whether full lag history is required
 - `--two-window`: Use the two-window prediction variant
-- `--skip_search`: Skip hyperparameter search and use default config from `configs/models/tft_search.py`
 - `--note "description"`: Add a note to the run metadata
 
 Example resume:

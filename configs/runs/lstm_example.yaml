@@ -15,9 +15,7 @@ cuda_visible_devices:
 # LSTM-specific: whether to require full lag history
 lag_required: false
 
+# Omit 'search' to skip hyperparameter search and use defaults instead.
 phases: [search, train, test, plot]
-
-# If true, skip hyperparameter search and use default params from configs/models/lstm.py
-skip_search: false
 
 note: ""

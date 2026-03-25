@@ -5,10 +5,10 @@
 model: xgb
 
 # Optional: processed dataset version name under DATA_PATH/<version>/processed_series.csv
-# Example: pipeline-min10100-comp0.4-out=9vars-apply-base-year-2025-09-26
+# Example: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-2025-09-24
 # dataset: pipeline-...
 
-dataset: pipeline-min10100-comp0.4-out=9vars-apply-base-year-2025-09-26
+dataset: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-2025-09-24
 
 # Optional: GPUs to expose for this run.
 # You can set a single value (applies to all phases) or a per-phase mapping.
@@ -20,11 +20,8 @@ cuda_visible_devices:
   plot: "0"             # single GPU plot
 
 # Run phases in order. Typical: [search, train, test, plot]
+# Omit 'search' to skip hyperparameter search and use defaults instead.
 phases: [search, train, test, plot]
-
-# If true, skip hyperparameter search but still do preprocessing.
-# For xgb this will use default params from configs/models/xgb_search.py.
-skip_search: false
 
 # Optional note saved into session state (supported by xgb launcher)
 note: "Lets measure how long it takes."

@@ -19,7 +19,5 @@ lag_required: true
 # (affects test phase only)
 two_window: true
 
+# Omit 'search' to skip hyperparameter search and use defaults instead.
 phases: [search, train, test, plot]
-
-# If true, skip hyperparameter search and use default params from configs/models/tft_search.py
-skip_search: false

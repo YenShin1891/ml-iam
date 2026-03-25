@@ -92,13 +92,8 @@ def process_data(dataset_version=None, lag_required=True):
     }
 
 
-def search_lstm(session_state, run_id, skip_search: bool = False):
-    """Run hyperparameter search and store best_params in session_state.
-
-    If skip_search is True, this becomes an initialization step:
-    - ensures preprocessing has been run
-    - injects default params into session_state["best_params"]
-    """
+def search_lstm(session_state, run_id):
+    """Run hyperparameter search and store best_params in session_state."""
     logging.info("Starting hyperparameter search for LSTM...")
     REQUIRED_KEYS = ["features", "targets", "train_data", "val_data", "test_data"]
     missing = [k for k in REQUIRED_KEYS if k not in session_state]
@@ -115,9 +110,10 @@ def search_lstm(session_state, run_id, skip_search: bool = False):
         session_state.update(data_bundle)
         save_session_state(session_state, run_id)
 
+    skip_search = os.environ.get("SKIP_SEARCH") == "1"
     if skip_search:
         session_state["best_params"] = _default_best_params_from_config()
-        logging.info("skip_search enabled; using default LSTM parameters: %s", session_state["best_params"])
+        logging.info("Using default LSTM parameters (search skipped): %s", session_state["best_params"])
         save_session_state(session_state, run_id)
         return session_state["best_params"]
 
@@ -134,7 +130,7 @@ def search_lstm(session_state, run_id, skip_search: bool = False):
     return best_params
 
 
-def train_lstm(session_state, run_id, skip_search: bool = False):
+def train_lstm(session_state, run_id):
     """Final training using best_params already present in session_state."""
     REQUIRED_KEYS = ["features", "targets", "train_data", "val_data", "test_data"]
     missing = [k for k in REQUIRED_KEYS if k not in session_state]
@@ -144,15 +140,12 @@ def train_lstm(session_state, run_id, skip_search: bool = False):
             "Preprocess first (run without --resume) or resume from search after data is saved."
         )
     if "best_params" not in session_state:
-        if skip_search:
-            session_state["best_params"] = _default_best_params_from_config()
-            logging.info(
-                "best_params missing but skip_search enabled; using default LSTM parameters: %s",
-                session_state["best_params"],
-            )
-            save_session_state(session_state, run_id)
-        else:
-            raise ValueError("best_params not found in session state. Run the 'search' step first or pass --skip_search to use defaults.")
+        logging.info(
+            "best_params not found in session state. "
+            "Using default LSTM parameters from configs.models.lstm.LSTMTrainerConfig"
+        )
+        session_state["best_params"] = _default_best_params_from_config()
+        save_session_state(session_state, run_id)
 
     best_params = session_state["best_params"]
     logging.info("Starting final LSTM training with best params: %s", best_params)
@@ -225,12 +218,6 @@ def parse_arguments():
         required=False,
     )
     parser.add_argument(
-        "--skip_search",
-        action="store_true",
-        help="Skip hyperparameter search step when running full pipeline.",
-        required=False,
-    )
-    parser.add_argument(
         "--note",
         type=str,
         help="Note describing the run condition/type for later reference.",
@@ -258,12 +245,13 @@ def parse_arguments():
     if not args.resume and args.run_id:
         parser.error("--run_id should only be specified when using --resume")
 
-    return args.run_id, args.resume, args.skip_search, args.note, args.dataset, args.lag_required
+    return args.run_id, args.resume, args.note, args.dataset, args.lag_required
 
 
 def main():
     """Main training pipeline."""
-    run_id, resume, skip_search, note, dataset_version, lag_required_arg = parse_arguments()
+    run_id, resume, note, dataset_version, lag_required_arg = parse_arguments()
+    skip_search = os.environ.get("SKIP_SEARCH") == "1"
 
     if resume is None:
         # New full run still performs preprocessing once, then executes chosen steps.
@@ -303,10 +291,10 @@ def main():
 
     # Step-wise execution when resuming - each phase runs independently
     if resume == "search":
-        search_lstm(session_state, run_id, skip_search=skip_search)
+        search_lstm(session_state, run_id)
         save_session_state(session_state, run_id)
     elif resume == "train":
-        train_lstm(session_state, run_id, skip_search=skip_search)
+        train_lstm(session_state, run_id)
         save_session_state(session_state, run_id)
     elif resume == "test":
         test_lstm(session_state, run_id)
