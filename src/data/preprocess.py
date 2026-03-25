@@ -140,10 +140,9 @@ def prepare_data(prepared, targets, features):
     X_test_index_columns = test_data[[col for col in INDEX_COLUMNS if col not in features]].copy()
     y_test = test_data[targets].values.copy()
 
-    categorical_columns = ['Region', 'Model_Family']
-    X_train = encode_categorical_columns(X_train, categorical_columns)
-    X_val = encode_categorical_columns(X_val, categorical_columns)
-    X_test = encode_categorical_columns(X_test, categorical_columns)
+    X_train = encode_categorical_columns(X_train, CATEGORICAL_COLUMNS)
+    X_val = encode_categorical_columns(X_val, CATEGORICAL_COLUMNS)
+    X_test = encode_categorical_columns(X_test, CATEGORICAL_COLUMNS)
     
     x_scaler = StandardScaler()
     X_train_scaled = x_scaler.fit_transform(X_train)
@@ -184,8 +183,38 @@ def load_and_process_data(version=None) -> pd.DataFrame:
         dataset_path = os.path.join(DATA_PATH, version, "processed_series.csv")
     else:
         dataset_path = os.path.join(DATA_PATH, DEFAULT_DATASET)
+
+    # Validate dataset path
     if not os.path.isfile(dataset_path):
-        raise FileNotFoundError(f"Processed dataset not found: {dataset_path}. Update configs.data.DEFAULT_DATASET.")
+        versions_file = os.path.join(DATA_PATH, "dataset_versions.txt")
+        available_versions = None
+        try:
+            if os.path.isfile(versions_file) and os.path.getsize(versions_file) > 0:
+                with open(versions_file, "r") as f:
+                    versions = [ln.strip() for ln in f if ln.strip()]
+                if versions:
+                    available_versions = versions[-10:]
+        except Exception:
+            available_versions = None
+
+        abs_path = os.path.abspath(dataset_path)
+        if version is None:
+            hint = (
+                f"DEFAULT_DATASET is configured as '{DEFAULT_DATASET}', but no file was found at: {abs_path}. "
+                "Set DATA_PATH in configs/paths.py and run `make process-data`, or pass --dataset <version_name>."
+            )
+        else:
+            hint = (
+                f"Processed dataset not found for version '{version}'. Expected file at: {abs_path}. "
+                "Set DATA_PATH in configs/paths.py to the directory that contains processed datasets, "
+                "or run `make process-data` to generate it."
+            )
+
+        if available_versions:
+            hint += f" Available versions (last 10): {available_versions}"
+
+        raise FileNotFoundError(hint)
+        
     logging.info(f"Reading processed dataset: {dataset_path}")
     processed_series = pd.read_csv(dataset_path)
     # Identify year and non-year columns robustly

@@ -16,8 +16,11 @@ from tqdm import tqdm
 import xgboost as xgb
 from xgboost import DMatrix
 
+from typing import Optional
+
 from configs.paths import RESULTS_PATH
 from configs.data import INDEX_COLUMNS, NON_FEATURE_COLUMNS, N_LAG_FEATURES
+from src.utils.utils import get_run_root
 
 def group_test_data(X_test_with_index, cache=None):
     """
@@ -186,7 +189,17 @@ def autoregressive_predictions(model, group_indices, group_matrix, lag_indices_d
     return preds_target
 
 
-def test_xgb_autoregressively(X_test_with_index, y_test, run_id=None, model=None, disable_progress=False, cache=None, y_scaler=None, x_scaler=None):
+def test_xgb_autoregressively(
+    X_test_with_index,
+    y_test,
+    run_id=None,
+    model=None,
+    disable_progress: bool = False,
+    cache=None,
+    y_scaler=None,
+    x_scaler=None,
+    max_workers: Optional[int] = None,
+):
     """
     Test the model autoregressively on the test set.
     """
@@ -213,7 +226,7 @@ def test_xgb_autoregressively(X_test_with_index, y_test, run_id=None, model=None
         if run_id is None:
             raise ValueError("Either provide a preloaded `model` or a valid `run_id` to load from disk.")
         model = xgb.XGBRegressor()
-        ckpt_path = os.path.join(RESULTS_PATH, run_id, "checkpoints", "final_best.json")
+        ckpt_path = os.path.join(get_run_root(run_id), "checkpoints", "final_best.json")
         model.load_model(ckpt_path)
 
     # Get feature column names
@@ -229,7 +242,7 @@ def test_xgb_autoregressively(X_test_with_index, y_test, run_id=None, model=None
     index_to_pos = {idx: pos for pos, idx in enumerate(X_test_with_index.index)}
     groups = list(zip(group_indices_list, group_matrices))
     futures = []
-    with concurrent.futures.ThreadPoolExecutor() as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         for group in groups:
             futures.append(executor.submit(process_group, group))
             
@@ -341,7 +354,7 @@ def save_metrics(run_id, y_true, y_pred, test_data=None):
     metrics = pd.DataFrame(all_metrics)
 
     # Save metrics
-    metrics_dir = os.path.join(RESULTS_PATH, run_id, "metrics")
+    metrics_dir = os.path.join(get_run_root(run_id), "metrics")
     os.makedirs(metrics_dir, exist_ok=True)
     metrics_file = os.path.join(metrics_dir, "performance.csv")
     metrics.to_csv(metrics_file, index=False)

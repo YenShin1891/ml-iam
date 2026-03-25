@@ -1,5 +1,4 @@
-from dataclasses import dataclass, field
-from typing import List
+from dataclasses import dataclass
 
 
 @dataclass
@@ -16,10 +15,11 @@ class XGBTrainerConfig:
     # Training loop controls
     early_stopping_rounds: int = 15
     n_folds: int = 5
-    search_iter_n_per_stage: int = 15
 
-    # GPU affinity (for manual round-robin in trainer)
-    gpu_ids: List[int] = field(default_factory=lambda: [0, 1, 2, 3, 4])
+    # Diagnostics
+    # When True, show tqdm progress bars inside autoregressive validation during search.
+    # This can be very noisy; leave False for normal runs.
+    search_show_autoreg_progress: bool = False
 
 
 __all__ = [

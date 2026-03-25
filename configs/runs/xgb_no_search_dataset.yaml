@@ -1,0 +1,16 @@
+# XGB example: run with a dataset, skip search (uses defaults)
+# Omitting 'search' from phases uses default hyperparameters automatically.
+
+model: xgb
+
+dataset: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-2025-09-24
+
+cuda_visible_devices:
+  default: "0"
+  train: "0"
+  test: "0"
+  plot: "0"
+
+phases: [train, test, plot]
+
+note: "xgb defaults, dataset override"

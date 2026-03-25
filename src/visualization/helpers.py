@@ -5,14 +5,26 @@ import logging
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from PIL import Image
+import pandas as pd
 
-__all__ = ['make_grid','render_external_plot','build_feature_display_names','filter_by_region','sample_scenario_groups']
+from configs.visualization import DEFAULT_REGION, SHAP_MAX_SCENARIO_GROUPS, SHAP_GRID_FIGSIZE
 
-# Central visualization/SHAP configuration (single source of truth)
-DEFAULT_REGION: str = "R10"
-SHAP_MAX_SCENARIO_GROUPS: int = 300
+__all__ = [
+    'make_grid',
+    'render_external_plot',
+    'build_feature_display_names',
+    'filter_by_region',
+    'filter_index_frame_by_region',
+    'sample_scenario_groups',
+]
 
-def make_grid(n_items: int, rows: Optional[int] = None, cols: Optional[int] = None, *, base_figsize=(20, 20)):
+def make_grid(
+    n_items: int,
+    rows: Optional[int] = None,
+    cols: Optional[int] = None,
+    *,
+    base_figsize=SHAP_GRID_FIGSIZE,
+):
     if rows is None or cols is None:
         import math as _m
         side = _m.ceil(_m.sqrt(n_items))
@@ -218,13 +230,85 @@ def filter_by_region(
     return df, pre_rows, pre_rows, []
 
 
+def filter_index_frame_by_region(
+    df: pd.DataFrame,
+    region: Optional[str],
+    *,
+    default_region: str = DEFAULT_REGION,
+    region_series: Optional[pd.Series] = None,
+    log_prefix: str = "Applied region filter",
+) -> Tuple[pd.DataFrame, Optional["np.ndarray"], int, int, List[str], str]:
+    """Filter an index-frame by region with consistent prefix/exact semantics.
+
+    This wraps `filter_by_region` but adds two conveniences:
+    - Automatically chooses `mode` ("prefix" vs "exact") using the same heuristic
+      used in `shap_nn.py`.
+    - Optionally filters using an external `region_series` aligned to rows (useful
+      when the raw Region labels are not present in `df`).
+
+    Returns
+    -------
+    filtered_df : pd.DataFrame
+        Always returned with a reset integer index.
+    idx : np.ndarray | None
+        Positional indices (relative to the reset-index frame) used for filtering.
+        None means no filter was applied (or no matches).
+    pre_rows, post_rows : int
+    matched_values : list[str]
+    mode : str
+    """
+    try:
+        import numpy as np  # local import to keep module lightweight
+    except Exception:  # pragma: no cover
+        np = None  # type: ignore[assignment]
+
+    if not isinstance(df, pd.DataFrame):
+        return pd.DataFrame(), None, 0, 0, [], "exact"
+
+    df_aligned = df.reset_index(drop=True)
+    pre_rows = len(df_aligned)
+    mode = "prefix" if isinstance(region, str) and region.startswith(str(default_region)) else "exact"
+
+    if region is None or pre_rows == 0:
+        return df_aligned, None, pre_rows, pre_rows, [], mode
+
+    if region_series is not None:
+        series_aligned = region_series.reset_index(drop=True).astype(str)
+        region_frame = pd.DataFrame({"Region": series_aligned})
+        filtered_region_frame, _, _, matched = filter_by_region(
+            region_frame,
+            region,
+            log_prefix=log_prefix,
+            mode=mode,
+        )
+        if matched and np is not None:
+            idx = filtered_region_frame.index.to_numpy()
+            filtered_df = df_aligned.iloc[idx].reset_index(drop=True)
+            return filtered_df, idx, pre_rows, len(filtered_df), matched, mode
+        return df_aligned, None, pre_rows, pre_rows, [], mode
+
+    # Filter directly on the aligned df's Region column (if present)
+    filtered_df, _, _, matched = filter_by_region(
+        df_aligned,
+        region,
+        log_prefix=log_prefix,
+        mode=mode,
+    )
+    if matched and np is not None:
+        idx = filtered_df.index.to_numpy()
+        # Rebuild from df_aligned to guarantee the returned frame is aligned and clean.
+        filtered_df = df_aligned.iloc[idx].reset_index(drop=True)
+        return filtered_df, idx, pre_rows, len(filtered_df), matched, mode
+    return df_aligned, None, pre_rows, pre_rows, [], mode
+
+
 def sample_scenario_groups(
     df,
     *,
     group_cols: Sequence[str] = ("Model", "Scenario"),
     max_groups: int = SHAP_MAX_SCENARIO_GROUPS,
     log_prefix: str = "SHAP scenario sampling",
-) -> Tuple[object, int, int, List[str]]:
+) -> Tuple[pd.DataFrame, int, int, List[str]]:
     """Sample complete scenario groups for SHAP while logging totals.
 
     Returns (group_keys_df, total_groups, used_groups, group_col_list) where
@@ -232,24 +316,19 @@ def sample_scenario_groups(
     If none of the group columns are present, an empty DataFrame is returned
     and total/used groups are reported as 0.
     """
-    try:
-        import pandas as _pd
-    except Exception:  # pragma: no cover
-        return df, 0, 0, []
-
-    if not isinstance(df, _pd.DataFrame):
-        return _pd.DataFrame(), 0, 0, []
+    if not isinstance(df, pd.DataFrame):
+        return pd.DataFrame(), 0, 0, []
 
     cols = [c for c in group_cols if c in df.columns]
     if not cols:
         logging.info(f"{log_prefix}: no scenario grouping columns found; using row-based sample only")
-        return _pd.DataFrame(), 0, 0, []
+        return pd.DataFrame(), 0, 0, []
 
     group_sizes = df.groupby(cols).size()
     total_groups = int(len(group_sizes))
     if total_groups == 0:
         logging.info(f"{log_prefix}: 0 scenario groups found (by {','.join(cols)})")
-        return _pd.DataFrame(), 0, 0, list(cols)
+        return pd.DataFrame(), 0, 0, list(cols)
 
     max_sequences = min(max_groups, total_groups)
 
@@ -258,7 +337,7 @@ def sample_scenario_groups(
         sampled_idx = _np.random.choice(total_groups, max_sequences, replace=False)
         selected_group_keys = group_sizes.iloc[sampled_idx].index
         # Build a DataFrame of unique selected group keys for joining
-        group_df = _pd.DataFrame(list(selected_group_keys), columns=cols)
+        group_df = pd.DataFrame(list(selected_group_keys), columns=cols)
         logging.info(
             "%s: sampled %d of %d scenario groups (by %s)",
             log_prefix,

@@ -9,6 +9,7 @@ import torch
 from pytorch_forecasting import TimeSeriesDataSet
 
 from configs.paths import RESULTS_PATH
+from src.utils.utils import get_run_root
 # TFTDatasetConfig imported locally in functions to match original pattern
 from configs.data import CATEGORICAL_COLUMNS, INDEX_COLUMNS
 
@@ -104,7 +105,7 @@ def from_train_template(
 
 def save_dataset_template(dataset: TimeSeriesDataSet, run_id: str) -> str:
     """Save dataset template for later use."""
-    final_dir = os.path.join(RESULTS_PATH, run_id, "final")
+    final_dir = os.path.join(get_run_root(run_id), "final")
     os.makedirs(final_dir, exist_ok=True)
     dataset_tpl_path = os.path.join(final_dir, "dataset_template.pt")
     
@@ -118,7 +119,7 @@ def save_dataset_template(dataset: TimeSeriesDataSet, run_id: str) -> str:
 
 def load_dataset_template(run_id: str) -> TimeSeriesDataSet:
     """Load saved dataset template."""
-    final_dir = os.path.join(RESULTS_PATH, run_id, "final")
+    final_dir = os.path.join(get_run_root(run_id), "final")
     dataset_tpl_path = os.path.join(final_dir, "dataset_template.pt")
     
     if not os.path.exists(dataset_tpl_path):

@@ -36,6 +36,31 @@ STAGE_3_PARAMS: Dict[str, Any] = {
 
 
 @dataclass
+class XGBDefaultParams:
+    """Default XGBoost hyperparameters used when search is skipped.
+    """
+
+    max_depth: int = 5
+    min_child_weight: int = 1
+    gamma: float = 0.0
+    eta: float = 0.4
+    num_boost_round: int = 1000
+    reg_alpha: float = 5.0
+    reg_lambda: float = 0.1
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "max_depth": self.max_depth,
+            "min_child_weight": self.min_child_weight,
+            "gamma": self.gamma,
+            "eta": self.eta,
+            "num_boost_round": self.num_boost_round,
+            "reg_alpha": self.reg_alpha,
+            "reg_lambda": self.reg_lambda,
+        }
+
+
+@dataclass
 class XGBSearchSpace:
     """Dataclass wrapper for staged XGB search spaces with helpers."""
 
@@ -43,11 +68,15 @@ class XGBSearchSpace:
     stage_2: Dict[str, Any] = field(default_factory=lambda: dict(STAGE_2_PARAMS))
     stage_3: Dict[str, Any] = field(default_factory=lambda: dict(STAGE_3_PARAMS))
 
-    def stages(self) -> List[Tuple[str, Dict[str, Any]]]:
+    stage_1_n_iter: int = 16
+    stage_2_n_iter: int = 16
+    stage_3_n_iter: int = 24
+
+    def stages(self) -> List[Tuple[str, Dict[str, Any], int]]:
         return [
-            ("Stage 1: Tree Structure", self.stage_1),
-            ("Stage 2: Learning Rate & Trees", self.stage_2),
-            ("Stage 3: Regularization", self.stage_3),
+            ("Stage 1: Tree Structure", self.stage_1, self.stage_1_n_iter),
+            ("Stage 2: Learning Rate & Trees", self.stage_2, self.stage_2_n_iter),
+            ("Stage 3: Regularization", self.stage_3, self.stage_3_n_iter),
         ]
 
     @staticmethod
@@ -68,6 +97,7 @@ class XGBSearchSpace:
 
 
 __all__ = [
+    "XGBDefaultParams",
     "XGBSearchSpace",
     "STAGE_1_PARAMS",
     "STAGE_2_PARAMS",
