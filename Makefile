@@ -75,23 +75,25 @@ train-bg:
 
 # Required: RUN_ID (e.g. xgb_37)
 RUN_ID ?=
-# Optional: save individual plots (comma-separated indices)
-SAVE_PLOTS ?=
+# Optional: save individual plots (comma-separated indices, default: 6)
+SAVE_PLOTS ?= 6
 
 dashboard:
 	@if [ -z "$(RUN_ID)" ]; then \
 		echo "ERROR: RUN_ID is required (e.g. RUN_ID=xgb_37)"; \
 		exit 2; \
 	fi
-	@export SAVE_INDIVIDUAL_PLOTS=false; \
-	export INDIVIDUAL_PLOT_INDICES='[]'; \
-	if [ -n "$(SAVE_PLOTS)" ]; then \
-		export SAVE_INDIVIDUAL_PLOTS=true; \
-		export INDIVIDUAL_PLOT_INDICES="[$(SAVE_PLOTS)]"; \
-	fi; \
-	nohup streamlit run scripts/dashboard.py \
+	@mkdir -p "$(LOG_DIR)"
+	@ts=$$(date +%Y%m%d_%H%M%S); \
+	log="$(LOG_DIR)/dashboard_$${ts}.log"; \
+	pid="$(LOG_DIR)/dashboard_$${ts}.pid"; \
+	nohup env SAVE_INDIVIDUAL_PLOTS=true INDIVIDUAL_PLOT_INDICES="[$(SAVE_PLOTS)]" \
+		streamlit run scripts/dashboard.py \
 		--logger.level=info \
 		--server.runOnSave=false \
-		-- --run_id=$(RUN_ID) &
-	@echo "Dashboard started for run $(RUN_ID)"
-	@echo "Tip: Open http://localhost:8501"
+		-- --run_id=$(RUN_ID) > "$$log" 2>&1 & \
+	echo $$! > "$$pid"; \
+	echo "Started dashboard for run $(RUN_ID)"; \
+	echo "- pidfile: $$pid"; \
+	echo "- logfile: $$log"; \
+	echo "Tip: Open http://localhost:8501"
