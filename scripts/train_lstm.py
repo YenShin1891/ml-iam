@@ -1,34 +1,10 @@
-import argparse
+"""LSTM phase functions: preprocess, search, train, test, plot.
+
+These are called by the unified scripts/train.py entrypoint.
+All heavy imports are lazy to avoid pulling in unnecessary dependencies.
+"""
+
 import logging
-import os
-import numpy as np
-import pandas as pd
-import torch
-
-from lightning.pytorch import seed_everything
-
-from src.data.preprocess import (
-    add_missingness_indicators,
-    impute_with_train_medians,
-    load_and_process_data,
-    prepare_features_and_targets_sequence,
-    split_data,
-)
-from src.trainers.lstm_trainer import (
-    hyperparameter_search_lstm,
-    train_final_lstm,
-    predict_lstm,
-)
-from src.utils.utils import (
-    get_next_run_id,
-    load_session_state,
-    save_session_state,
-    setup_logging,
-)
-from src.visualization import plot_scatter, plot_lstm_shap
-
-np.random.seed(0)
-seed_everything(42, workers=True)
 
 
 def _default_best_params_from_config() -> dict:
@@ -50,9 +26,20 @@ def _default_best_params_from_config() -> dict:
     }
 
 
-def process_data(dataset_version=None, lag_required=True):
-    """Load and process data for LSTM training."""
-    data = load_and_process_data(version=dataset_version)
+def derive_splits(data, lag_required=True):
+    """From cached processed_data, derive all LSTM splits. Takes seconds.
+
+    Returns the ephemeral dict that phase functions and trainers expect.
+    """
+    import pandas as pd
+    from src.data.preprocess import (
+        add_missingness_indicators,
+        impute_with_train_medians,
+        prepare_features_and_targets_sequence,
+        split_data,
+    )
+    from configs.data import CATEGORICAL_COLUMNS, REGION_CATEGORIES
+
     prepared, features, targets = prepare_features_and_targets_sequence(
         data,
         lag_required=lag_required,
@@ -60,9 +47,6 @@ def process_data(dataset_version=None, lag_required=True):
     )
     prepared, features = add_missingness_indicators(prepared, features)
 
-    # Convert categorical columns to numeric codes for LSTM (for fair comparison with other models)
-    # NOTE: Region uses a deterministic global ordering to keep codes stable across runs/splits.
-    from configs.data import CATEGORICAL_COLUMNS, REGION_CATEGORIES
     for col in CATEGORICAL_COLUMNS:
         if col not in prepared.columns:
             continue
@@ -80,236 +64,175 @@ def process_data(dataset_version=None, lag_required=True):
         train_data, val_data, test_data, features
     )
 
-    # Keep DataFrames like TFT (not arrays like XGBoost) for proper grouping
     return {
         "features": features,
         "targets": targets,
         "train_data": train_data,
         "val_data": val_data,
         "test_data": test_data,
-        "dataset_version": dataset_version,
-        "lag_required": lag_required,
     }
 
 
-def search_lstm(session_state, run_id):
-    """Run hyperparameter search and store best_params in session_state."""
+def preprocess_lstm(store, dataset=None, lag_required=True):
+    """Run the expensive melt+pivot and cache as parquet."""
+    from src.data.preprocess import load_and_process_data
+
+    data = load_and_process_data(version=dataset)
+    store.save_processed_data(data)
+    return data
+
+
+def search_lstm(store, lag_required=True):
+    """Run hyperparameter search and save best_params."""
     logging.info("Starting hyperparameter search for LSTM...")
-    REQUIRED_KEYS = ["features", "targets", "train_data", "val_data", "test_data"]
-    missing = [k for k in REQUIRED_KEYS if k not in session_state]
-    if missing:
-        logging.info(
-            "Session state missing keys %s for search; running preprocessing now...",
-            missing,
-        )
-        # Use stored dataset parameter if available
-        stored_dataset = session_state.get("dataset_version", None)
-        lag_required = session_state.get("lag_required", True)
-        data_bundle = process_data(dataset_version=stored_dataset, lag_required=lag_required)
-        # Merge freshly processed data into session state
-        session_state.update(data_bundle)
-        save_session_state(session_state, run_id)
+    data = store.load_processed_data()
+    splits = derive_splits(data, lag_required=lag_required)
 
-    skip_search = os.environ.get("SKIP_SEARCH") == "1"
-    if skip_search:
-        session_state["best_params"] = _default_best_params_from_config()
-        logging.info("Using default LSTM parameters (search skipped): %s", session_state["best_params"])
-        save_session_state(session_state, run_id)
-        return session_state["best_params"]
-
-    train_data = session_state["train_data"]
-    val_data = session_state["val_data"]
-    targets = session_state["targets"]
-    features = session_state["features"]
+    from src.trainers.lstm_trainer import hyperparameter_search_lstm
 
     best_params = hyperparameter_search_lstm(
-        train_data, val_data, targets, run_id, features
+        splits["train_data"], splits["val_data"],
+        splits["targets"], store.run_id, splits["features"],
     )
-    session_state["best_params"] = best_params
+    store.save_best_params(best_params)
+    store.save_features(splits["features"], splits["targets"])
     logging.info("Hyperparameter search complete. Best params: %s", best_params)
     return best_params
 
 
-def train_lstm(session_state, run_id):
-    """Final training using best_params already present in session_state."""
-    REQUIRED_KEYS = ["features", "targets", "train_data", "val_data", "test_data"]
-    missing = [k for k in REQUIRED_KEYS if k not in session_state]
-    if missing:
-        raise RuntimeError(
-            f"Session state missing required data keys for training: {missing}. "
-            "Preprocess first (run without --resume) or resume from search after data is saved."
-        )
-    if "best_params" not in session_state:
-        logging.info(
-            "best_params not found in session state. "
-            "Using default LSTM parameters from configs.models.lstm.LSTMTrainerConfig"
-        )
-        session_state["best_params"] = _default_best_params_from_config()
-        save_session_state(session_state, run_id)
+def train_lstm(store, lag_required=True):
+    """Final training using best_params."""
+    from src.trainers.lstm_trainer import train_final_lstm as _train_final
 
-    best_params = session_state["best_params"]
-    logging.info("Starting final LSTM training with best params: %s", best_params)
+    logging.info("Starting final LSTM training...")
+    data = store.load_processed_data()
+    splits = derive_splits(data, lag_required=lag_required)
 
-    train_data = session_state["train_data"]
-    val_data = session_state["val_data"]
-    targets = session_state["targets"]
-    features = session_state["features"]
+    if store.has_best_params():
+        best_params = store.load_best_params()
+    else:
+        logging.info("No best_params found. Using default LSTM parameters.")
+        best_params = _default_best_params_from_config()
+        store.save_best_params(best_params)
 
-    train_final_lstm(
-        train_data, val_data, targets, run_id, best_params, session_state=session_state, features=features
+    logging.info("Training with best params: %s", best_params)
+
+    # Build ephemeral session_state dict for trainer (it writes metadata into it)
+    session_state = dict(splits)
+    _train_final(
+        splits["train_data"], splits["val_data"],
+        splits["targets"], store.run_id, best_params,
+        session_state=session_state, features=splits["features"],
     )
+
+    # Extract trainer-produced metadata and persist via RunStore
+    store.save_features(splits["features"], splits["targets"])
+    if "lstm_scaler_X" in session_state:
+        store.save_artifact("lstm_scaler_X.pkl", session_state["lstm_scaler_X"])
+    if "lstm_scaler_y" in session_state:
+        store.save_artifact("lstm_scaler_y.pkl", session_state["lstm_scaler_y"])
+
+    train_meta = {}
+    for key in ("lstm_features", "lstm_raw_features", "lstm_non_numeric_features",
+                "lstm_sequence_length", "lstm_target_offset"):
+        if key in session_state:
+            train_meta[key] = session_state[key]
+    if "lstm_config" in session_state:
+        cfg = session_state["lstm_config"]
+        train_meta["lstm_config"] = {
+            "hidden_size": cfg.hidden_size,
+            "num_layers": cfg.num_layers,
+            "dropout": cfg.dropout,
+            "bidirectional": cfg.bidirectional,
+            "dense_hidden_size": cfg.dense_hidden_size,
+            "dense_dropout": cfg.dense_dropout,
+            "learning_rate": cfg.learning_rate,
+            "batch_size": cfg.batch_size,
+            "weight_decay": cfg.weight_decay,
+            "sequence_length": cfg.sequence_length,
+            "target_offset": cfg.target_offset,
+        }
+    store.save_train_meta(train_meta)
+
     logging.info("Final LSTM training complete.")
     return best_params
 
 
-def test_lstm(session_state, run_id):
+def _build_predict_state(store, splits):
+    """Build the ephemeral dict that predict_lstm expects, injecting saved artifacts."""
+    session_state = dict(splits)
+
+    if store.has_train_meta():
+        meta = store.load_train_meta()
+        for key in ("lstm_features", "lstm_raw_features", "lstm_non_numeric_features",
+                    "lstm_sequence_length", "lstm_target_offset"):
+            if key in meta:
+                session_state[key] = meta[key]
+        if "lstm_config" in meta:
+            from configs.models.lstm import LSTMTrainerConfig
+            session_state["lstm_config"] = LSTMTrainerConfig(**meta["lstm_config"])
+
+    if store.has_artifact("lstm_scaler_X.pkl"):
+        session_state["lstm_scaler_X"] = store.load_artifact("lstm_scaler_X.pkl")
+    if store.has_artifact("lstm_scaler_y.pkl"):
+        session_state["lstm_scaler_y"] = store.load_artifact("lstm_scaler_y.pkl")
+
+    return session_state
+
+
+def test_lstm(store, lag_required=True):
     """Make predictions using trained LSTM model."""
+    from src.trainers.lstm_trainer import predict_lstm as _predict_lstm
+
     logging.info("Testing LSTM model...")
-    preds = predict_lstm(session_state, run_id)
-    session_state["preds"] = preds
+    data = store.load_processed_data()
+    splits = derive_splits(data, lag_required=lag_required)
+    session_state = _build_predict_state(store, splits)
+
+    preds = _predict_lstm(session_state, store.run_id)
+
+    # Extract horizon data if the predictor produced it
+    horizon_df = session_state.get("horizon_df")
+    horizon_y_true = session_state.get("horizon_y_true")
+    store.save_predictions(preds, horizon_df=horizon_df, horizon_y_true=horizon_y_true)
     return preds
 
 
-def plot_lstm(session_state, run_id):
+def plot_lstm(store, lag_required=True):
     """Plot LSTM predictions and SHAP plots."""
+    from src.visualization import plot_scatter, plot_lstm_shap
+
     logging.info("Plotting LSTM predictions...")
-    preds = session_state.get("preds")
-    targets = session_state["targets"]
-    features = session_state.get("lstm_features", session_state["features"])
+    data = store.load_processed_data()
+    splits = derive_splits(data, lag_required=lag_required)
+    pred_bundle = store.load_predictions()
+    preds = pred_bundle["preds"]
+    targets = splits["targets"]
 
-    if preds is None:
-        raise ValueError("No predictions found in session state. Please run the test step first.")
+    # Determine features (prefer encoded features from train meta)
+    features = splits["features"]
+    if store.has_train_meta():
+        meta = store.load_train_meta()
+        features = meta.get("lstm_features", features)
 
-    # Use horizon data if available (similar to TFT), otherwise fall back to test data
-    horizon_df = session_state.get('horizon_df')
-    horizon_y_true = session_state.get('horizon_y_true')
+    # Use horizon data if available, otherwise fall back to test data
+    horizon_df = pred_bundle.get("horizon_df")
 
     if horizon_df is not None:
         logging.info("Using forecast horizon subset (%d rows) for plotting.", len(horizon_df))
-        # Derive y_true from horizon_df to ensure shape alignment with preds
         y_true_aligned = horizon_df[targets].values
-        plot_scatter(run_id, horizon_df, y_true_aligned, preds, targets, model_name="LSTM")
+        plot_scatter(store.run_id, horizon_df, y_true_aligned, preds, targets, model_name="LSTM")
         test_data_for_shap = horizon_df
     else:
-        test_data = session_state.get("test_data")
-        test_targets = session_state.get("test_data")[targets].values if test_data is not None else None
-
-        if test_data is not None and test_targets is not None:
-            plot_scatter(run_id, test_data, test_targets, preds, targets, model_name="LSTM")
-            test_data_for_shap = test_data
-        else:
-            raise ValueError("No test data found in session state. Please run the test step with predict=True.")
+        test_data = splits["test_data"]
+        test_targets = test_data[targets].values
+        plot_scatter(store.run_id, test_data, test_targets, preds, targets, model_name="LSTM")
+        test_data_for_shap = test_data
 
     # Generate SHAP plots
     from configs.models.lstm import LSTMTrainerConfig
-    sequence_length = session_state.get("lstm_sequence_length", LSTMTrainerConfig().sequence_length)
-    plot_lstm_shap(run_id, test_data_for_shap, features, targets, sequence_length=sequence_length)
-
-
-def parse_arguments():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Train and test LSTM model.")
-    parser.add_argument("--run_id", type=str, help="Run ID for logging.", required=False)
-    parser.add_argument(
-        "--resume",
-        type=str,
-        choices=["search", "train", "test", "plot"],
-        help="Resume from a specific step. Requires --run_id to be specified.",
-        required=False,
-    )
-    parser.add_argument(
-        "--note",
-        type=str,
-        help="Note describing the run condition/type for later reference.",
-        required=False,
-    )
-    parser.add_argument(
-        "--dataset",
-        type=str,
-        help="Dataset version to use (subdirectory under data/). If not specified, uses default.",
-        required=False,
-    )
-    parser.add_argument(
-        "--lag-required",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Require complete lag features (use --no-lag-required to allow missing lag history).",
-    )
-    args = parser.parse_args()
-
-    # Validation: if resume is specified, run_id must be provided
-    if args.resume and not args.run_id:
-        parser.error("--run_id is required when --resume is specified")
-
-    # Validation: if resume is not specified, run_id should not be provided
-    if not args.resume and args.run_id:
-        parser.error("--run_id should only be specified when using --resume")
-
-    return args.run_id, args.resume, args.note, args.dataset, args.lag_required
-
-
-def main():
-    """Main training pipeline."""
-    run_id, resume, note, dataset_version, lag_required_arg = parse_arguments()
-    skip_search = os.environ.get("SKIP_SEARCH") == "1"
-
-    if resume is None:
-        # New full run still performs preprocessing once, then executes chosen steps.
-        run_id = get_next_run_id("lstm")
-        # Only primary rank initializes logging to avoid duplication
-        if os.getenv("PL_TRAINER_GLOBAL_RANK") in (None, "0") and os.getenv("GLOBAL_RANK") in (None, "0") and os.getenv("RANK") in (None, "0"):
-            setup_logging(run_id)
-        lag_required = True if lag_required_arg is None else lag_required_arg
-        session_state = process_data(dataset_version=dataset_version, lag_required=lag_required)
-        save_session_state(session_state, run_id)
-        resume = "train" if skip_search else "search"
-        if skip_search:
-            session_state["best_params"] = _default_best_params_from_config()
-            logging.info("Using default LSTM parameters (search skipped): %s", session_state["best_params"])
-            save_session_state(session_state, run_id)
-    else:
-        # Only primary rank initializes logging to avoid duplication
-        if os.getenv("PL_TRAINER_GLOBAL_RANK") in (None, "0") and os.getenv("GLOBAL_RANK") in (None, "0") and os.getenv("RANK") in (None, "0"):
-            setup_logging(run_id)
-        # Always load existing session state for any resume phase; preprocessing is never redone implicitly.
-        session_state = load_session_state(run_id)
-        if session_state is None:
-            session_state = {}
-        # If a dataset version is provided via CLI during resume, persist it
-        if dataset_version is not None:
-            session_state["dataset_version"] = dataset_version
-            logging.info("Overriding dataset_version for resumed run: %s", dataset_version)
-        if lag_required_arg is not None:
-            session_state["lag_required"] = lag_required_arg
-            logging.info("Overriding lag_required for resumed run: %s", lag_required_arg)
-        # Persist any overrides immediately so subsequent phases see them
-        save_session_state(session_state, run_id)
-
-    if note:
-        session_state["note"] = note
-        logging.info("Run note: %s", note)
-
-    # Step-wise execution when resuming - each phase runs independently
-    if resume == "search":
-        search_lstm(session_state, run_id)
-        save_session_state(session_state, run_id)
-    elif resume == "train":
-        train_lstm(session_state, run_id)
-        save_session_state(session_state, run_id)
-    elif resume == "test":
-        test_lstm(session_state, run_id)
-        save_session_state(session_state, run_id)
-    elif resume == "plot":
-        plot_lstm(session_state, run_id)
-
-
-if __name__ == "__main__":
-    # Run CLI pipeline only on primary process to avoid duplicate runs under DDP
-    rank_vars = [
-        os.getenv("PL_TRAINER_GLOBAL_RANK"),
-        os.getenv("GLOBAL_RANK"),
-        os.getenv("RANK"),
-    ]
-    is_primary = all(rv in (None, "0") for rv in rank_vars)
-    if is_primary:
-        main()
+    sequence_length = LSTMTrainerConfig().sequence_length
+    if store.has_train_meta():
+        meta = store.load_train_meta()
+        sequence_length = meta.get("lstm_sequence_length", sequence_length)
+    plot_lstm_shap(store.run_id, test_data_for_shap, features, targets, sequence_length=sequence_length)

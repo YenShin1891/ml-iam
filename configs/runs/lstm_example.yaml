@@ -8,11 +8,12 @@ dataset: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-2025-0
 cuda_visible_devices:
   default: "4"
   search: "4,5,6,7"
+  train: "4,5,6,7"
 
 # LSTM-specific: whether to require full lag history
 lag_required: true
 
 # Omit 'search' to skip hyperparameter search and use defaults instead.
-phases: [search, train, test, plot]
+phases: [train, test, plot]
 
-note: ""
+note: "seed is 0, not 42"

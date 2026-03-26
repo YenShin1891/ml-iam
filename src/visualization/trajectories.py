@@ -181,20 +181,13 @@ def apply_inverse_scaling(y_values: Optional[np.ndarray], preds_values: Optional
         # Attempt to load from disk if not found in session_state
         if scaler_found is None and run_id is not None:
             try:
-                from src.utils.utils import load_session_state
-                fname = 'y_scaler.pkl'
-                scaler_candidate = load_session_state(run_id, fname)
+                from src.utils.run_store import RunStore
+                store = RunStore(run_id)
+                scaler_candidate = store.load_artifact("y_scaler.pkl")
                 if hasattr(scaler_candidate, 'inverse_transform'):
                     scaler_found = scaler_candidate
-                    scaler_key_used = f'file:{fname}'
+                    scaler_key_used = 'file:y_scaler.pkl'
                     st.session_state['scaler_y'] = scaler_found
-                elif isinstance(scaler_candidate, dict):
-                    for v in scaler_candidate.values():
-                        if hasattr(v, 'inverse_transform'):
-                            scaler_found = v
-                            scaler_key_used = f'file:{fname}'
-                            st.session_state['scaler_y'] = scaler_found
-                            break
             except Exception as disk_e:  # noqa: BLE001
                 logging.info(f"No y_scaler.pkl loaded for run {run_id}: {disk_e}")
         if scaler_found is None:
