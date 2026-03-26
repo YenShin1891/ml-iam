@@ -13,11 +13,8 @@ dataset: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-2025-0
 # Optional: GPUs to expose for this run.
 # You can set a single value (applies to all phases) or a per-phase mapping.
 cuda_visible_devices:
-  default: "0"          # used when a phase key is not specified
-  search: "0,1,2,3"     # multi-GPU search
-  train: "0"            # single GPU train
-  test: "0"             # single GPU test
-  plot: "0"             # single GPU plot
+  default: "0"
+  search: "0,1,2,3"
 
 # Run phases in order. Typical: [search, train, test, plot]
 # Omit 'search' to skip hyperparameter search and use defaults instead.
