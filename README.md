@@ -75,7 +75,7 @@ This pipeline requires the **IPCC AR6 Scenario Explorer Database (v1.1)**:
 
 ## ⚡ Quick Training (XGBoost)
 
-**Time required:** ~45 minutes | **Hardware:** CPU only
+**Time required:** ~45 minutes | **Hardware:** CPU only (GPU is optional)
 
 ### Step 1: Clone Repository & Install Dependencies
 
@@ -131,30 +131,52 @@ This command:
 - `COMPLETENESS_RATIO`: Fraction of non-missing variables required to keep a row
 - `TAGS`: Extra behaviors (e.g. `"include-intermediate"`, `"apply-base-year"`)
 
-### Step 4: Train XGBoost Model
+### Step 4: Create a Run Config
+
+All training is driven by a YAML run config. Copy an example and edit it:
 
 ```bash
-# Recommended: unified Makefile training using a YAML/JSON run config
-# 1) Edit an example config under configs/runs/
-# 2) Run training via make
-make train RUN=configs/runs/xgb_example.yaml
-
-# Per-phase GPU visibility (optional): in the YAML you can set
-# cuda_visible_devices: {default: "0", search: "0,1,2,3", train: "0", test: "0", plot: "0"}
-
-# Background (nohup) run with log + pid under ./logs/
-make train-bg RUN=configs/runs/xgb_example.yaml
-
-# You can still run the script directly if you prefer:
-# python scripts/train_xgb.py
+cp configs/runs/xgb_example.yaml configs/runs/my_run.yaml
 ```
 
-**Command options:**
-- `--resume {search|train|test|plot} --run_id <id>`: Resume from a saved session
-- `--note "description"`: Add notes to the run
-- `--dataset <version_name>`: Use a specific processed dataset subdirectory under `DATA_PATH` (defaults to configured dataset if omitted)
+Example configs are provided for each model under `configs/runs/`.
 
-**Outputs** (saved to `./results/xgb/[run_id]/`):
+**Run config fields:**
+
+| Field | Description |
+|---|---|
+| `model` | `xgb`, `lstm`, or `tft` |
+| `phases` | Phases to run, e.g. `[preprocess, search, train, test, plot]`. `preprocess` must be included for new runs. Omit `search` to use default hyperparameters. |
+| `dataset` | Processed dataset subdirectory name under `DATA_PATH` |
+| `cuda_visible_devices` | `default` for all phases, override `search` for multi-GPU (e.g. `{default: "0", search: "0,1,2,3"}`) |
+| `note` | Free-text note saved with the run |
+| `lag_required` | Whether full lag history is required (LSTM/TFT) |
+| `two_window` | Use two-window prediction (TFT only) |
+| `run_id` | Existing run ID to resume (e.g. `tft_01`). Required when using `resume`. |
+| `resume` | Phase to resume from: `preprocess`, `search`, `train`, `test`, or `plot`. Runs only that single phase using the existing run's data/config. |
+
+**Resuming an existing run:**
+
+To re-run a specific phase of a completed (or partially completed) run, add `run_id` and `resume` to your config:
+
+```yaml
+model: tft
+run_id: tft_01
+resume: test          # re-run only the test phase
+```
+
+Then launch as usual with `make train RUN=...`.
+
+### Step 5: Train
+
+```bash
+make train RUN=configs/runs/my_run.yaml
+
+# Or run in the background (logs + pidfile under ./logs/)
+make train-bg RUN=configs/runs/my_run.yaml
+```
+
+**Outputs** (saved to `./results/<model>/[run_id]/`):
 - Logs
 - Trained model
 - Performance metrics (RMSE, MAE, R²)
@@ -168,10 +190,9 @@ make train-bg RUN=configs/runs/xgb_example.yaml
 
 **Time required:** 4-12 hours | **Hardware:** GPU recommended (CUDA 11.6+)
 
-**If you haven't already completed the Quick Training setup:**
+**If you haven’t already completed the Quick Training setup:**
 1. Complete [Steps 1-3 from Quick Training](#-quick-training-xgboost) (clone, install, configure, process data)
 2. Then return here for GPU-specific setup
-
 
 ### Install additional Python dependencies (LSTM/TFT)
 
@@ -183,70 +204,27 @@ pip install -r requirements-advanced.txt
 
 Verify PyTorch CUDA availability:
 ```bash
-python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+python -c "import torch; print(f’CUDA available: {torch.cuda.is_available()}’)"
 ```
 
-### Training LSTM
+### Training LSTM / TFT
+
+Same workflow as XGBoost — edit a config and run:
 
 ```bash
-# Recommended: unified Makefile training using a YAML/JSON run config
 make train RUN=configs/runs/lstm_example.yaml
-
-# You can still run the script directly if you prefer:
-# python scripts/train_lstm.py
-```
-
-**Command options (LSTM):**
-- `--resume {search|train|test|plot} --run_id <id>`: Resume a saved run from a specific stage
-- `--dataset <version_name>`: Use a specific processed dataset subdirectory under `DATA_PATH`
-- `--lag-required/--no-lag-required`: Control whether full lag history is required
-- `--note "description"`: Add a note to the run metadata
-
-Example resume:
-
-```bash
-python scripts/train_lstm.py --resume train --run_id run_01
-```
-
-### Training TFT (Temporal Fusion Transformer)
-
-```bash
-# Recommended: unified Makefile training using a YAML/JSON run config
 make train RUN=configs/runs/tft_example.yaml
-
-# You can still run the script directly if you prefer:
-# python scripts/train_tft.py
 ```
 
-**Command options (TFT):**
-- `--resume {search|train|test|plot} --run_id <id>`: Resume a saved run from a specific stage
-- `--dataset <version_name>`: Use a specific processed dataset subdirectory under `DATA_PATH`
-- `--lag-required/--no-lag-required`: Control whether full lag history is required
-- `--two-window`: Use the two-window prediction variant
-- `--note "description"`: Add a note to the run metadata
-
-Example resume:
+### Background training
 
 ```bash
-python scripts/train_tft.py --resume train --run_id run_01
-```
-
-### Training Tips
-
-**Background training (optional)**
-
-If you don’t want to keep a terminal open, you can run training in the background and log everything to a file:
-
-```bash
-# Makefile helper (recommended): creates a timestamped log + pidfile under ./logs/
 make train-bg RUN=configs/runs/lstm_example.yaml
-
-# Or manual nohup:
-nohup python scripts/train_lstm.py > train.log 2>&1 &
 ```
 
-- This keeps training running even if you close the terminal and writes output to `train.log`.
-- If you already started training in the foreground: `Ctrl+Z` → `bg` → `disown` lets it keep running even if the terminal closes. However, you can monitor it only with logs in the `RESULTS_PATH` in this case.
+This creates a timestamped log and pidfile under `./logs/`. Training continues even if you close the terminal.
+
+If you already started training in the foreground: `Ctrl+Z` → `bg` → `disown`.
 
 ---
 

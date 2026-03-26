@@ -1,21 +1,23 @@
 # Example run config for LSTM
-# Usage (after implementation): make train RUN=configs/runs/lstm_example.yaml
+# Usage: make train RUN=configs/runs/lstm_example.yaml
 
 model: lstm
 
-dataset: null
+dataset: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-2025-09-24
 
 cuda_visible_devices:
-  default: "0"
-  search: "0,1,2,3"
-  train: "0"
-  test: "0"
-  plot: "0"
+  default: "4,5,6,7"
+  search: "4,5,6,7"
+  train: "4,5,6,7"
 
 # LSTM-specific: whether to require full lag history
-lag_required: false
+lag_required: true
 
 # Omit 'search' to skip hyperparameter search and use defaults instead.
-phases: [search, train, test, plot]
+phases: [preprocess, train, test, plot]
 
-note: ""
+note: "seed is 0, not 42"
+
+# To resume an existing run, set run_id and resume (overrides 'phases'):
+# run_id: lstm_01       # existing run ID under results/lstm/
+# resume: train         # phase to resume from (preprocess, search, train, test, plot)

@@ -596,9 +596,9 @@ def hyperparameter_search(
             else:
                 # Multi-GPU: one worker process per GPU.
                 try:
-                    ctx = mp.get_context('fork')
+                    ctx = mp.get_context('forkserver')
                 except Exception:
-                    ctx = mp.get_context()
+                    ctx = mp.get_context('spawn')
 
                 result_queue = ctx.Queue()
                 assignments: List[List[Tuple[int, Dict]]] = [[] for _ in gpu_pool]

@@ -30,7 +30,7 @@ def group_test_data(X_test_with_index, cache=None):
     if cache is None:
         cache = {}
 
-    cache_key = (X_test_with_index.shape, tuple(INDEX_COLUMNS), tuple(NON_FEATURE_COLUMNS))
+    cache_key = (id(X_test_with_index), X_test_with_index.shape, tuple(INDEX_COLUMNS), tuple(NON_FEATURE_COLUMNS))
     
     if cache_key in cache:
         return cache[cache_key]
@@ -209,10 +209,11 @@ def test_xgb_autoregressively(
     # Load scalers if not provided and run_id is available
     if y_scaler is None and x_scaler is None and run_id is not None:
         try:
-            from src.utils.utils import load_session_state
-            y_scaler = load_session_state(run_id, "y_scaler.pkl")
-            x_scaler = load_session_state(run_id, "x_scaler.pkl")
-        except:
+            from src.utils.run_store import RunStore
+            store = RunStore(run_id)
+            y_scaler = store.load_artifact("y_scaler.pkl")
+            x_scaler = store.load_artifact("x_scaler.pkl")
+        except Exception:
             logging.warning("Could not load scalers, falling back to original behavior")
             y_scaler = None
             x_scaler = None
@@ -249,7 +250,7 @@ def test_xgb_autoregressively(
         if disable_progress:
             for future in concurrent.futures.as_completed(futures):
                 group_indices, preds_target = future.result()
-                pos = X_test_with_index.index.get_indexer(group_indices)
+                pos = [index_to_pos[idx] for idx in group_indices]
                 full_preds[pos, :] = preds_target
         else:
             for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Processing groups"):
@@ -324,13 +325,13 @@ def save_metrics(run_id, y_true, y_pred, test_data=None):
         # Compute metrics for each region type
         for region_type, region_list in region_groups.items():
             if len(region_list) > 0:
-                # Get indices for this region type
+                # Get positional indices for this region type
                 region_mask = test_data['Region'].isin(region_list)
-                region_indices = test_data[region_mask].index
-                
+                region_positions = np.where(region_mask.values)[0]
+
                 # Extract corresponding predictions and true values
-                y_true_region = y_true[region_indices]
-                y_pred_region = y_pred[region_indices]
+                y_true_region = y_true[region_positions]
+                y_pred_region = y_pred[region_positions]
                 
                 if len(y_true_region) > 0:
                     region_metrics = compute_metrics(y_true_region, y_pred_region, region_type)

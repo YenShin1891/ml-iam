@@ -9,6 +9,9 @@ scikit-learn==1.3.2  # Compatible with numpy 1.24.4 and scipy 1.10.1
 # Config (used by scripts/train_from_config.py)
 pyyaml==6.0.2
 
+# Data serialization (RunStore caches processed data as parquet)
+pyarrow>=14.0.0
+
 # XGBoost with GPU support
 xgboost==2.1.4
 
