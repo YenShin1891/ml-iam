@@ -287,13 +287,19 @@ Generated plots include:
 
 ## 🎨 Explore Your Results
 
-Launch the interactive Streamlit page to explore results:
+Launch the interactive Streamlit dashboard to explore results:
 
 ```bash
-streamlit run scripts/dashboard.py
+make dashboard RUN_ID=xgb_37
 ```
 
-Access at `http://localhost:8501`
+Access at `http://localhost:8501`. Logs are saved under `logs/`.
+
+By default, individual plots are saved for index 6. Override with:
+
+```bash
+make dashboard RUN_ID=xgb_37 SAVE_PLOTS="0,6"
+```
 
 **Features (WIP):**
 - Compare predictions across models
