@@ -6,7 +6,7 @@ model: lstm
 dataset: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-2025-09-24
 
 cuda_visible_devices:
-  default: "4"
+  default: "4,5,6,7"
   search: "4,5,6,7"
   train: "4,5,6,7"
 
@@ -14,6 +14,10 @@ cuda_visible_devices:
 lag_required: true
 
 # Omit 'search' to skip hyperparameter search and use defaults instead.
-phases: [train, test, plot]
+phases: [preprocess, train, test, plot]
 
 note: "seed is 0, not 42"
+
+# To resume an existing run, set run_id and resume (overrides 'phases'):
+# run_id: lstm_01       # existing run ID under results/lstm/
+# resume: train         # phase to resume from (preprocess, search, train, test, plot)

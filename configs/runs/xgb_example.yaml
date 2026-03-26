@@ -16,9 +16,13 @@ cuda_visible_devices:
   default: "0"
   search: "0,1,2,3"
 
-# Run phases in order. Typical: [search, train, test, plot]
+# Run phases in order. Typical: [preprocess, search, train, test, plot]
 # Omit 'search' to skip hyperparameter search and use defaults instead.
-phases: [search, train, test, plot]
+phases: [preprocess, search, train, test, plot]
 
 # Optional note saved into session state (supported by xgb launcher)
 note: "Lets measure how long it takes."
+
+# To resume an existing run, set run_id and resume (overrides 'phases'):
+# run_id: xgb_01        # existing run ID under results/xgb/
+# resume: train         # phase to resume from (preprocess, search, train, test, plot)

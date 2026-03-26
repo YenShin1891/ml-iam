@@ -146,12 +146,26 @@ Example configs are provided for each model under `configs/runs/`.
 | Field | Description |
 |---|---|
 | `model` | `xgb`, `lstm`, or `tft` |
-| `phases` | Phases to run, e.g. `[search, train, test, plot]`. Omit `search` to skip hyperparameter search and use defaults. |
+| `phases` | Phases to run, e.g. `[preprocess, search, train, test, plot]`. `preprocess` must be included for new runs. Omit `search` to use default hyperparameters. |
 | `dataset` | Processed dataset subdirectory name under `DATA_PATH` |
 | `cuda_visible_devices` | `default` for all phases, override `search` for multi-GPU (e.g. `{default: "0", search: "0,1,2,3"}`) |
 | `note` | Free-text note saved with the run |
 | `lag_required` | Whether full lag history is required (LSTM/TFT) |
 | `two_window` | Use two-window prediction (TFT only) |
+| `run_id` | Existing run ID to resume (e.g. `tft_01`). Required when using `resume`. |
+| `resume` | Phase to resume from: `preprocess`, `search`, `train`, `test`, or `plot`. Runs only that single phase using the existing run's data/config. |
+
+**Resuming an existing run:**
+
+To re-run a specific phase of a completed (or partially completed) run, add `run_id` and `resume` to your config:
+
+```yaml
+model: tft
+run_id: tft_01
+resume: test          # re-run only the test phase
+```
+
+Then launch as usual with `make train RUN=...`.
 
 ### Step 5: Train
 
