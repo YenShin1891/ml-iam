@@ -3,7 +3,7 @@
 SHELL := /bin/bash
 .ONESHELL:
 
-.PHONY: process-data train train-bg dashboard
+.PHONY: process-data train train-bg stop status dashboard
 
 # Allow overrides via environment variables (resolved at recipe time under conda)
 RAW_DIR ?=
@@ -49,6 +49,8 @@ train:
 
 
 # Background training via nohup; writes logs + pid under ./logs/
+# Uses setsid to create a dedicated process group so that `make stop`
+# can cleanly terminate the entire tree (including DDP workers).
 LOG_DIR ?= logs
 train-bg:
 	set -e
@@ -61,12 +63,54 @@ train-bg:
 	@ts=$$(date +%Y%m%d_%H%M%S); \
 	log="$(LOG_DIR)/train_$${ts}.log"; \
 	pid="$(LOG_DIR)/train_$${ts}.pid"; \
-	nohup $(MAKE) train RUN="$(RUN)" > "$$log" 2>&1 & \
+	setsid nohup $(MAKE) train RUN="$(RUN)" > "$$log" 2>&1 & \
 	echo $$! > "$$pid"; \
 	echo "Started background training"; \
 	echo "- pidfile: $$pid"; \
 	echo "- logfile:  $$log"; \
-	echo "Tip: tail -f $$log"
+	echo "Tip: tail -f $$log"; \
+	echo "Stop: make stop PID_FILE=$$pid"
+
+
+# Stop a background training session (kills all child processes including DDP workers)
+PID_FILE ?=
+stop:
+	@if [ -z "$(PID_FILE)" ]; then \
+		echo "ERROR: PID_FILE is required (e.g. make stop PID_FILE=logs/train_20260326_110407.pid)"; \
+		echo "Active sessions:"; \
+		ls -t $(LOG_DIR)/train_*.pid 2>/dev/null || echo "  (none)"; \
+		exit 2; \
+	fi
+	@if [ ! -f "$(PID_FILE)" ]; then \
+		echo "ERROR: PID file not found: $(PID_FILE)"; \
+		exit 1; \
+	fi
+	@pid=$$(cat "$(PID_FILE)"); \
+	echo "Stopping process group for PID $$pid ..."; \
+	kill -- -$$pid 2>/dev/null || kill $$pid 2>/dev/null || echo "Process already stopped"; \
+	rm -f "$(PID_FILE)"; \
+	echo "Done. Verify with: make status"
+
+
+# List active training sessions
+status:
+	@echo "=== Active training sessions ==="; \
+	found=0; \
+	for pidfile in $(LOG_DIR)/train_*.pid; do \
+		[ -f "$$pidfile" ] || continue; \
+		pid=$$(cat "$$pidfile"); \
+		if kill -0 "$$pid" 2>/dev/null && [ -d "/proc/$$pid" ]; then \
+			logfile="$${pidfile%.pid}.log"; \
+			echo "  PID $$pid ($$pidfile)"; \
+			if [ -f "$$logfile" ]; then \
+				echo "    Last log: $$(tail -1 "$$logfile")"; \
+			fi; \
+			found=1; \
+		else \
+			rm -f "$$pidfile"; \
+		fi; \
+	done; \
+	if [ "$$found" = 0 ]; then echo "  (none)"; fi
 
 
 # ----------------------

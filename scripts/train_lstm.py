@@ -100,9 +100,25 @@ def search_lstm(store, lag_required=True):
     return best_params
 
 
+def _is_primary_rank():
+    import os
+    rank_vars = [
+        os.getenv("PL_TRAINER_GLOBAL_RANK"),
+        os.getenv("GLOBAL_RANK"),
+        os.getenv("RANK"),
+    ]
+    return all(rv in (None, "0") for rv in rank_vars)
+
+
 def train_lstm(store, lag_required=True):
-    """Final training using best_params."""
+    """Final training using best_params.
+
+    Under DDP, non-primary ranks still need derive_splits() (LSTM has no
+    saved dataset template), but skip metadata/artifact saving.
+    """
     from src.trainers.lstm_trainer import train_final_lstm as _train_final
+
+    primary = _is_primary_rank()
 
     logging.info("Starting final LSTM training...")
     data = store.load_processed_data()
@@ -110,46 +126,49 @@ def train_lstm(store, lag_required=True):
 
     best_params = store.load_best_params()
 
-    logging.info("Training with best params: %s", best_params)
+    if primary:
+        logging.info("Training with best params: %s", best_params)
 
     # Build ephemeral session_state dict for trainer (it writes metadata into it)
-    session_state = dict(splits)
+    # Only pass session_state on primary rank so non-primary ranks skip saving
+    session_state = dict(splits) if primary else None
     _train_final(
         splits["train_data"], splits["val_data"],
         splits["targets"], store.run_id, best_params,
         session_state=session_state, features=splits["features"],
     )
 
-    # Extract trainer-produced metadata and persist via RunStore
-    store.save_features(splits["features"], splits["targets"])
-    if "lstm_scaler_X" in session_state:
-        store.save_artifact("lstm_scaler_X.pkl", session_state["lstm_scaler_X"])
-    if "lstm_scaler_y" in session_state:
-        store.save_artifact("lstm_scaler_y.pkl", session_state["lstm_scaler_y"])
+    if primary:
+        # Extract trainer-produced metadata and persist via RunStore
+        store.save_features(splits["features"], splits["targets"])
+        if "lstm_scaler_X" in session_state:
+            store.save_artifact("lstm_scaler_X.pkl", session_state["lstm_scaler_X"])
+        if "lstm_scaler_y" in session_state:
+            store.save_artifact("lstm_scaler_y.pkl", session_state["lstm_scaler_y"])
 
-    train_meta = {}
-    for key in ("lstm_features", "lstm_raw_features", "lstm_non_numeric_features",
-                "lstm_sequence_length", "lstm_target_offset"):
-        if key in session_state:
-            train_meta[key] = session_state[key]
-    if "lstm_config" in session_state:
-        cfg = session_state["lstm_config"]
-        train_meta["lstm_config"] = {
-            "hidden_size": cfg.hidden_size,
-            "num_layers": cfg.num_layers,
-            "dropout": cfg.dropout,
-            "bidirectional": cfg.bidirectional,
-            "dense_hidden_size": cfg.dense_hidden_size,
-            "dense_dropout": cfg.dense_dropout,
-            "learning_rate": cfg.learning_rate,
-            "batch_size": cfg.batch_size,
-            "weight_decay": cfg.weight_decay,
-            "sequence_length": cfg.sequence_length,
-            "target_offset": cfg.target_offset,
-        }
-    store.save_train_meta(train_meta)
+        train_meta = {}
+        for key in ("lstm_features", "lstm_raw_features", "lstm_non_numeric_features",
+                    "lstm_sequence_length", "lstm_target_offset"):
+            if key in session_state:
+                train_meta[key] = session_state[key]
+        if "lstm_config" in session_state:
+            cfg = session_state["lstm_config"]
+            train_meta["lstm_config"] = {
+                "hidden_size": cfg.hidden_size,
+                "num_layers": cfg.num_layers,
+                "dropout": cfg.dropout,
+                "bidirectional": cfg.bidirectional,
+                "dense_hidden_size": cfg.dense_hidden_size,
+                "dense_dropout": cfg.dense_dropout,
+                "learning_rate": cfg.learning_rate,
+                "batch_size": cfg.batch_size,
+                "weight_decay": cfg.weight_decay,
+                "sequence_length": cfg.sequence_length,
+                "target_offset": cfg.target_offset,
+            }
+        store.save_train_meta(train_meta)
 
-    logging.info("Final LSTM training complete.")
+        logging.info("Final LSTM training complete.")
     return best_params
 
 
