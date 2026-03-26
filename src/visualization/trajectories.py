@@ -105,14 +105,23 @@ def format_large_numbers(x, pos):  # noqa: ARG001
 
 def create_single_trajectory_plot(ax, test_data, y_test, preds, target_index, targets, alpha=0.5, linewidth=0.5):
     test_data_valid, y_test_valid, preds_valid = preprocess_data(test_data, y_test, preds, target_index)
+    first = True
     for _, group_df in test_data_valid.groupby(INDEX_COLUMNS):
         group_years = group_df['Year']
         group_indices = group_df.index
         group_y_test = y_test_valid[group_indices]
         group_preds = preds_valid[group_indices]
-        ax.plot(group_years, group_y_test, label='IAM', alpha=alpha, linewidth=linewidth)
-        ax.plot(group_years, group_preds, label='XGBoost', alpha=alpha, linewidth=linewidth)
-        ax.fill_between(group_years, group_y_test, group_preds, alpha=0.1)
+        color = next(ax._get_lines.prop_cycler)['color']
+        ax.plot(group_years, group_y_test, color=color, linestyle='-',
+                alpha=alpha, linewidth=linewidth,
+                label='Original IAM' if first else None)
+        ax.plot(group_years, group_preds, color=color, linestyle='--',
+                alpha=alpha, linewidth=linewidth,
+                label='ML-IAM prediction' if first else None)
+        ax.fill_between(group_years, group_y_test, group_preds,
+                        color=color, alpha=0.1,
+                        label='Emulation error' if first else None)
+        first = False
     ylabel_with_unit = f"{targets[target_index]} ({OUTPUT_UNITS[target_index]})"
     ax.set_xlabel("Year", fontsize=AXIS_LABEL_FONTSIZE)
     ax.set_ylabel(ylabel_with_unit, fontsize=AXIS_LABEL_FONTSIZE)
