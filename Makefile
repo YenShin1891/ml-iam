@@ -3,7 +3,7 @@
 SHELL := /bin/bash
 .ONESHELL:
 
-.PHONY: process-data train train-bg
+.PHONY: process-data train train-bg dashboard
 
 # Allow overrides via environment variables (resolved at recipe time under conda)
 RAW_DIR ?=
@@ -67,3 +67,31 @@ train-bg:
 	echo "- pidfile: $$pid"; \
 	echo "- logfile:  $$log"; \
 	echo "Tip: tail -f $$log"
+
+
+# ----------------------
+# Dashboard
+# ----------------------
+
+# Required: RUN_ID (e.g. xgb_37)
+RUN_ID ?=
+# Optional: save individual plots (comma-separated indices)
+SAVE_PLOTS ?=
+
+dashboard:
+	@if [ -z "$(RUN_ID)" ]; then \
+		echo "ERROR: RUN_ID is required (e.g. RUN_ID=xgb_37)"; \
+		exit 2; \
+	fi
+	@export SAVE_INDIVIDUAL_PLOTS=false; \
+	export INDIVIDUAL_PLOT_INDICES='[]'; \
+	if [ -n "$(SAVE_PLOTS)" ]; then \
+		export SAVE_INDIVIDUAL_PLOTS=true; \
+		export INDIVIDUAL_PLOT_INDICES="[$(SAVE_PLOTS)]"; \
+	fi; \
+	nohup streamlit run scripts/dashboard.py \
+		--logger.level=info \
+		--server.runOnSave=false \
+		-- --run_id=$(RUN_ID) &
+	@echo "Dashboard started for run $(RUN_ID)"
+	@echo "Tip: Open http://localhost:8501"
