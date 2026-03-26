@@ -101,13 +101,7 @@ def train_tft(store, lag_required=True):
     data = store.load_processed_data()
     splits = derive_splits(data, lag_required=lag_required)
 
-    if store.has_best_params():
-        best_params = store.load_best_params()
-    else:
-        from configs.models.tft_search import TFTDefaultParams
-        logging.info("No best_params found. Using default TFT parameters.")
-        best_params = TFTDefaultParams().to_dict()
-        store.save_best_params(best_params)
+    best_params = store.load_best_params()
 
     logging.info("Training with best params: %s", best_params)
 

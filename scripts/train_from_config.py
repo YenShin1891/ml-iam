@@ -282,17 +282,8 @@ def _write_run_metadata(
 
 
 def _effective_phases(cfg: RunConfig) -> Tuple[str, ...]:
-    """Return the phases that will actually execute.
-
-    Auto-prepends 'preprocess' whenever it is not already listed and any
-    data-consuming phase (search/train/test/plot) is requested.  Preprocess
-    caches the expensive melt+pivot as parquet; every later phase re-derives
-    cheap splits from that cache.
-    """
-    phases = list(cfg.phases)
-    if "preprocess" not in phases and any(p in phases for p in ("search", "train", "test", "plot")):
-        phases.insert(0, "preprocess")
-    return tuple(phases)
+    """Return the phases that will actually execute."""
+    return tuple(cfg.phases)
 
 
 def _validate_model_constraints(cfg: RunConfig) -> None:
