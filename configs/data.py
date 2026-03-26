@@ -60,7 +60,7 @@ SAVE_ANALYSIS = True
 # Optional data structure hints (used by TFT & plotting)
 INDEX_COLUMNS = ['Model', 'Scenario', 'Region']
 NON_FEATURE_COLUMNS = ['Model', 'Scenario', 'Scenario_Category', 'Year']
-CATEGORICAL_COLUMNS = ['Region', 'Model_Family', 'Ssp_family']
+CATEGORICAL_COLUMNS = ['Region', 'Model_Family']
 
 # Feature engineering knobs for downstream (kept here for single stop)
 MAX_SERIES_LENGTH = 15  # try not to exceed average length(=17) for tft

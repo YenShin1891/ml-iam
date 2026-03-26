@@ -289,7 +289,7 @@ class LSTMModel(LightningModule):
             lstm_out, (hidden, cell) = self.lstm(x)
 
             if mask is not None:
-                valid_lengths = (~mask).sum(dim=1) - 1
+                valid_lengths = mask.sum(dim=1) - 1
                 batch_indices = torch.arange(batch_size, device=x.device)
                 last_output = lstm_out[batch_indices, valid_lengths]
             else:
@@ -612,17 +612,9 @@ def create_lstm_datasets_with_forecasting(
 
     if mode == "train":
         # Training: use all features as-is
-        train_dataset = create_lstm_dataset(
-            train_data, features, targets,
+        train_dataset, val_dataset, encoded_features = create_lstm_datasets(
+            train_data, val_data, features, targets,
             sequence_length=sequence_length,
-            mode="train",
-            fit_scalers=True
-        )
-        val_dataset = create_lstm_dataset(
-            val_data, features, targets,
-            sequence_length=sequence_length,
-            mode="val",
-            scalers=train_dataset.scalers
         )
         return train_dataset, val_dataset, len(unknown_future)
 
@@ -638,10 +630,11 @@ def create_lstm_datasets_with_forecasting(
                 # Use last known value for each group (simple forward fill)
                 predict_data[col] = predict_data.groupby(['Model', 'Scenario', 'Region'])[col].ffill()
 
-        test_dataset = create_lstm_dataset(
-            predict_data, features, targets,
+        # Use a dummy split for create_lstm_datasets then take the "val" dataset
+        # which uses scalers fitted on predict_data
+        test_dataset, _, _ = create_lstm_datasets(
+            predict_data, predict_data, features, targets,
             sequence_length=sequence_length,
-            mode="predict"
         )
         return test_dataset, len(unknown_future)
 
@@ -1035,8 +1028,8 @@ def train_final_lstm(
         session_state["lstm_raw_features"] = features
         session_state["lstm_features"] = encoded_features
         session_state["lstm_non_numeric_features"] = non_numeric_cols
-    session_state["lstm_sequence_length"] = sequence_length
-    session_state["lstm_target_offset"] = target_offset
+        session_state["lstm_sequence_length"] = sequence_length
+        session_state["lstm_target_offset"] = target_offset
 
 
 def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:

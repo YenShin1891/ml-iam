@@ -56,7 +56,7 @@ def transform_outputs_to_former_inputs(run_id: str, shap_values: np.ndarray, tar
         for j in range(20):
             output = sorted_df_list[i].iloc[j]["Feature"]
             if output.startswith("prev") and not output.endswith(target):
-                num, output_name = output.split("_")
+                num, output_name = output.split("_", 1)
                 num = 1 if num == "prev" else int(num[4:])
                 output_index = targets.index(output_name)
                 old_feature = shap_values[:, j, i]
