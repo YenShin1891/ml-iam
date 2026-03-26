@@ -260,17 +260,20 @@ After training, results are organized as:
 ```
 results/
 ├── xgb/
-│   └── [run_id]/
-│       ├── models/              # Trained XGBoost models per variable
-│       ├── predictions/         # Test set predictions
-│       ├── metrics.json         # Performance metrics (RMSE, MAE, R²)
-│       └── plots/               # Visualizations & SHAP plots
+│   └── xgb_NN/
+│       ├── artifacts/         # Scalers, features, predictions, best params
+│       ├── cache/             # Cached preprocessed data
+│       ├── checkpoints/       # Trained XGBoost model
+│       ├── metrics/           # Performance metrics (RMSE, MAE, R², etc.)
+│       ├── plots/             # Scatter plots & SHAP explainability
+│       ├── search/            # Hyperparameter search results
+│       └── logs/
 ├── lstm/
-│   └── [run_id]/
-│       └── ...
+│   └── lstm_NN/
+│       └── ...                # Same structure, with final/ instead of checkpoints/
 └── tft/
-    └── [run_id]/
-        └── ...
+    └── tft_NN/
+        └── ...                # Same structure, with final/ instead of checkpoints/
 ```
 
 ### Visualizations
