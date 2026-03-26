@@ -226,6 +226,18 @@ This creates a timestamped log and pidfile under `./logs/`. Training continues e
 
 If you already started training in the foreground: `Ctrl+Z` → `bg` → `disown`.
 
+### Managing training sessions
+
+```bash
+# Check active training sessions
+make status
+
+# Stop a training session (kills all child processes including DDP workers)
+make stop PID_FILE=logs/train_20260326_110407.pid
+```
+
+**Important:** Do not use `kill <PID>` to stop training — it only kills the parent process while DDP worker processes continue running as orphans, wasting GPU resources. Always use `make stop` which kills the entire process group.
+
 ---
 
 ## ⚙️ Configuration
