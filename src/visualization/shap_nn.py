@@ -150,13 +150,13 @@ def get_lstm_shap_values(run_id, X_test: pd.DataFrame, sequence_length=1):
         raise FileNotFoundError(f"LSTM model checkpoint not found: {model_path}")
     model = LSTMModel.load_from_checkpoint(model_path)
     model.eval()
-    from src.utils.utils import load_session_state
-    session_state = load_session_state(run_id)
-    scaler_X = session_state.get("lstm_scaler_X")
-    features = session_state.get("features")
-    targets = session_state.get("targets")
-    if scaler_X is None:
-        raise ValueError("LSTM scaler_X not found in session state")
+    from src.utils.run_store import RunStore
+    store = RunStore(run_id)
+    scaler_X = store.load_artifact("lstm_scaler_X.pkl")
+    features, targets = store.load_features()
+    if store.has_train_meta():
+        meta = store.load_train_meta()
+        features = meta.get("lstm_raw_features", features)
     def preprocess_features(data, features, scaler_X, mask_value=-1.0):
         X = data[features].copy()
         from configs.data import CATEGORICAL_COLUMNS, REGION_CATEGORIES
@@ -243,10 +243,10 @@ def get_tft_shap_values(
     model = load_tft_checkpoint(run_id)
     model.eval()
 
-    from src.utils.utils import load_session_state
-    session_state = load_session_state(run_id)
-    session_features = list(session_state.get("features") or [])
-    targets = session_state.get("targets") or []
+    from src.utils.run_store import RunStore
+    store = RunStore(run_id)
+    session_features, targets = store.load_features()
+    session_features = list(session_features)
 
     plots_dir = os.path.join(get_run_root(run_id), "plots")
     cache_path = os.path.join(plots_dir, "tft_shap_cache.npz")
@@ -776,11 +776,10 @@ def get_shap_values(run_id, X_test: pd.DataFrame, model_type: str = "auto", **kw
     if model_type == "auto":
         # Auto-detect model type based on checkpoint location
         lstm_path = os.path.join(get_run_root(run_id), "final", "best.ckpt")
-        tft_path = os.path.join(get_run_root(run_id), "final", "best.ckpt")
+        tft_path = os.path.join(get_run_root(run_id), "final", "dataset_template.pt")
 
         # Check for TFT-specific files first
-        dataset_template_path = os.path.join(get_run_root(run_id), "final", "dataset_template.pt")
-        if os.path.exists(dataset_template_path):
+        if os.path.exists(tft_path):
             model_type = "tft"
         elif os.path.exists(lstm_path):
             model_type = "lstm"
@@ -829,8 +828,6 @@ def plot_nn_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], t
             region=region,
             use_cached=use_cached,
         )
-        sequence_length = kwargs.get("sequence_length", 1)
-        plot_lstm_shap(run_id, X_test_with_index, features, targets, sequence_length, region=region)
     else:
         raise ValueError(f"Unsupported model type: {model_type}")
 

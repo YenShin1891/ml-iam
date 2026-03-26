@@ -5,16 +5,22 @@ SHELL := /bin/bash
 
 .PHONY: process-data train train-bg
 
-# Allow overrides via environment variables
-RAW_DIR ?= $(shell python -c 'import configs.paths as c; print(c.RAW_DATA_PATH)')
-DATA_DIR ?= $(shell python -c 'import configs.paths as c; print(c.DATA_PATH)')
-RESULTS_DIR ?= $(shell python -c 'import configs.paths as c; print(c.RESULTS_PATH)')
+# Allow overrides via environment variables (resolved at recipe time under conda)
+RAW_DIR ?=
+DATA_DIR ?=
+RESULTS_DIR ?=
 
 process-data:
+	source "$(CONDA_SH)"
+	eval "$$(mamba shell hook --shell bash)"
+	mamba activate "$(CONDA_ENV)"
+	RAW_DIR="$${RAW_DIR:-$$(python -c 'import configs.paths as c; print(c.RAW_DATA_PATH)')}" ; \
+	DATA_DIR="$${DATA_DIR:-$$(python -c 'import configs.paths as c; print(c.DATA_PATH)')}" ; \
+	RESULTS_DIR="$${RESULTS_DIR:-$$(python -c 'import configs.paths as c; print(c.RESULTS_PATH)')}" ; \
 	python -m src.data.process_data \
-		--raw-dir "$(RAW_DIR)" \
-		--data-dir "$(DATA_DIR)" \
-		--results-dir "$(RESULTS_DIR)"
+		--raw-dir "$$RAW_DIR" \
+		--data-dir "$$DATA_DIR" \
+		--results-dir "$$RESULTS_DIR"
 
 
 # ----------------------
@@ -26,7 +32,7 @@ RUN ?=
 
 # Conda/mamba activation (mirrors existing train_test_*.sh scripts)
 CONDA_SH ?= /root/conda/etc/profile.d/conda.sh
-CONDA_ENV ?= xgb2
+CONDA_ENV ?= ml-iam
 
 # Foreground training (prints run_id to stdout)
 train:

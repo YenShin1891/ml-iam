@@ -9,7 +9,8 @@ import sys
 import argparse
 
 from src.visualization import plot_trajectories, get_saved_plots_metadata
-from src.utils.utils import setup_logging, load_session_state
+from src.utils.utils import setup_logging
+from src.utils.run_store import RunStore
 from configs.data import REGION_CODE_TO_LABEL
 import datetime
 
@@ -389,23 +390,56 @@ def display_selected_plot():
             st.image(img, caption="Temporal trajectories", use_container_width=True)
 
 def setup_session_and_logging(run_id):
-    """Initialize logging and load session state."""
+    """Initialize logging and load run artifacts via RunStore."""
     if st.session_state.get("logging_initialized", False) is False:
         setup_logging(run_id)
         st.session_state.logging_initialized = True
 
-    session_state = load_session_state(run_id)
-    if not session_state:
-        st.error("No trained model found. Run train_test.py first.")
+    store = RunStore(run_id)
+    if not store.has_processed_data():
+        st.error("No trained model found. Run the training pipeline first.")
         return None
-    
-    st.session_state.update(session_state)
-    return session_state
+
+    # Determine model type from run_id prefix
+    model_type = run_id.split("_", 1)[0]
+
+    # Re-derive splits from cached parquet
+    data = store.load_processed_data()
+    if model_type == "xgb":
+        from scripts.train_xgb import derive_splits
+        splits = derive_splits(data)
+        st.session_state.update(splits)
+    elif model_type == "lstm":
+        from scripts.train_lstm import derive_splits
+        splits = derive_splits(data)
+        st.session_state.update(splits)
+    elif model_type == "tft":
+        from scripts.train_tft import derive_splits
+        splits = derive_splits(data)
+        st.session_state.update(splits)
+    else:
+        st.error(f"Unknown model type: {model_type}")
+        return None
+
+    # Load predictions
+    if store.has_predictions():
+        pred_bundle = store.load_predictions()
+        st.session_state.preds = pred_bundle["preds"]
+        if "horizon_df" in pred_bundle:
+            st.session_state.horizon_df = pred_bundle["horizon_df"]
+        if "horizon_y_true" in pred_bundle:
+            st.session_state.horizon_y_true = pred_bundle["horizon_y_true"]
+    else:
+        st.warning("No predictions found. Run the test phase first.")
+
+    return splits
 
 def handle_filtering_and_plotting(run_id):
     """Handle the filter application and plotting logic."""
     if st.session_state.get("apply_filters_clicked", False):
         apply_filters()
+        if not hasattr(st.session_state, 'target_mask') or st.session_state.target_mask is None:
+            return
         if st.session_state.target_mask.sum() == 0:
             st.warning("No data selected with the current filters.")
         else:

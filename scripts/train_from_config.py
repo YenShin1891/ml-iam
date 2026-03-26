@@ -201,18 +201,12 @@ def _parse_config(obj: Dict[str, Any], *, config_path: Path) -> RunConfig:
     )
 
 
-def _script_for_model(model: str) -> Path:
-    root = _repo_root()
-    mapping = {
-        "xgb": root / "scripts" / "train_xgb.py",
-        "lstm": root / "scripts" / "train_lstm.py",
-        "tft": root / "scripts" / "train_tft.py",
-    }
-    return mapping[model]
+def _train_script() -> Path:
+    return _repo_root() / "scripts" / "train.py"
 
 
 def _build_phase_argv(cfg: RunConfig, *, phase: str, run_id: str) -> List[str]:
-    argv = [str(_script_for_model(cfg.model)), "--resume", phase, "--run_id", run_id]
+    argv = [str(_train_script()), "--model", cfg.model, "--resume", phase, "--run_id", run_id]
 
     if cfg.dataset:
         argv.extend(["--dataset", cfg.dataset])
@@ -223,7 +217,7 @@ def _build_phase_argv(cfg: RunConfig, *, phase: str, run_id: str) -> List[str]:
     if cfg.model == "tft" and cfg.two_window:
         argv.append("--two-window")
 
-    if cfg.note and cfg.model in {"xgb", "lstm", "tft"}:
+    if cfg.note:
         argv.extend(["--note", cfg.note])
 
     return argv
@@ -251,9 +245,8 @@ def _write_run_metadata(
             config_path.read_text(encoding="utf-8"),
             encoding="utf-8",
         )
-    except Exception:
-        # Non-fatal
-        pass
+    except Exception as e:
+        logging.warning("Could not copy original run config for provenance: %s", e)
 
     # Write resolved config (JSON for easy parsing)
     resolved = {
@@ -291,13 +284,14 @@ def _write_run_metadata(
 def _effective_phases(cfg: RunConfig) -> Tuple[str, ...]:
     """Return the phases that will actually execute.
 
-    If the user omitted 'search' but included later phases (train/test/plot),
-    we auto-prepend a search phase (with SKIP_SEARCH=1 env var) so that
-    preprocessing and default-param injection still happen.
+    Auto-prepends 'preprocess' whenever it is not already listed and any
+    data-consuming phase (search/train/test/plot) is requested.  Preprocess
+    caches the expensive melt+pivot as parquet; every later phase re-derives
+    cheap splits from that cache.
     """
     phases = list(cfg.phases)
-    if "search" not in phases and any(p in phases for p in ("train", "test", "plot")):
-        phases.insert(0, "search")
+    if "preprocess" not in phases and any(p in phases for p in ("search", "train", "test", "plot")):
+        phases.insert(0, "preprocess")
     return tuple(phases)
 
 
@@ -365,14 +359,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     run_id = _allocate_run_id(cfg)
 
-    # Derive skip_search from whether 'search' is in the user's phases list.
-    skip_search = "search" not in cfg.phases
     phases = _effective_phases(cfg)
 
     # Prepare env for subprocesses
     child_env = dict(os.environ)
-    if skip_search:
-        child_env["SKIP_SEARCH"] = "1"
 
     # Apply global/default CUDA setting (if provided) so phases that don't override are stable.
     if cfg.cuda_visible_devices_by_phase and "default" in cfg.cuda_visible_devices_by_phase:

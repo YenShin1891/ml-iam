@@ -34,15 +34,15 @@ class LSTMTrainerConfig:
     # Model architecture
     hidden_size: int = 128
     num_layers: int = 2
-    dropout: float = 0.2
+    dropout: float = 0.1
     bidirectional: bool = False
 
     # Dense layers after LSTM
-    dense_hidden_size: int = 64
+    dense_hidden_size: int = 128
     dense_dropout: float = 0.0
 
     # Training parameters
-    learning_rate: float = 0.01
+    learning_rate: float = 0.02
     batch_size: int = 128
     max_epochs: int = 100
     patience: int = 5
@@ -54,7 +54,7 @@ class LSTMTrainerConfig:
 
     # Optimizer
     optimizer: str = "adam"
-    weight_decay: float = 1e-5
+    weight_decay: float = 0
 
     # Scheduler
     scheduler: Optional[str] = None

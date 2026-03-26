@@ -6,8 +6,9 @@ model: tft
 dataset: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-2025-09-24
 
 cuda_visible_devices:
-  default: "0"
-  search: "0,1,2,3"
+  default: "4"
+  search: "4,5,6,7"
+  train: "4,5,6,7"
 
 # TFT-specific: whether to require full lag history
 lag_required: true
