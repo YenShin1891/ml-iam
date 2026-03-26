@@ -95,6 +95,7 @@ def _search_with_splits(splits, store):
 def _is_primary_rank():
     import os
     rank_vars = [
+        os.getenv("LOCAL_RANK"),
         os.getenv("PL_TRAINER_GLOBAL_RANK"),
         os.getenv("GLOBAL_RANK"),
         os.getenv("RANK"),
