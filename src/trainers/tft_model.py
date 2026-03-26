@@ -45,7 +45,10 @@ def create_tft_model(
         log_interval=0,
     )
     if disable_lr_scheduler:
-        kwargs["reduce_on_plateau_patience"] = None
+        # Setting patience to None causes pytorch-forecasting to return an
+        # empty scheduler dict which Lightning rejects.  Instead, set an
+        # unreachably high patience so the scheduler never fires.
+        kwargs["reduce_on_plateau_patience"] = 999999
 
     return TemporalFusionTransformer.from_dataset(train_dataset, **kwargs)
 

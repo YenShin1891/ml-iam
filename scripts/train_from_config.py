@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 _ALLOWED_MODELS = {"xgb", "lstm", "tft"}
-_ALLOWED_PHASES = {"search", "train", "test", "plot"}
+_ALLOWED_PHASES = {"preprocess", "search", "train", "test", "plot"}
 
 
 @dataclass(frozen=True)

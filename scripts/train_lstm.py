@@ -103,6 +103,7 @@ def search_lstm(store, lag_required=True):
 def _is_primary_rank():
     import os
     rank_vars = [
+        os.getenv("LOCAL_RANK"),
         os.getenv("PL_TRAINER_GLOBAL_RANK"),
         os.getenv("GLOBAL_RANK"),
         os.getenv("RANK"),

@@ -938,6 +938,7 @@ def hyperparameter_search_lstm_sequential(
 def _is_primary_rank() -> bool:
     """Check if this is the primary DDP rank (or non-DDP)."""
     rank_vars = [
+        os.getenv("LOCAL_RANK"),
         os.getenv("PL_TRAINER_GLOBAL_RANK"),
         os.getenv("GLOBAL_RANK"),
         os.getenv("RANK"),
