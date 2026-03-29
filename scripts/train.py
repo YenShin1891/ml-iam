@@ -31,6 +31,7 @@ def _seed(model: str) -> None:
 def _is_primary_rank() -> bool:
     """Check if this is the primary DDP rank (or non-DDP)."""
     rank_vars = [
+        os.getenv("LOCAL_RANK"),
         os.getenv("PL_TRAINER_GLOBAL_RANK"),
         os.getenv("GLOBAL_RANK"),
         os.getenv("RANK"),
@@ -158,9 +159,17 @@ def main(argv=None):
 
     if args.resume is None:
         # Full pipeline: preprocess -> search -> train -> test -> plot
+        # NOTE: This path is NOT safe for DDP subprocess re-launching
+        # (each rank would allocate a different run_id and re-run all
+        # phases).  Use train_from_config.py which invokes per-phase
+        # with --resume, or pass --resume explicitly.
+        if not _is_primary_rank():
+            raise RuntimeError(
+                "Full-pipeline mode (no --resume) cannot be used under DDP. "
+                "Use train_from_config.py or pass --resume <phase> --run_id <id>."
+            )
         run_id = get_next_run_id(model)
-        if _is_primary_rank():
-            setup_logging(run_id)
+        setup_logging(run_id)
 
         store = RunStore(run_id)
 
@@ -205,5 +214,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    if _is_primary_rank():
-        main()
+    main()

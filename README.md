@@ -91,6 +91,7 @@ conda activate ml-iam
 
 # Install dependencies
 pip install -r requirements.txt
+pip install -e .
 ```
 
 ### Step 2: Configure Paths
@@ -226,6 +227,18 @@ This creates a timestamped log and pidfile under `./logs/`. Training continues e
 
 If you already started training in the foreground: `Ctrl+Z` → `bg` → `disown`.
 
+### Managing training sessions
+
+```bash
+# Check active training sessions
+make status
+
+# Stop a training session (kills all child processes including DDP workers)
+make stop PID_FILE=logs/train_20260326_110407.pid
+```
+
+**Important:** Do not use `kill <PID>` to stop training — it only kills the parent process while DDP worker processes continue running as orphans, wasting GPU resources. Always use `make stop` which kills the entire process group.
+
 ---
 
 ## ⚙️ Configuration
@@ -287,13 +300,19 @@ Generated plots include:
 
 ## 🎨 Explore Your Results
 
-Launch the interactive Streamlit page to explore results:
+Launch the interactive Streamlit dashboard to explore results:
 
 ```bash
-streamlit run scripts/dashboard.py
+make dashboard RUN_ID=xgb_37
 ```
 
-Access at `http://localhost:8501`
+Access at `http://localhost:8501`. Logs are saved under `logs/`.
+
+By default, individual plots are saved for index 6. Override with:
+
+```bash
+make dashboard RUN_ID=xgb_37 SAVE_PLOTS="0,6"
+```
 
 **Features (WIP):**
 - Compare predictions across models

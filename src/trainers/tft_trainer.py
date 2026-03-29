@@ -25,7 +25,6 @@ from .tft_model import (
     create_final_trainer,
     create_search_trainer,
     create_tft_model,
-    create_trial_checkpoint,
     load_tft_checkpoint,
 )
 from .tft_utils import get_default_num_workers, single_gpu_env, teardown_distributed
@@ -45,16 +44,16 @@ def hyperparameter_search_tft(
     best_score = float("inf")
     best_params = None
 
+    train_loader, val_loader = create_dataloaders(train_dataset, val_dataset, trainer_cfg.batch_size)
+
     for i, params in enumerate(ParameterSampler(search_cfg.param_dist, n_iter=search_cfg.search_iter_n, random_state=0)):
         logging.info(f"TFT Search Iteration {i+1}/{search_cfg.search_iter_n} - Params: {params}")
 
         n_targets = len(targets)
         tft = create_tft_model(train_dataset, params, n_targets)
 
-        checkpoint_callback = create_trial_checkpoint(run_id, i)
-        trainer = create_search_trainer(trainer_cfg, checkpoint_callback)
+        trainer = create_search_trainer(trainer_cfg)
 
-        train_loader, val_loader = create_dataloaders(train_dataset, val_dataset, trainer_cfg.batch_size)
         trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
         val_loss = trainer.callback_metrics["val_loss"].item()
@@ -70,6 +69,17 @@ def hyperparameter_search_tft(
     return best_params
 
 
+def _is_primary_rank() -> bool:
+    """Check if this is the primary DDP rank (or non-DDP)."""
+    rank_vars = [
+        os.getenv("LOCAL_RANK"),
+        os.getenv("PL_TRAINER_GLOBAL_RANK"),
+        os.getenv("GLOBAL_RANK"),
+        os.getenv("RANK"),
+    ]
+    return all(rv in (None, "0") for rv in rank_vars)
+
+
 def train_final_tft(
     train_dataset,
     val_dataset,
@@ -78,16 +88,19 @@ def train_final_tft(
     best_params: Dict,
     session_state: Optional[Dict] = None,
 ) -> None:
-    """Train final TFT on combined train+val and save checkpoint."""
-    trainer_cfg = TFTTrainerConfig()
+    """Train final TFT on combined train+val and save checkpoint.
 
+    All DDP ranks must execute the same code path so they all reach
+    trainer.fit() together.  Only rank 0 writes logs, summaries, and
+    the dataset template.
+    """
+    trainer_cfg = TFTTrainerConfig()
     final_dir = os.path.join(get_run_root(run_id), "final")
-    os.makedirs(final_dir, exist_ok=True)
     final_ckpt_path = os.path.join(final_dir, "best.ckpt")
 
-    # Create model with best params
-    n_targets = len(targets)
-    tft_final = create_tft_model(train_dataset, best_params, n_targets)
+    primary = _is_primary_rank()
+
+    os.makedirs(final_dir, exist_ok=True)
 
     # Get original DataFrames from session_state
     train_df = None
@@ -104,22 +117,30 @@ def train_final_tft(
     # Create combined dataset
     combined_dataset = create_combined_dataset(train_dataset, train_df, val_df)
 
-    train_len = len(train_dataset)
-    val_len = len(val_dataset)
-    combined_len = len(combined_dataset)
-    train_df_rows = len(train_df)
-    val_df_rows = len(val_df)
-    logging.info(
-        "TFT final training dataset sizes -> train=%d (rows=%d) val=%d (rows=%d) combined=%d",
-        train_len,
-        train_df_rows,
-        val_len,
-        val_df_rows,
-        combined_len,
-    )
+    if primary:
+        train_len = len(train_dataset)
+        val_len = len(val_dataset)
+        combined_len = len(combined_dataset)
+        train_df_rows = len(train_df)
+        val_df_rows = len(val_df)
+        logging.info(
+            "TFT final training dataset sizes -> train=%d (rows=%d) val=%d (rows=%d) combined=%d",
+            train_len,
+            train_df_rows,
+            val_len,
+            val_df_rows,
+            combined_len,
+        )
 
-    # Save dataset template
-    save_dataset_template(combined_dataset, run_id)
+        # Save dataset template (used later for prediction)
+        save_dataset_template(combined_dataset, run_id)
+
+    # Create model with best params; disable LR scheduler since there is
+    # no validation loader and ReduceLROnPlateau cannot monitor val_loss.
+    n_targets = len(targets)
+    tft_final = create_tft_model(
+        train_dataset, best_params, n_targets, disable_lr_scheduler=True,
+    )
 
     combined_loader = combined_dataset.to_dataloader(
         train=True,
@@ -130,46 +151,50 @@ def train_final_tft(
 
     final_trainer = create_final_trainer(trainer_cfg)
     final_trainer.fit(model=tft_final, train_dataloaders=combined_loader)
-    final_trainer.save_checkpoint(final_ckpt_path)
 
-    callback_metrics = final_trainer.callback_metrics if hasattr(final_trainer, "callback_metrics") else {}
+    # Tear down DDP process group immediately so non-primary ranks can exit
+    # without NCCL watchdog timeouts on rank 0.
+    teardown_distributed()
 
-    def _metric_to_float(value):
-        if isinstance(value, torch.Tensor):
-            return float(value.detach().cpu().item())
-        if isinstance(value, (int, float)):
-            return float(value)
+    if primary:
+        final_trainer.save_checkpoint(final_ckpt_path)
+        callback_metrics = final_trainer.callback_metrics if hasattr(final_trainer, "callback_metrics") else {}
+
+        def _metric_to_float(value):
+            if isinstance(value, torch.Tensor):
+                return float(value.detach().cpu().item())
+            if isinstance(value, (int, float)):
+                return float(value)
+            try:
+                return float(value)
+            except Exception:
+                return None
+
+        train_loss = _metric_to_float(callback_metrics.get("train_loss"))
+        val_loss = _metric_to_float(callback_metrics.get("val_loss"))
+        logging.info(
+            "TFT final training losses -> train_loss=%s val_loss=%s",
+            f"{train_loss:.6f}" if train_loss is not None else "NA",
+            f"{val_loss:.6f}" if val_loss is not None else "NA",
+        )
+
+        summary = {
+            "best_params": best_params,
+            "train_set_rows": train_len,
+            "val_set_rows": val_len,
+            "combined_rows": combined_len,
+            "train_dataframe_rows": train_df_rows,
+            "val_dataframe_rows": val_df_rows,
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+        }
+        summary_path = os.path.join(final_dir, "training_summary.json")
         try:
-            return float(value)
-        except Exception:
-            return None
-
-    train_loss = _metric_to_float(callback_metrics.get("train_loss"))
-    val_loss = _metric_to_float(callback_metrics.get("val_loss"))
-    logging.info(
-        "TFT final training losses -> train_loss=%s val_loss=%s",
-        f"{train_loss:.6f}" if train_loss is not None else "NA",
-        f"{val_loss:.6f}" if val_loss is not None else "NA",
-    )
-
-    summary = {
-        "best_params": best_params,
-        "train_set_rows": train_len,
-        "val_set_rows": val_len,
-        "combined_rows": combined_len,
-        "train_dataframe_rows": train_df_rows,
-        "val_dataframe_rows": val_df_rows,
-        "train_loss": train_loss,
-        "val_loss": val_loss,
-    }
-    # Persist summary alongside checkpoint for post-run inspection
-    summary_path = os.path.join(final_dir, "training_summary.json")
-    try:
-        with open(summary_path, "w", encoding="utf-8") as fp:
-            json.dump(summary, fp, indent=2)
-        logging.info("Saved TFT training summary to %s", summary_path)
-    except Exception as exc:
-        logging.warning("Failed to write TFT training summary: %s", exc)
+            with open(summary_path, "w", encoding="utf-8") as fp:
+                json.dump(summary, fp, indent=2)
+            logging.info("Saved TFT training summary to %s", summary_path)
+        except Exception as exc:
+            logging.warning("Failed to write TFT training summary: %s", exc)
 
     if session_state is not None and "tft_time_idx_column" not in session_state:
         session_state["tft_time_idx_column"] = getattr(train_dataset, "time_idx", "Step")

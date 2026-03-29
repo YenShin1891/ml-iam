@@ -6,11 +6,10 @@ from typing import Dict, List, Optional
 
 import torch
 from lightning.pytorch import Trainer
-from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
+from lightning.pytorch.callbacks import EarlyStopping
 from pytorch_forecasting import TemporalFusionTransformer, RMSE, TimeSeriesDataSet
 from pytorch_forecasting.metrics import MultiLoss
 
-from configs.paths import RESULTS_PATH
 from configs.models.tft import TFTTrainerConfig
 from .tft_utils import get_default_num_workers
 from src.utils.utils import get_run_root
@@ -19,9 +18,16 @@ from src.utils.utils import get_run_root
 def create_tft_model(
     train_dataset: TimeSeriesDataSet,
     params: Dict,
-    n_targets: int
+    n_targets: int,
+    disable_lr_scheduler: bool = False,
 ) -> TemporalFusionTransformer:
-    """Create TFT model with given parameters."""
+    """Create TFT model with given parameters.
+
+    Args:
+        disable_lr_scheduler: Set True for final training where no val_loss
+            is available to monitor.  Passes reduce_on_plateau_patience=None
+            so pytorch-forecasting skips the ReduceLROnPlateau scheduler.
+    """
     if n_targets > 1:
         output_size = [1] * n_targets
         loss = MultiLoss([RMSE() for _ in range(n_targets)])
@@ -29,8 +35,7 @@ def create_tft_model(
         output_size = 1
         loss = RMSE()
 
-    return TemporalFusionTransformer.from_dataset(
-        train_dataset,
+    kwargs = dict(
         hidden_size=params["hidden_size"],
         lstm_layers=params["lstm_layers"],
         dropout=params["dropout"],
@@ -39,6 +44,13 @@ def create_tft_model(
         loss=loss,
         log_interval=0,
     )
+    if disable_lr_scheduler:
+        # Setting patience to None causes pytorch-forecasting to return an
+        # empty scheduler dict which Lightning rejects.  Instead, set an
+        # unreachably high patience so the scheduler never fires.
+        kwargs["reduce_on_plateau_patience"] = 999999
+
+    return TemporalFusionTransformer.from_dataset(train_dataset, **kwargs)
 
 
 def create_dataloaders(
@@ -62,37 +74,26 @@ def create_dataloaders(
     return train_loader, val_loader
 
 
-def create_trial_checkpoint(run_id: str, trial_idx: int) -> ModelCheckpoint:
-    """Create checkpoint callback for hyperparameter search trial."""
-    trial_dir = os.path.join(get_run_root(run_id), "search", f"trial_{trial_idx}")
-    os.makedirs(trial_dir, exist_ok=True)
-    
-    return ModelCheckpoint(
-        dirpath=trial_dir,
-        filename="best",
-        monitor="val_loss",
-        mode="min",
-        save_top_k=1,
-        save_last=False,
-    )
 
+def create_search_trainer(trainer_cfg: TFTTrainerConfig) -> Trainer:
+    """Create trainer for hyperparameter search.
 
-def create_search_trainer(
-    trainer_cfg: TFTTrainerConfig,
-    checkpoint_callback: ModelCheckpoint
-) -> Trainer:
-    """Create trainer for hyperparameter search."""
+    Uses a single device because search runs trials sequentially —
+    DDP subprocess launching would re-run the entire search loop
+    on every spawned rank, causing recursive launches.
+    """
     early_stop = EarlyStopping(monitor="val_loss", patience=trainer_cfg.patience, mode="min")
-    
+
     return Trainer(
         max_epochs=trainer_cfg.max_epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
-        devices=trainer_cfg.devices,
+        devices=1,
         strategy="auto",
         gradient_clip_val=trainer_cfg.gradient_clip_val,
-        callbacks=[early_stop, checkpoint_callback],
+        callbacks=[early_stop],
         logger=False,
         enable_progress_bar=False,
+        enable_checkpointing=False,
     )
 
 

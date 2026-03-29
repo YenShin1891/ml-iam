@@ -21,5 +21,5 @@ two_window: true
 phases: [preprocess, train, test, plot]
 
 # To resume an existing run, set run_id and resume (overrides 'phases'):
-run_id: tft_74        # existing run ID under results/tft/
-resume: train         # phase to resume from (preprocess, search, train, test, plot)
+# run_id: tft_74        # existing run ID under results/tft/
+# resume: train         # phase to resume from (preprocess, search, train, test, plot)
