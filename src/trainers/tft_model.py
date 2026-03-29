@@ -76,13 +76,18 @@ def create_dataloaders(
 
 
 def create_search_trainer(trainer_cfg: TFTTrainerConfig) -> Trainer:
-    """Create trainer for hyperparameter search."""
+    """Create trainer for hyperparameter search.
+
+    Uses a single device because search runs trials sequentially —
+    DDP subprocess launching would re-run the entire search loop
+    on every spawned rank, causing recursive launches.
+    """
     early_stop = EarlyStopping(monitor="val_loss", patience=trainer_cfg.patience, mode="min")
 
     return Trainer(
         max_epochs=trainer_cfg.max_epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
-        devices=trainer_cfg.devices,
+        devices=1,
         strategy="auto",
         gradient_clip_val=trainer_cfg.gradient_clip_val,
         callbacks=[early_stop],
