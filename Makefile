@@ -70,13 +70,13 @@ train-bg:
 	echo "Stop: make stop PID_FILE=$$pid"
 
 
-# Stop a background training session (kills all child processes including DDP workers)
+# Stop a background session (training or dashboard)
 PID_FILE ?=
 stop:
 	@if [ -z "$(PID_FILE)" ]; then \
 		echo "ERROR: PID_FILE is required (e.g. make stop PID_FILE=logs/train_20260326_110407.pid)"; \
 		echo "Active sessions:"; \
-		ls -t $(LOG_DIR)/train_*.pid 2>/dev/null || echo "  (none)"; \
+		ls -t $(LOG_DIR)/train_*.pid $(LOG_DIR)/dashboard_*.pid 2>/dev/null || echo "  (none)"; \
 		exit 2; \
 	fi
 	@if [ ! -f "$(PID_FILE)" ]; then \
@@ -90,11 +90,11 @@ stop:
 	echo "Done. Verify with: make status"
 
 
-# List active training sessions
+# List active sessions (training + dashboard)
 status:
-	@echo "=== Active training sessions ==="; \
+	@echo "=== Active sessions ==="; \
 	found=0; \
-	for pidfile in $(LOG_DIR)/train_*.pid; do \
+	for pidfile in $(LOG_DIR)/train_*.pid $(LOG_DIR)/dashboard_*.pid; do \
 		[ -f "$$pidfile" ] || continue; \
 		pid=$$(cat "$$pidfile"); \
 		if kill -0 "$$pid" 2>/dev/null && [ -d "/proc/$$pid" ]; then \
@@ -120,18 +120,23 @@ RUN_ID ?=
 # Optional: save individual plots (comma-separated indices, default: 6)
 SAVE_PLOTS ?= 6
 
+DASHBOARD_ENV ?= mliam_st
+
 dashboard:
 	@if [ -z "$(RUN_ID)" ]; then \
 		echo "ERROR: RUN_ID is required (e.g. RUN_ID=xgb_37)"; \
 		exit 2; \
 	fi
 	@mkdir -p "$(LOG_DIR)"
+	source "$(CONDA_SH)"
+	conda activate "$(DASHBOARD_ENV)"
 	@ts=$$(date +%Y%m%d_%H%M%S); \
 	log="$(LOG_DIR)/dashboard_$${ts}.log"; \
 	pid="$(LOG_DIR)/dashboard_$${ts}.pid"; \
 	nohup env SAVE_INDIVIDUAL_PLOTS=true INDIVIDUAL_PLOT_INDICES="[$(SAVE_PLOTS)]" \
+		PYTHONUNBUFFERED=1 \
 		streamlit run scripts/dashboard.py \
-		--logger.level=info \
+		--logger.level=debug \
 		--server.runOnSave=false \
 		-- --run_id=$(RUN_ID) > "$$log" 2>&1 & \
 	echo $$! > "$$pid"; \
