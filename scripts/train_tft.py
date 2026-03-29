@@ -92,29 +92,48 @@ def _search_with_splits(splits, store):
     return best_params
 
 
+def _is_primary_rank():
+    import os
+    rank_vars = [
+        os.getenv("LOCAL_RANK"),
+        os.getenv("PL_TRAINER_GLOBAL_RANK"),
+        os.getenv("GLOBAL_RANK"),
+        os.getenv("RANK"),
+    ]
+    return all(rv in (None, "0") for rv in rank_vars)
+
+
 def train_tft(store, lag_required=True):
     """Final training using best_params."""
     from src.trainers.tft_dataset import build_datasets
     from src.trainers.tft_trainer import train_final_tft as _train_final
 
-    logging.info("Starting final TFT training...")
+    primary = _is_primary_rank()
+
+    if primary:
+        logging.info("Starting final TFT training...")
+
     data = store.load_processed_data()
     splits = derive_splits(data, lag_required=lag_required)
 
     best_params = store.load_best_params()
 
-    logging.info("Training with best params: %s", best_params)
+    if primary:
+        logging.info("Training with best params: %s", best_params)
 
     session_state = dict(splits)
-    train_dataset, val_dataset = build_datasets(session_state)
+    train_dataset, val_dataset = build_datasets(
+        dict(splits)  # build_datasets needs its own copy since it mutates
+    )
 
     _train_final(
         train_dataset, val_dataset, splits["targets"],
         store.run_id, best_params, session_state=session_state,
     )
-    store.save_features(splits["features"], splits["targets"])
 
-    logging.info("Final TFT training complete.")
+    if primary:
+        store.save_features(splits["features"], splits["targets"])
+        logging.info("Final TFT training complete.")
     return best_params
 
 

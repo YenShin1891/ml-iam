@@ -935,6 +935,17 @@ def hyperparameter_search_lstm_sequential(
     return best_params
 
 
+def _is_primary_rank() -> bool:
+    """Check if this is the primary DDP rank (or non-DDP)."""
+    rank_vars = [
+        os.getenv("LOCAL_RANK"),
+        os.getenv("PL_TRAINER_GLOBAL_RANK"),
+        os.getenv("GLOBAL_RANK"),
+        os.getenv("RANK"),
+    ]
+    return all(rv in (None, "0") for rv in rank_vars)
+
+
 def train_final_lstm(
     train_data: pd.DataFrame,
     val_data: pd.DataFrame,
@@ -944,7 +955,12 @@ def train_final_lstm(
     session_state: Optional[Dict] = None,
     features: List[str] = None
 ) -> None:
-    """Train final LSTM model with best parameters."""
+    """Train final LSTM model with best parameters.
+
+    Under DDP, only rank 0 logs metrics and saves artifacts to session_state.
+    All ranks build the dataset and model (cheap) so trainer.fit() can proceed.
+    """
+    primary = _is_primary_rank()
 
     # Combine train and validation data (like TFT's create_combined_dataset)
     combined_data = pd.concat([train_data, val_data], ignore_index=True)
@@ -1009,19 +1025,20 @@ def train_final_lstm(
     # Train on combined data
     trainer.fit(model=model, train_dataloaders=combined_loader)
 
-    # Log final training loss
-    final_train_loss = trainer.callback_metrics.get("train_loss")
-    if final_train_loss is not None:
-        logging.info(f"Final training loss: {final_train_loss:.4f}")
-    else:
-        logging.warning("Final training loss not available in callback metrics")
+    if primary:
+        # Log final training loss
+        final_train_loss = trainer.callback_metrics.get("train_loss")
+        if final_train_loss is not None:
+            logging.info(f"Final training loss: {final_train_loss:.4f}")
+        else:
+            logging.warning("Final training loss not available in callback metrics")
 
     # Save final checkpoint manually
     final_ckpt_path = os.path.join(final_dir, "best.ckpt")
     trainer.save_checkpoint(final_ckpt_path)
 
-    # Save scalers and config to session state
-    if session_state is not None:
+    # Save scalers and config to session state (only on primary rank)
+    if primary and session_state is not None:
         session_state["lstm_scaler_X"] = combined_dataset.scaler_X
         session_state["lstm_scaler_y"] = combined_dataset.scaler_y
         session_state["lstm_config"] = config

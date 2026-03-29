@@ -1,7 +1,7 @@
 import inspect
 import logging
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from typing import Optional
 
 from configs.paths import RESULTS_PATH
@@ -16,17 +16,14 @@ def get_run_root(run_id: str) -> str:
     model_type = run_id.split("_", 1)[0]
     return os.path.join(RESULTS_PATH, model_type, run_id)
 
-# for logging
-class KSTFormatter(logging.Formatter):
+class LocalFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
-        kst = timezone(timedelta(hours=9))  # KST is UTC+9
-        record_time = datetime.fromtimestamp(record.created, tz=kst)
+        record_time = datetime.fromtimestamp(record.created).astimezone()
         return record_time.strftime(datefmt or '%Y-%m-%d %H:%M:%S')
 
 
 def _make_formatter(fmt: str = '%(asctime)s - %(levelname)s - %(message)s') -> logging.Formatter:
-    """Return a KST-based formatter with the standard format."""
-    return KSTFormatter(fmt)
+    return LocalFormatter(fmt)
 
 
 def _make_stream_handler(level: int = logging.INFO, fmt: Optional[str] = None) -> logging.Handler:
@@ -145,21 +142,3 @@ def load_model(run_id):
     except Exception as e:
         logging.error("Error loading model: %s", str(e))
         return None
-
-
-def masked_mse(y_true, y_pred):
-    import tensorflow as tf
-    # Ensure both y_true and y_pred are float32
-    y_true = tf.cast(y_true, dtype=tf.float32)
-    y_pred = tf.cast(y_pred, dtype=tf.float32)
-
-    mask = tf.math.logical_not(tf.math.is_nan(y_true))
-    mask = tf.cast(mask, dtype=tf.float32)
-
-    y_true = tf.where(mask == 1.0, y_true, tf.zeros_like(y_true))
-    y_pred = tf.where(mask == 1.0, y_pred, tf.zeros_like(y_pred))
-
-    squared_error = tf.square(y_true - y_pred)
-
-    masked_loss = tf.reduce_sum(squared_error * mask) / tf.reduce_sum(mask)
-    return masked_loss
