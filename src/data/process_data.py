@@ -25,7 +25,7 @@ import pandas as pd
 # Local config (new consolidated modules)
 from configs.paths import DATA_PATH, RESULTS_PATH, RAW_DATA_PATH
 from configs import data as dp
-from src.utils.utils import setup_console_logging, KSTFormatter
+from src.utils.utils import setup_console_logging, LocalFormatter
 
 
 # ---------- Paths & constants ----------
@@ -539,7 +539,7 @@ def main() -> None:
     log_file = log_dir / f"process_data_{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
     file_handler = logging.FileHandler(log_file)
     file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(KSTFormatter('%(asctime)s - %(levelname)s - %(message)s'))
+    file_handler.setFormatter(LocalFormatter('%(asctime)s - %(levelname)s - %(message)s'))
     logger.addHandler(file_handler)
     logging.info(f"File logging enabled: {log_file}")
 

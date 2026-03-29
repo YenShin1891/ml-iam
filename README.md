@@ -91,6 +91,7 @@ conda activate ml-iam
 
 # Install dependencies
 pip install -r requirements.txt
+pip install -e .
 ```
 
 ### Step 2: Configure Paths

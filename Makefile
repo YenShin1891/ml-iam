@@ -12,8 +12,7 @@ RESULTS_DIR ?=
 
 process-data:
 	source "$(CONDA_SH)"
-	eval "$$(mamba shell hook --shell bash)"
-	mamba activate "$(CONDA_ENV)"
+	conda activate "$(CONDA_ENV)"
 	RAW_DIR="$${RAW_DIR:-$$(python -c 'import configs.paths as c; print(c.RAW_DATA_PATH)')}" ; \
 	DATA_DIR="$${DATA_DIR:-$$(python -c 'import configs.paths as c; print(c.DATA_PATH)')}" ; \
 	RESULTS_DIR="$${RESULTS_DIR:-$$(python -c 'import configs.paths as c; print(c.RESULTS_PATH)')}" ; \
@@ -30,8 +29,8 @@ process-data:
 # Run config file (YAML/JSON) used by scripts/train_from_config.py
 RUN ?=
 
-# Conda/mamba activation (mirrors existing train_test_*.sh scripts)
-CONDA_SH ?= /root/conda/etc/profile.d/conda.sh
+# Conda activation (auto-detect from conda on PATH)
+CONDA_SH ?= $(shell conda info --base 2>/dev/null)/etc/profile.d/conda.sh
 CONDA_ENV ?= ml-iam
 
 # Foreground training (prints run_id to stdout)
@@ -43,8 +42,7 @@ train:
 		exit 2; \
 	fi
 	source "$(CONDA_SH)"
-	eval "$$(mamba shell hook --shell bash)"
-	mamba activate "$(CONDA_ENV)"
+	conda activate "$(CONDA_ENV)"
 	python scripts/train_from_config.py --run "$(RUN)"
 
 
