@@ -104,52 +104,37 @@ def _is_primary_rank():
 
 
 def train_tft(store, lag_required=True):
-    """Final training using best_params.
-
-    Under DDP, non-primary ranks skip the expensive derive_splits() and
-    build_datasets() calls.  They only need a minimal train_dataset (for
-    model construction) which they rebuild cheaply from the template that
-    rank 0 already saved during preprocessing.
-    """
+    """Final training using best_params."""
+    from src.trainers.tft_dataset import build_datasets
     from src.trainers.tft_trainer import train_final_tft as _train_final
 
     primary = _is_primary_rank()
 
     if primary:
-        from src.trainers.tft_dataset import build_datasets
-
         logging.info("Starting final TFT training...")
-        data = store.load_processed_data()
-        splits = derive_splits(data, lag_required=lag_required)
 
-        best_params = store.load_best_params()
+    data = store.load_processed_data()
+    splits = derive_splits(data, lag_required=lag_required)
+
+    best_params = store.load_best_params()
+
+    if primary:
         logging.info("Training with best params: %s", best_params)
 
-        session_state = dict(splits)
-        train_dataset, val_dataset = build_datasets(session_state)
+    session_state = dict(splits)
+    train_dataset, val_dataset = build_datasets(
+        dict(splits)  # build_datasets needs its own copy since it mutates
+    )
 
-        _train_final(
-            train_dataset, val_dataset, splits["targets"],
-            store.run_id, best_params, session_state=session_state,
-        )
+    _train_final(
+        train_dataset, val_dataset, splits["targets"],
+        store.run_id, best_params, session_state=session_state,
+    )
+
+    if primary:
         store.save_features(splits["features"], splits["targets"])
         logging.info("Final TFT training complete.")
-        return best_params
-    else:
-        from src.trainers.tft_dataset import load_dataset_template
-
-        logging.info("Non-primary rank: skipping preprocessing, loading saved artifacts...")
-        best_params = store.load_best_params()
-        features, targets = store.load_features()
-
-        # Load the dataset template saved by rank 0 during search/prior run
-        train_dataset = load_dataset_template(store.run_id)
-
-        _train_final(
-            train_dataset, None, targets,
-            store.run_id, best_params,
-        )
-        return best_params
+    return best_params
 
 
 def test_tft(store, lag_required=True, use_two_window=False):

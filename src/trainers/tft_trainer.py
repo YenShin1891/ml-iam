@@ -90,9 +90,9 @@ def train_final_tft(
 ) -> None:
     """Train final TFT on combined train+val and save checkpoint.
 
-    When running under DDP, rank 0 prepares the combined dataset and saves
-    the template to disk.  Non-primary ranks skip preprocessing and load the
-    saved template instead, avoiding redundant I/O and computation.
+    All DDP ranks must execute the same code path so they all reach
+    trainer.fit() together.  Only rank 0 writes logs, summaries, and
+    the dataset template.
     """
     trainer_cfg = TFTTrainerConfig()
     final_dir = os.path.join(get_run_root(run_id), "final")
@@ -100,24 +100,24 @@ def train_final_tft(
 
     primary = _is_primary_rank()
 
+    os.makedirs(final_dir, exist_ok=True)
+
+    # Get original DataFrames from session_state
+    train_df = None
+    val_df = None
+    if session_state is not None:
+        train_df = session_state.get("train_data")
+        val_df = session_state.get("val_data")
+
+    if not isinstance(train_df, pd.DataFrame) or not isinstance(val_df, pd.DataFrame):
+        raise RuntimeError(
+            "train_final_tft requires session_state to include both train_data and val_data as DataFrames"
+        )
+
+    # Create combined dataset
+    combined_dataset = create_combined_dataset(train_dataset, train_df, val_df)
+
     if primary:
-        os.makedirs(final_dir, exist_ok=True)
-
-        # Get original DataFrames from session_state
-        train_df = None
-        val_df = None
-        if session_state is not None:
-            train_df = session_state.get("train_data")
-            val_df = session_state.get("val_data")
-
-        if not isinstance(train_df, pd.DataFrame) or not isinstance(val_df, pd.DataFrame):
-            raise RuntimeError(
-                "train_final_tft requires session_state to include both train_data and val_data as DataFrames"
-            )
-
-        # Create combined dataset
-        combined_dataset = create_combined_dataset(train_dataset, train_df, val_df)
-
         train_len = len(train_dataset)
         val_len = len(val_dataset)
         combined_len = len(combined_dataset)
@@ -132,12 +132,8 @@ def train_final_tft(
             combined_len,
         )
 
-        # Save dataset template (also used by non-primary ranks)
+        # Save dataset template (used later for prediction)
         save_dataset_template(combined_dataset, run_id)
-    else:
-        # Non-primary DDP rank: load the template saved by rank 0.
-        logging.info("Non-primary rank: loading combined dataset template from disk.")
-        combined_dataset = load_dataset_template(run_id)
 
     # Create model with best params; disable LR scheduler since there is
     # no validation loader and ReduceLROnPlateau cannot monitor val_loss.
@@ -155,9 +151,13 @@ def train_final_tft(
 
     final_trainer = create_final_trainer(trainer_cfg)
     final_trainer.fit(model=tft_final, train_dataloaders=combined_loader)
-    final_trainer.save_checkpoint(final_ckpt_path)
+
+    # Tear down DDP process group immediately so non-primary ranks can exit
+    # without NCCL watchdog timeouts on rank 0.
+    teardown_distributed()
 
     if primary:
+        final_trainer.save_checkpoint(final_ckpt_path)
         callback_metrics = final_trainer.callback_metrics if hasattr(final_trainer, "callback_metrics") else {}
 
         def _metric_to_float(value):
