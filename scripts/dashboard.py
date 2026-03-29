@@ -8,7 +8,7 @@ import os
 import sys
 import argparse
 
-from src.visualization import plot_trajectories, get_saved_plots_metadata
+from src.visualization.trajectories import plot_trajectories, get_saved_plots_metadata
 from src.utils.utils import setup_logging
 from src.utils.run_store import RunStore
 from configs.data import REGION_CODE_TO_LABEL
