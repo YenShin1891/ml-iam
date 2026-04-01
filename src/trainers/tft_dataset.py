@@ -127,30 +127,7 @@ def load_dataset_template(run_id: str) -> TimeSeriesDataSet:
             f"Dataset template not found at {dataset_tpl_path}. Run train_final_tft to generate it."
         )
     
-    try:
-        from pytorch_forecasting.data.timeseries._timeseries import TimeSeriesDataSet as _PFTimeSeriesDataSet
-    except Exception:
-        from pytorch_forecasting.data.timeseries import TimeSeriesDataSet as _PFTimeSeriesDataSet
-    
-    try:
-        import torch.serialization as _ts
-        if hasattr(_ts, "add_safe_globals"):
-            _ts.add_safe_globals([_PFTimeSeriesDataSet])
-        
-        try:
-            template = torch.load(dataset_tpl_path, map_location="cpu")
-        except Exception as inner_e:
-            try:
-                template = torch.load(dataset_tpl_path, map_location="cpu", weights_only=False)
-                logging.info("Loaded dataset template with weights_only=False due to prior failure: %s", inner_e)
-            except Exception as retry_e:
-                raise RuntimeError(
-                    "Failed to load dataset template even after retry with weights_only=False. "
-                    f"Original error: {inner_e}; Retry error: {retry_e}"
-                ) from retry_e
-    except Exception as e:
-        raise RuntimeError(f"Failed to load dataset template from {dataset_tpl_path}: {e}")
-    
+    template = torch.load(dataset_tpl_path, map_location="cpu", weights_only=False)
     return template
 
 

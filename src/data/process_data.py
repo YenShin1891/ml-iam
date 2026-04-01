@@ -236,7 +236,7 @@ def resolve_effective_base_year(model: str, meta: pd.DataFrame, available_years:
     """
     years_sorted = sorted(available_years)
     row = meta.loc[meta['Model'] == model]
-    base_candidate: int | None = None
+    base_candidate: Optional[int] = None
     if not row.empty:
         val = row.iloc[0].get('Base year')
         try:
@@ -343,7 +343,7 @@ def run_pipeline(
     output_variables: Iterable[str],
     min_count: Optional[int] = None,
     completeness_ratio: Optional[float] = None,
-    filenames: Iterable[str] | None = None,
+    filenames: Optional[Iterable[str]] = None,
 ) -> Path:
     """Execute the end-to-end processing and return the path to the dataset CSV."""
     # Defaults for AR6 file names (v1.1) matching the original notebook

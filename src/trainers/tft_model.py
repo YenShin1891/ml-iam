@@ -138,15 +138,9 @@ def load_tft_checkpoint(run_id: str) -> TemporalFusionTransformer:
         raise FileNotFoundError(f"Final TFT checkpoint not found at {final_ckpt_path}")
     
     try:
-        from pytorch_forecasting.models.base._base_model import Prediction as _PFPrediction
-        import torch.serialization as _ts
-        if hasattr(_ts, "add_safe_globals"):
-            _ts.add_safe_globals([_PFPrediction])
-    except Exception:
-        pass
-    
-    try:
-        model = TemporalFusionTransformer.load_from_checkpoint(final_ckpt_path)
+        model = TemporalFusionTransformer.load_from_checkpoint(
+            final_ckpt_path, weights_only=False
+        )
         model.eval()
         logging.info("Loaded TFT model from %s", final_ckpt_path)
         return model
