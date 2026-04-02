@@ -15,7 +15,6 @@ from configs.models import TFTSearchSpace, TFTTrainerConfig
 from src.utils.utils import get_run_root
 from .tft_dataset import (
     build_datasets,
-    create_combined_dataset,
     from_train_template,
     load_dataset_template,
     save_dataset_template,
@@ -88,7 +87,10 @@ def train_final_tft(
     best_params: Dict,
     session_state: Optional[Dict] = None,
 ) -> None:
-    """Train final TFT on combined train+val and save checkpoint.
+    """Train final TFT on train set with val set for monitoring.
+
+    Uses the same regime as search (early stopping + LR scheduler on
+    val_loss) so hyperparameter rankings transfer reliably.
 
     All DDP ranks must execute the same code path so they all reach
     trainer.fit() together.  Only rank 0 writes logs, summaries, and
@@ -102,55 +104,33 @@ def train_final_tft(
 
     os.makedirs(final_dir, exist_ok=True)
 
-    # Get original DataFrames from session_state
-    train_df = None
-    val_df = None
-    if session_state is not None:
-        train_df = session_state.get("train_data")
-        val_df = session_state.get("val_data")
-
-    if not isinstance(train_df, pd.DataFrame) or not isinstance(val_df, pd.DataFrame):
-        raise RuntimeError(
-            "train_final_tft requires session_state to include both train_data and val_data as DataFrames"
-        )
-
-    # Create combined dataset
-    combined_dataset = create_combined_dataset(train_dataset, train_df, val_df)
-
     if primary:
         train_len = len(train_dataset)
         val_len = len(val_dataset)
-        combined_len = len(combined_dataset)
-        train_df_rows = len(train_df)
-        val_df_rows = len(val_df)
         logging.info(
-            "TFT final training dataset sizes -> train=%d (rows=%d) val=%d (rows=%d) combined=%d",
+            "TFT final training dataset sizes -> train=%d val=%d",
             train_len,
-            train_df_rows,
             val_len,
-            val_df_rows,
-            combined_len,
         )
 
         # Save dataset template (used later for prediction)
-        save_dataset_template(combined_dataset, run_id)
+        save_dataset_template(train_dataset, run_id)
 
-    # Create model with best params; disable LR scheduler since there is
-    # no validation loader and ReduceLROnPlateau cannot monitor val_loss.
+    # Create model with best params; keep LR scheduler and early stopping
+    # so final training matches the search regime.
     n_targets = len(targets)
-    tft_final = create_tft_model(
-        train_dataset, best_params, n_targets, disable_lr_scheduler=True,
-    )
+    tft_final = create_tft_model(train_dataset, best_params, n_targets)
 
-    combined_loader = combined_dataset.to_dataloader(
-        train=True,
-        batch_size=trainer_cfg.batch_size,
-        num_workers=get_default_num_workers(),
-        persistent_workers=True,
+    train_loader, val_loader = create_dataloaders(
+        train_dataset, val_dataset, trainer_cfg.batch_size,
     )
 
     final_trainer = create_final_trainer(trainer_cfg)
-    final_trainer.fit(model=tft_final, train_dataloaders=combined_loader)
+    final_trainer.fit(
+        model=tft_final,
+        train_dataloaders=train_loader,
+        val_dataloaders=val_loader,
+    )
 
     # Tear down DDP process group immediately so non-primary ranks can exit
     # without NCCL watchdog timeouts on rank 0.
@@ -182,9 +162,6 @@ def train_final_tft(
             "best_params": best_params,
             "train_set_rows": train_len,
             "val_set_rows": val_len,
-            "combined_rows": combined_len,
-            "train_dataframe_rows": train_df_rows,
-            "val_dataframe_rows": val_df_rows,
             "train_loss": train_loss,
             "val_loss": val_loss,
         }
