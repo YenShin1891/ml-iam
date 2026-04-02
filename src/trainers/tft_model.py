@@ -98,7 +98,13 @@ def create_search_trainer(trainer_cfg: TFTTrainerConfig) -> Trainer:
 
 
 def create_final_trainer(trainer_cfg: TFTTrainerConfig) -> Trainer:
-    """Create trainer for final model training."""
+    """Create trainer for final model training.
+
+    Uses early stopping on val_loss, same as the search trainer, so
+    that the training regime matches and search rankings transfer.
+    """
+    early_stop = EarlyStopping(monitor="val_loss", patience=trainer_cfg.patience, mode="min")
+
     # Use the devices configuration as-is for final training to allow multi-GPU usage
     # Only override if explicitly set to invalid values
     devices = trainer_cfg.devices
@@ -110,6 +116,7 @@ def create_final_trainer(trainer_cfg: TFTTrainerConfig) -> Trainer:
         devices=devices,
         strategy="auto",
         gradient_clip_val=trainer_cfg.gradient_clip_val,
+        callbacks=[early_stop],
         logger=False,
         enable_progress_bar=False,
         enable_checkpointing=False,  # Manual saving
