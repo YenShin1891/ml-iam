@@ -100,10 +100,12 @@ def create_search_trainer(trainer_cfg: TFTTrainerConfig) -> Trainer:
 def create_final_trainer(trainer_cfg: TFTTrainerConfig) -> Trainer:
     """Create trainer for final model training.
 
-    Uses early stopping on val_loss, same as the search trainer, so
-    that the training regime matches and search rankings transfer.
+    Uses early stopping on val_loss (same metric as search) but with a
+    larger epoch budget and more patience so the model can fully converge.
     """
-    early_stop = EarlyStopping(monitor="val_loss", patience=trainer_cfg.patience, mode="min")
+    early_stop = EarlyStopping(
+        monitor="val_loss", patience=trainer_cfg.final_patience, mode="min",
+    )
 
     # Use the devices configuration as-is for final training to allow multi-GPU usage
     # Only override if explicitly set to invalid values
@@ -111,7 +113,7 @@ def create_final_trainer(trainer_cfg: TFTTrainerConfig) -> Trainer:
     if isinstance(devices, int) and devices < 1:
         devices = 1
     return Trainer(
-        max_epochs=trainer_cfg.max_epochs,
+        max_epochs=trainer_cfg.final_max_epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=devices,
         strategy="auto",
