@@ -100,9 +100,13 @@ class TFTDatasetConfig:
 
 @dataclass
 class TFTTrainerConfig:
+    # Search phase: short runs to rank configs quickly
     max_epochs: int = 30
     batch_size: int = 64
     gradient_clip_val: float = 0.1
     patience: int = 3
+    # Final training: more room to converge
+    final_max_epochs: int = 100
+    final_patience: int = 10
     # Use Union for flexibility: -1 for all, int count, list of device indices, or "auto"
     devices: Union[int, List[int], str] = "auto"

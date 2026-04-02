@@ -29,40 +29,135 @@ from .tft_model import (
 from .tft_utils import get_default_num_workers, single_gpu_env, teardown_distributed
 
 
+def _get_search_gpu_ids() -> List[int]:
+    """Get physical GPU IDs available for search from CUDA_VISIBLE_DEVICES."""
+    cuda_env = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    if cuda_env:
+        return [int(x.strip()) for x in cuda_env.split(",") if x.strip()]
+    n = torch.cuda.device_count()
+    return list(range(n)) if n > 0 else []
+
+
+def _search_worker(gpu_id, params_list, train_dataset, val_dataset, n_targets, trainer_cfg, result_queue):
+    """Run a batch of search trials on a single GPU (spawned subprocess)."""
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+
+    # Cap dataloader workers to avoid oversubscription across many GPU workers
+    num_workers = min(get_default_num_workers(), 4)
+    train_loader = train_dataset.to_dataloader(
+        train=True, batch_size=trainer_cfg.batch_size,
+        num_workers=num_workers, persistent_workers=num_workers > 0,
+    )
+    val_loader = val_dataset.to_dataloader(
+        train=False, batch_size=trainer_cfg.batch_size,
+        num_workers=num_workers, persistent_workers=num_workers > 0,
+    )
+
+    for i, params in enumerate(params_list):
+        logging.info("GPU %d - Trial %d/%d - Params: %s", gpu_id, i + 1, len(params_list), params)
+        tft = create_tft_model(train_dataset, params, n_targets)
+        trainer = create_search_trainer(trainer_cfg)
+        trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
+        val_loss = trainer.callback_metrics["val_loss"].item()
+        result_queue.put({**params, "val_loss": val_loss})
+        logging.info("GPU %d - Trial %d/%d - val_loss: %.4f", gpu_id, i + 1, len(params_list), val_loss)
+
+
 def hyperparameter_search_tft(
     train_dataset,
     val_dataset,
     targets: List[str],
     run_id: str,
 ) -> Dict:
-    """Perform hyperparameter search for TFT model."""
+    """Perform hyperparameter search for TFT model.
+
+    When multiple GPUs are available, trials are distributed across GPUs
+    in parallel (one trial per GPU at a time, each GPU runs its share
+    sequentially).  Falls back to sequential search on a single GPU.
+    """
     search_cfg = TFTSearchSpace()
     trainer_cfg = TFTTrainerConfig()
+    n_targets = len(targets)
 
-    search_results = []
+    all_params = list(ParameterSampler(
+        search_cfg.param_dist, n_iter=search_cfg.search_iter_n, random_state=0,
+    ))
+
+    gpu_ids = _get_search_gpu_ids()
+
+    if len(gpu_ids) <= 1:
+        # Single GPU or CPU: run sequentially (original behaviour)
+        return _search_sequential(train_dataset, val_dataset, n_targets, all_params, trainer_cfg)
+
+    # --- parallel search across GPUs ---
+    import torch.multiprocessing as mp
+
+    logging.info("Parallel search across %d GPUs: %s", len(gpu_ids), gpu_ids)
+
+    # Round-robin trials to GPUs
+    gpu_params: List[List[Dict]] = [[] for _ in gpu_ids]
+    for i, params in enumerate(all_params):
+        gpu_params[i % len(gpu_ids)].append(params)
+
+    ctx = mp.get_context("spawn")
+    result_queue = ctx.Queue()
+
+    processes = []
+    for gpu_id, params_list in zip(gpu_ids, gpu_params):
+        if not params_list:
+            continue
+        p = ctx.Process(
+            target=_search_worker,
+            args=(gpu_id, params_list, train_dataset, val_dataset,
+                  n_targets, trainer_cfg, result_queue),
+        )
+        p.start()
+        processes.append(p)
+
+    for p in processes:
+        p.join()
+
+    # Check for worker failures
+    failed = [p for p in processes if p.exitcode != 0]
+    if failed:
+        raise RuntimeError(
+            f"{len(failed)} search worker(s) crashed — check logs for GPU-level errors"
+        )
+
+    results = []
+    while not result_queue.empty():
+        results.append(result_queue.get_nowait())
+
+    if not results:
+        raise RuntimeError("TFT hyperparameter search produced no results.")
+
+    best = min(results, key=lambda r: r["val_loss"])
+    best_score = best.pop("val_loss")
+    best_params = best
+
+    logging.info("Best TFT Params: %s with Val Loss: %.4f", best_params, best_score)
+    return best_params
+
+
+def _search_sequential(train_dataset, val_dataset, n_targets, all_params, trainer_cfg) -> Dict:
+    """Sequential search fallback for single-GPU / CPU environments."""
+    train_loader, val_loader = create_dataloaders(train_dataset, val_dataset, trainer_cfg.batch_size)
+
     best_score = float("inf")
     best_params = None
 
-    train_loader, val_loader = create_dataloaders(train_dataset, val_dataset, trainer_cfg.batch_size)
-
-    for i, params in enumerate(ParameterSampler(search_cfg.param_dist, n_iter=search_cfg.search_iter_n, random_state=0)):
-        logging.info(f"TFT Search Iteration {i+1}/{search_cfg.search_iter_n} - Params: {params}")
-
-        n_targets = len(targets)
+    for i, params in enumerate(all_params):
+        logging.info("TFT Search Iteration %d/%d - Params: %s", i + 1, len(all_params), params)
         tft = create_tft_model(train_dataset, params, n_targets)
-
         trainer = create_search_trainer(trainer_cfg)
-
         trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
-
         val_loss = trainer.callback_metrics["val_loss"].item()
-        search_results.append({**params, "val_loss": val_loss})
 
         if val_loss < best_score:
             best_score = val_loss
             best_params = params
 
-    logging.info(f"Best TFT Params: {best_params} with Val Loss: {best_score:.4f}")
+    logging.info("Best TFT Params: %s with Val Loss: %.4f", best_params, best_score)
     if best_params is None:
         raise RuntimeError("TFT hyperparameter search did not identify a best parameter set.")
     return best_params
