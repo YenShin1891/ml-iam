@@ -53,8 +53,8 @@ NAME_PREFIX = "pipeline"
 INCLUDE_DATE = True
 DATE_FMT = "%Y-%m-%d"
 # Tags include dynamic count of output variables
-# Pre-defined tags: include-intermediate, apply-base-year
-TAGS = [f"out={len(OUTPUT_VARIABLES)}vars", "exclude-year", "apply-base-year", "with-ssp"]
+# Pre-defined tags: include-intermediate, apply-base-year, with-ssp
+TAGS = [f"out={len(OUTPUT_VARIABLES)}vars", "exclude-year", "apply-base-year"]
 SAVE_ANALYSIS = True
 
 # Optional data structure hints (used by TFT & plotting)
