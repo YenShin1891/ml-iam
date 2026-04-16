@@ -8,20 +8,20 @@ model: xgb
 # Example: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-2025-09-24
 # dataset: pipeline-...
 
-dataset: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-2025-09-24
+dataset: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-interp-targets-scale-impute-2026-04-13
 
 # Optional: GPUs to expose for this run.
 # You can set a single value (applies to all phases) or a per-phase mapping.
 cuda_visible_devices:
-  default: "0"
-  search: "0,1,2,3"
+  default: "4"
+  search: "4,5,6,7"
 
 # Run phases in order. Typical: [preprocess, search, train, test, plot]
 # Omit 'search' to skip hyperparameter search and use defaults instead.
 phases: [preprocess, search, train, test, plot]
 
 # Optional note saved into session state (supported by xgb launcher)
-note: "Lets measure how long it takes."
+note: "With interpolation, extrapolation, and scale-aware imputation."
 
 # To resume an existing run, set run_id and resume (overrides 'phases'):
 # run_id: xgb_01        # existing run ID under results/xgb/

@@ -98,7 +98,8 @@ class LSTMDataset(Dataset):
         mask_value: float = -1.0,
         scaler_X: Optional[StandardScaler] = None,
         scaler_y: Optional[StandardScaler] = None,
-        fit_scalers: bool = True
+        fit_scalers: bool = True,
+        categorical_features: Optional[List[str]] = None,
     ):
         from configs.data import INDEX_COLUMNS
         self.sequence_length = sequence_length
@@ -108,13 +109,23 @@ class LSTMDataset(Dataset):
         self.targets = targets
         self.time_idx = time_idx
         self.group_ids = group_ids if group_ids is not None else INDEX_COLUMNS
+        self.categorical_features = categorical_features or []
 
-        # Extract features and targets
-        X = data[features].copy()
+        # Separate continuous features (to be scaled) from categorical (kept as int codes)
+        continuous_features = [f for f in features if f not in self.categorical_features]
+
+        # Extract continuous features and targets
+        X_cont = data[continuous_features].copy() if continuous_features else pd.DataFrame(index=data.index)
         y = data[targets].values.copy()
 
-        # Handle NaN values; any categorical features should have been encoded upstream.
-        X_filled = X.fillna(mask_value).astype(np.float32)
+        # Handle NaN values in continuous features
+        X_cont_filled = X_cont.fillna(mask_value).astype(np.float32)
+
+        # Extract categorical features as integer codes (no scaling)
+        if self.categorical_features:
+            X_cat = data[self.categorical_features].values.astype(np.int64)
+        else:
+            X_cat = np.empty((len(data), 0), dtype=np.int64)
 
         # Ensure y is 2D
         if y.ndim == 1:
@@ -126,19 +137,28 @@ class LSTMDataset(Dataset):
         if scaler_y is None:
             scaler_y = StandardScaler()
 
-        # Fit and transform or just transform
-        if fit_scalers:
-            self.X_scaled = scaler_X.fit_transform(X_filled)
-            self.y_scaled = scaler_y.fit_transform(y)
+        # Fit and transform or just transform (only continuous features)
+        if continuous_features:
+            if fit_scalers:
+                self.X_cont_scaled = scaler_X.fit_transform(X_cont_filled)
+                self.y_scaled = scaler_y.fit_transform(y)
+            else:
+                self.X_cont_scaled = scaler_X.transform(X_cont_filled)
+                self.y_scaled = scaler_y.transform(y)
         else:
-            self.X_scaled = scaler_X.transform(X_filled)
-            self.y_scaled = scaler_y.transform(y)
+            self.X_cont_scaled = np.empty((len(data), 0), dtype=np.float32)
+            if fit_scalers:
+                self.y_scaled = scaler_y.fit_transform(y)
+            else:
+                self.y_scaled = scaler_y.transform(y)
 
+        self.X_cat = X_cat
         self.scaler_X = scaler_X
         self.scaler_y = scaler_y
 
         # Create sequences WITHIN groups (like TFT)
-        self.X_sequences = []
+        self.X_sequences = []       # continuous features (scaled)
+        self.cat_sequences = []     # categorical indices (unscaled)
         self.y_sequences = []
         self.previous_targets = []  # Previous targets for teacher forcing
         self.masks = []
@@ -163,27 +183,27 @@ class LSTMDataset(Dataset):
                 target_pos = data.index.get_loc(target_idx)
 
                 # Extract sequence (historical context)
-                x_seq = self.X_scaled[start_pos:start_pos + sequence_length]
+                x_seq = self.X_cont_scaled[start_pos:start_pos + sequence_length]
+                cat_seq = self.X_cat[start_pos:start_pos + sequence_length]
                 # Target is offset ahead of sequence end
                 y_seq = self.y_scaled[target_pos]
 
                 # Create previous targets for teacher forcing
-                # We want previous_targets[t] to contain the true target at the input timestep t
-                # so that during unrolling previous_targets[:, t-1] provides y_{t-1} for step t.
-                # Therefore, take the in-window targets (length == sequence_length).
                 prev_targets_seq = self.y_scaled[start_pos:start_pos + sequence_length]
 
                 # Create mask for padded values
-                mask_data = X_filled.iloc[start_pos:start_pos + sequence_length]
-                mask = (mask_data != mask_value).all(axis=1)
+                mask_data = X_cont_filled.iloc[start_pos:start_pos + sequence_length]
+                mask = (mask_data != mask_value).all(axis=1) if len(continuous_features) > 0 else pd.Series(True, index=mask_data.index)
 
                 self.X_sequences.append(torch.FloatTensor(x_seq))
+                self.cat_sequences.append(torch.LongTensor(cat_seq))
                 self.y_sequences.append(torch.FloatTensor(y_seq))
                 self.previous_targets.append(torch.FloatTensor(prev_targets_seq))
-                self.masks.append(torch.FloatTensor(mask.values))
+                self.masks.append(torch.FloatTensor(mask.values if hasattr(mask, 'values') else [mask]))
                 self.group_info.append(group_name)
 
         self.X_sequences = torch.stack(self.X_sequences)
+        self.cat_sequences = torch.stack(self.cat_sequences)
         self.y_sequences = torch.stack(self.y_sequences)
         self.previous_targets = torch.stack(self.previous_targets)
         self.masks = torch.stack(self.masks)
@@ -194,6 +214,7 @@ class LSTMDataset(Dataset):
     def __getitem__(self, idx):
         return {
             'x': self.X_sequences[idx],
+            'cat': self.cat_sequences[idx],
             'y': self.y_sequences[idx],
             'previous_targets': self.previous_targets[idx],  # For teacher forcing
             'mask': self.masks[idx],
@@ -222,6 +243,9 @@ class LSTMModel(LightningModule):
         scheduler_params: Optional[Dict] = None,
         mask_value: float = -1.0,
         target_offset: int = 1,
+        num_model_families: int = 0,
+        num_regions: int = 0,
+        embedding_dim: int = 8,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -234,9 +258,22 @@ class LSTMModel(LightningModule):
         self.learning_rate = learning_rate
         self.mask_value = mask_value
         self.target_offset = target_offset
+        self.num_model_families = num_model_families
+        self.num_regions = num_regions
+        self.embedding_dim = embedding_dim
 
-        # LSTM layer - input size = exogenous (u_t) + (previous target y_{t-1} if enabled)
-        lstm_input_size = exogenous_size + (output_size if include_previous_target else 0)
+        # Categorical embeddings
+        self.has_embeddings = num_model_families > 0 or num_regions > 0
+        total_embedding_size = 0
+        if num_model_families > 0:
+            self.model_family_embedding = nn.Embedding(num_model_families, embedding_dim)
+            total_embedding_size += embedding_dim
+        if num_regions > 0:
+            self.region_embedding = nn.Embedding(num_regions, embedding_dim)
+            total_embedding_size += embedding_dim
+
+        # LSTM layer - input = continuous (u_t) + embeddings + (previous target y_{t-1} if enabled)
+        lstm_input_size = exogenous_size + total_embedding_size + (output_size if include_previous_target else 0)
         self.lstm = nn.LSTM(
             input_size=lstm_input_size,
             hidden_size=hidden_size,
@@ -262,24 +299,56 @@ class LSTMModel(LightningModule):
         self.scheduler_name = scheduler
         self.scheduler_params = scheduler_params or {}
 
-    def forward(self, exogenous_seq, mask=None, previous_targets=None, teacher_forcing=True):
+    def _embed_categoricals(self, cat_indices):
+        """Compute embedding vectors from categorical indices.
+
+        Column ordering follows CATEGORICAL_COLUMNS = ['Region', 'Model_Family']:
+          col 0 = Region, col 1 = Model_Family
+
+        Args:
+            cat_indices: [batch_size, seq_len, num_cat_features] LongTensor
+
+        Returns:
+            [batch_size, seq_len, total_embedding_size] FloatTensor, or None if no embeddings.
+        """
+        if not self.has_embeddings:
+            return None
+
+        parts = []
+        col = 0
+        if self.num_regions > 0:
+            parts.append(self.region_embedding(cat_indices[:, :, col]))
+            col += 1
+        if self.num_model_families > 0:
+            parts.append(self.model_family_embedding(cat_indices[:, :, col]))
+            col += 1
+        return torch.cat(parts, dim=-1)
+
+    def forward(self, exogenous_seq, mask=None, previous_targets=None, teacher_forcing=True, cat_indices=None):
         """
         Step-by-step LSTM unrolling with proper teacher forcing.
 
-        At each timestep t, input is: v_t = [u_t, y_{t-1}]
-        - u_t: ALL exogenous features observed at timestep t (always from dataset)
+        At each timestep t, input is: v_t = [u_t, emb_t, y_{t-1}]
+        - u_t: continuous exogenous features observed at timestep t
+        - emb_t: categorical embeddings (static per scenario, repeated each step)
         - y_{t-1}: previous target (teacher forcing vs autoregressive)
 
         Args:
-            exogenous_seq: ALL features [batch_size, seq_len, exogenous_size] - always from dataset
+            exogenous_seq: Continuous features [batch_size, seq_len, exogenous_size]
             mask: Optional mask for variable-length sequences
             previous_targets: Previous targets for teacher forcing [batch_size, seq_len, output_size]
             teacher_forcing: Whether to use teacher forcing (True) or autoregressive (False)
+            cat_indices: Categorical indices [batch_size, seq_len, num_cat_features] (LongTensor)
         """
         batch_size, seq_len, _ = exogenous_seq.size()
 
+        # Compute embeddings and concatenate with continuous features
+        emb = self._embed_categoricals(cat_indices)
+        if emb is not None:
+            exogenous_seq = torch.cat([exogenous_seq, emb], dim=-1)
+
         if not self.include_previous_target:
-            # Simple case: no previous targets, just use exogenous features
+            # Simple case: no previous targets, just use exogenous features + embeddings
             x = exogenous_seq
 
             if mask is not None:
@@ -314,8 +383,8 @@ class LSTMModel(LightningModule):
         prev_target = torch.zeros(batch_size, self.output_size, device=exogenous_seq.device, dtype=exogenous_seq.dtype)
 
         for t in range(seq_len):
-            # Current exogenous features u_t (ALL features, always from dataset)
-            u_t = exogenous_seq[:, t, :]  # [batch_size, exogenous_size]
+            # Current exogenous features u_t (continuous + embeddings already concatenated)
+            u_t = exogenous_seq[:, t, :]  # [batch_size, exogenous_size + embedding_size]
 
             # Previous target y_{t-1} (teacher forcing or autoregressive)
             if t == 0:
@@ -326,8 +395,8 @@ class LSTMModel(LightningModule):
                 else:
                     y_prev = prev_target  # Predicted y_{t-1}
 
-            # Construct input: v_t = [u_t, y_{t-1}] - exactly as specified
-            v_t = torch.cat([u_t, y_prev], dim=-1)  # [batch_size, exogenous_size + output_size]
+            # Construct input: v_t = [u_t, y_{t-1}]
+            v_t = torch.cat([u_t, y_prev], dim=-1)
             v_t = v_t.unsqueeze(1)  # [batch_size, 1, input_size]
 
             # Apply mask if needed
@@ -362,19 +431,13 @@ class LSTMModel(LightningModule):
 
     def training_step(self, batch, batch_idx):
         x, y, mask = batch['x'], batch['y'], batch['mask']
-
-        # x contains ALL features (u_t) - no splitting needed
-        exogenous_seq = x
-
-        # Get previous targets for teacher forcing if available
+        cat = batch.get('cat', None)
         previous_targets = batch.get('previous_targets', None)
 
         if self.include_previous_target and previous_targets is not None:
-            # Use teacher forcing with ground truth previous targets
-            y_hat = self(exogenous_seq, mask, previous_targets=previous_targets, teacher_forcing=True)
+            y_hat = self(x, mask, previous_targets=previous_targets, teacher_forcing=True, cat_indices=cat)
         else:
-            # Standard forward pass without teacher forcing
-            y_hat = self(exogenous_seq, mask, teacher_forcing=False)
+            y_hat = self(x, mask, teacher_forcing=False, cat_indices=cat)
 
         loss = F.mse_loss(y_hat, y)
         self.log('train_loss', loss, prog_bar=True)
@@ -382,34 +445,27 @@ class LSTMModel(LightningModule):
 
     def validation_step(self, batch, batch_idx):
         x, y, mask = batch['x'], batch['y'], batch['mask']
+        cat = batch.get('cat', None)
 
-        # x contains ALL features (u_t) - no splitting needed
-        exogenous_seq = x
-
-        # For validation, use autoregressive (no teacher forcing)
-        y_hat = self(exogenous_seq, mask, teacher_forcing=False)
+        y_hat = self(x, mask, teacher_forcing=False, cat_indices=cat)
         loss = F.mse_loss(y_hat, y)
         self.log('val_loss', loss, prog_bar=True)
         return loss
 
     def test_step(self, batch, batch_idx):
         x, y, mask = batch['x'], batch['y'], batch['mask']
+        cat = batch.get('cat', None)
 
-        # x contains ALL features (u_t) - no splitting needed
-        exogenous_seq = x
-
-        y_hat = self(exogenous_seq, mask, teacher_forcing=False)
+        y_hat = self(x, mask, teacher_forcing=False, cat_indices=cat)
         loss = F.mse_loss(y_hat, y)
         self.log('test_loss', loss)
         return y_hat
 
     def predict_step(self, batch, batch_idx):
         x, mask = batch['x'], batch['mask']
+        cat = batch.get('cat', None)
 
-        # x contains ALL features (u_t) - no splitting needed
-        exogenous_seq = x
-
-        return self(exogenous_seq, mask, teacher_forcing=False)
+        return self(x, mask, teacher_forcing=False, cat_indices=cat)
 
     def configure_optimizers(self):
         if self.optimizer_name.lower() == "adam":
@@ -461,33 +517,47 @@ def create_lstm_datasets(
     targets: List[str],
     sequence_length: int = 1,
     target_offset: int = 0,
-    mask_value: float = -1.0
+    mask_value: float = -1.0,
+    categorical_features: Optional[List[str]] = None,
 ) -> Tuple[LSTMDataset, LSTMDataset]:
     """Create LSTM datasets for training and validation with proper group handling."""
+    categorical_features = categorical_features or []
+    continuous_features = [f for f in features if f not in categorical_features]
 
-    # Ensure all feature columns are numeric and aligned between train/val
+    # Ensure all continuous feature columns are numeric and aligned between train/val
     train_data_enc, (val_data_enc,), encoded_features, _ = _one_hot_encode_and_align_features(
         train_data,
         [val_data],
-        features,
+        continuous_features,
     )
+    # Carry categorical columns through (already int-coded upstream)
+    for col in categorical_features:
+        if col in train_data.columns:
+            train_data_enc[col] = train_data[col].values
+        if col in val_data.columns:
+            val_data_enc[col] = val_data[col].values
+
+    # Full feature list = encoded continuous + categorical
+    all_features = encoded_features + categorical_features
 
     train_dataset = LSTMDataset(
-        train_data_enc, encoded_features, targets,
+        train_data_enc, all_features, targets,
         sequence_length=sequence_length,
         target_offset=target_offset,
         mask_value=mask_value,
-        fit_scalers=True
+        fit_scalers=True,
+        categorical_features=categorical_features,
     )
 
     val_dataset = LSTMDataset(
-        val_data_enc, encoded_features, targets,
+        val_data_enc, all_features, targets,
         sequence_length=sequence_length,
         target_offset=target_offset,
         mask_value=mask_value,
         scaler_X=train_dataset.scaler_X,
         scaler_y=train_dataset.scaler_y,
-        fit_scalers=False
+        fit_scalers=False,
+        categorical_features=categorical_features,
     )
 
     return train_dataset, val_dataset, encoded_features
@@ -524,15 +594,17 @@ def create_lstm_model(
     features: List[str],
     output_size: int,
     config: LSTMTrainerConfig,
-    include_previous_target: bool = True
+    include_previous_target: bool = True,
+    num_model_families: int = 0,
+    num_regions: int = 0,
 ) -> LSTMModel:
-    """Create LSTM model with given configuration."""
+    """Create LSTM model with given configuration.
 
-    # ALL features are exogenous (u_t)
-    dataset_config = LSTMDatasetConfig()
-    feature_groups = dataset_config.build_feature_groups(features)
-
-    exogenous_size = len(feature_groups["exogenous_features"])  # All features
+    Args:
+        features: Continuous (encoded) feature names — categoricals are handled via embeddings.
+    """
+    # exogenous_size = number of continuous features in the data tensor
+    exogenous_size = len(features)
 
     return LSTMModel(
         exogenous_size=exogenous_size,
@@ -551,6 +623,9 @@ def create_lstm_model(
         scheduler_params=config.scheduler_params,
         mask_value=config.mask_value,
         target_offset=config.target_offset,
+        num_model_families=num_model_families,
+        num_regions=num_regions,
+        embedding_dim=config.embedding_dim,
     )
 
 
@@ -647,12 +722,17 @@ def hyperparameter_search_lstm_parallel(
     val_data: pd.DataFrame,
     targets: List[str],
     run_id: str,
-    features: List[str] = None
+    features: List[str] = None,
+    categorical_features: Optional[List[str]] = None,
+    num_model_families: int = 0,
+    num_regions: int = 0,
 ) -> Dict:
     """Perform parallel hyperparameter search for LSTM model."""
     import torch.multiprocessing as mp
     from concurrent.futures import ProcessPoolExecutor
     import torch.distributed as dist
+
+    categorical_features = categorical_features or []
 
     search_cfg = LSTMSearchSpace()
     if features is None:
@@ -686,7 +766,8 @@ def hyperparameter_search_lstm_parallel(
                 # Create datasets
                 sequence_length = params.get("sequence_length", LSTMTrainerConfig().sequence_length)
                 train_dataset, val_dataset, model_features = create_lstm_datasets(
-                    train_data, val_data, features, targets, sequence_length=sequence_length, target_offset=LSTMTrainerConfig().target_offset
+                    train_data, val_data, features, targets, sequence_length=sequence_length, target_offset=LSTMTrainerConfig().target_offset,
+                    categorical_features=categorical_features,
                 )
 
                 # Create data loaders
@@ -696,6 +777,7 @@ def hyperparameter_search_lstm_parallel(
                 )
 
                 # Create model with search parameters
+                embedding_dim = params.get("embedding_dim", LSTMTrainerConfig().embedding_dim)
                 config = LSTMTrainerConfig(
                     hidden_size=params.get("hidden_size", 64),
                     num_layers=params.get("num_layers", 1),
@@ -707,13 +789,17 @@ def hyperparameter_search_lstm_parallel(
                     batch_size=batch_size,
                     weight_decay=params.get("weight_decay", 0.0),
                     sequence_length=sequence_length,
+                    embedding_dim=embedding_dim,
                     max_epochs=20,
                     patience=3,
                     devices=1  # Single device per process
                 )
 
                 output_size = len(targets)
-                model = create_lstm_model(model_features, output_size, config)
+                model = create_lstm_model(
+                    model_features, output_size, config,
+                    num_model_families=num_model_families, num_regions=num_regions,
+                )
 
                 # Create trainer for single GPU
                 search_checkpoint = ModelCheckpoint(
@@ -812,16 +898,27 @@ def hyperparameter_search_lstm(
     val_data: pd.DataFrame,
     targets: List[str],
     run_id: str,
-    features: List[str] = None
+    features: List[str] = None,
+    categorical_features: Optional[List[str]] = None,
+    num_model_families: int = 0,
+    num_regions: int = 0,
 ) -> Dict:
     """Perform hyperparameter search for LSTM model (wrapper function)."""
     # Use parallel search if multiple GPUs available, otherwise sequential
     if torch.cuda.device_count() > 1:
         logging.info(f"Using parallel hyperparameter search with {torch.cuda.device_count()} GPUs")
-        return hyperparameter_search_lstm_parallel(train_data, val_data, targets, run_id, features)
+        return hyperparameter_search_lstm_parallel(
+            train_data, val_data, targets, run_id, features,
+            categorical_features=categorical_features,
+            num_model_families=num_model_families, num_regions=num_regions,
+        )
     else:
         logging.info("Using sequential hyperparameter search (single GPU)")
-        return hyperparameter_search_lstm_sequential(train_data, val_data, targets, run_id, features)
+        return hyperparameter_search_lstm_sequential(
+            train_data, val_data, targets, run_id, features,
+            categorical_features=categorical_features,
+            num_model_families=num_model_families, num_regions=num_regions,
+        )
 
 
 def hyperparameter_search_lstm_sequential(
@@ -829,9 +926,13 @@ def hyperparameter_search_lstm_sequential(
     val_data: pd.DataFrame,
     targets: List[str],
     run_id: str,
-    features: List[str] = None
+    features: List[str] = None,
+    categorical_features: Optional[List[str]] = None,
+    num_model_families: int = 0,
+    num_regions: int = 0,
 ) -> Dict:
     """Sequential hyperparameter search (original implementation)."""
+    categorical_features = categorical_features or []
 
     search_cfg = LSTMSearchSpace()
     # Use features from preprocessing if provided, otherwise derive from columns (but this shouldn't happen)
@@ -852,7 +953,8 @@ def hyperparameter_search_lstm_sequential(
         # Create datasets
         sequence_length = params.get("sequence_length", LSTMTrainerConfig().sequence_length)
         train_dataset, val_dataset, model_features = create_lstm_datasets(
-            train_data, val_data, features, targets, sequence_length=sequence_length, target_offset=LSTMTrainerConfig().target_offset
+            train_data, val_data, features, targets, sequence_length=sequence_length, target_offset=LSTMTrainerConfig().target_offset,
+            categorical_features=categorical_features,
         )
 
         # Create data loaders
@@ -862,6 +964,7 @@ def hyperparameter_search_lstm_sequential(
         )
 
         # Create model with search parameters
+        embedding_dim = params.get("embedding_dim", LSTMTrainerConfig().embedding_dim)
         config = LSTMTrainerConfig(
             hidden_size=params.get("hidden_size", 64),
             num_layers=params.get("num_layers", 1),
@@ -873,6 +976,7 @@ def hyperparameter_search_lstm_sequential(
             batch_size=batch_size,
             weight_decay=params.get("weight_decay", 0.0),
             sequence_length=sequence_length,
+            embedding_dim=embedding_dim,
             max_epochs=20,  # Reduced for search
             patience=3,  # Reduced for search
             devices=1  # Use single device for sequential search
@@ -880,7 +984,10 @@ def hyperparameter_search_lstm_sequential(
 
         output_size = len(targets)
 
-        model = create_lstm_model(model_features, output_size, config)
+        model = create_lstm_model(
+            model_features, output_size, config,
+            num_model_families=num_model_families, num_regions=num_regions,
+        )
 
         # Create trainer for search
         search_checkpoint = ModelCheckpoint(
@@ -953,7 +1060,10 @@ def train_final_lstm(
     run_id: str,
     best_params: Dict,
     session_state: Optional[Dict] = None,
-    features: List[str] = None
+    features: List[str] = None,
+    categorical_features: Optional[List[str]] = None,
+    num_model_families: int = 0,
+    num_regions: int = 0,
 ) -> None:
     """Train final LSTM model with best parameters.
 
@@ -961,6 +1071,7 @@ def train_final_lstm(
     All ranks build the dataset and model (cheap) so trainer.fit() can proceed.
     """
     primary = _is_primary_rank()
+    categorical_features = categorical_features or []
 
     # Combine train and validation data (like TFT's create_combined_dataset)
     combined_data = pd.concat([train_data, val_data], ignore_index=True)
@@ -974,17 +1085,27 @@ def train_final_lstm(
     sequence_length = best_params.get("sequence_length", LSTMTrainerConfig().sequence_length)
     target_offset = best_params.get("target_offset", LSTMTrainerConfig().target_offset)
 
+    # Separate continuous features for encoding
+    continuous_features = [f for f in features if f not in categorical_features]
+
     # Encode any remaining non-numeric feature columns on the combined dataset
     combined_data_enc, _, encoded_features, non_numeric_cols = _one_hot_encode_and_align_features(
         combined_data,
         [],
-        features,
+        continuous_features,
     )
+    # Carry categorical columns through
+    for col in categorical_features:
+        if col in combined_data.columns:
+            combined_data_enc[col] = combined_data[col].values
+
+    all_features = encoded_features + categorical_features
     combined_dataset = LSTMDataset(
-        combined_data_enc, encoded_features, targets,
+        combined_data_enc, all_features, targets,
         sequence_length=sequence_length,
         target_offset=target_offset,
-        fit_scalers=True
+        fit_scalers=True,
+        categorical_features=categorical_features,
     )
 
     # Create data loader
@@ -998,6 +1119,7 @@ def train_final_lstm(
     )
 
     # Create final model
+    embedding_dim = best_params.get("embedding_dim", LSTMTrainerConfig().embedding_dim)
     config = LSTMTrainerConfig(
         hidden_size=best_params.get("hidden_size", 64),
         num_layers=best_params.get("num_layers", 1),
@@ -1009,12 +1131,17 @@ def train_final_lstm(
         batch_size=batch_size,
         weight_decay=best_params.get("weight_decay", 0.0),
         sequence_length=sequence_length,
-        target_offset=target_offset
+        target_offset=target_offset,
+        embedding_dim=embedding_dim,
     )
 
     output_size = len(targets)
 
-    model = create_lstm_model(encoded_features, output_size, config)
+    model = create_lstm_model(
+        encoded_features, output_size, config,
+        num_model_families=num_model_families,
+        num_regions=num_regions,
+    )
 
     # Create final trainer
     final_dir = os.path.join(get_run_root(run_id), "final")
@@ -1045,6 +1172,9 @@ def train_final_lstm(
         session_state["lstm_raw_features"] = features
         session_state["lstm_features"] = encoded_features
         session_state["lstm_non_numeric_features"] = non_numeric_cols
+        session_state["lstm_categorical_features"] = categorical_features
+        session_state["lstm_num_model_families"] = num_model_families
+        session_state["lstm_num_regions"] = num_regions
         session_state["lstm_sequence_length"] = sequence_length
         session_state["lstm_target_offset"] = target_offset
 
@@ -1059,7 +1189,7 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
     # Prefer encoded LSTM features from final training (ensures scaler/model input size match)
     raw_features = session_state.get("lstm_raw_features", session_state["features"])
     features = session_state.get("lstm_features", session_state["features"])
-
+    categorical_features = session_state.get("lstm_categorical_features", [])
 
     # Load model
     final_ckpt_path = os.path.join(get_run_root(run_id), "final", "best.ckpt")
@@ -1082,23 +1212,33 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
     model.eval()
 
     # Ensure test_data has the same encoded feature columns as during training
+    # Separate continuous features for one-hot encoding
+    continuous_raw_features = [f for f in raw_features if f not in categorical_features]
     non_numeric_cols = session_state.get("lstm_non_numeric_features", [])
-    if non_numeric_cols and features != raw_features:
-        X_test = test_data.reindex(columns=raw_features)
+    if non_numeric_cols and features != continuous_raw_features:
+        X_test = test_data.reindex(columns=continuous_raw_features)
         X_test_enc = pd.get_dummies(X_test, columns=[c for c in non_numeric_cols if c in X_test.columns], dummy_na=True)
         X_test_enc = X_test_enc.reindex(columns=features, fill_value=0.0)
-        test_data_enc = pd.concat([test_data.drop(columns=raw_features, errors="ignore"), X_test_enc], axis=1)
+        test_data_enc = pd.concat([test_data.drop(columns=continuous_raw_features, errors="ignore"), X_test_enc], axis=1)
     else:
         test_data_enc = test_data
 
+    # Ensure categorical columns are present
+    for col in categorical_features:
+        if col in test_data.columns and col not in test_data_enc.columns:
+            test_data_enc[col] = test_data[col].values
+
+    all_features = features + categorical_features
+
     # Create test dataset - autoregressive prediction during inference
     test_dataset = LSTMDataset(
-        test_data_enc, features, targets,
+        test_data_enc, all_features, targets,
         sequence_length=sequence_length,
         target_offset=target_offset,
         scaler_X=scaler_X,
         scaler_y=scaler_y,
-        fit_scalers=False
+        fit_scalers=False,
+        categorical_features=categorical_features,
     )
 
     # Create data loader

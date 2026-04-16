@@ -154,56 +154,84 @@ def get_lstm_shap_values(run_id, X_test: pd.DataFrame, sequence_length=1):
     store = RunStore(run_id)
     scaler_X = store.load_artifact("lstm_scaler_X.pkl")
     features, targets = store.load_features()
+    categorical_features = []
     if store.has_train_meta():
         meta = store.load_train_meta()
         features = meta.get("lstm_raw_features", features)
-    def preprocess_features(data, features, scaler_X, mask_value=-1.0):
-        X = data[features].copy()
+        categorical_features = meta.get("lstm_categorical_features", [])
+    continuous_features = [f for f in features if f not in categorical_features]
+
+    def preprocess_features(data, continuous_features, categorical_features, scaler_X, mask_value=-1.0):
         from configs.data import CATEGORICAL_COLUMNS, REGION_CATEGORIES
-        cat_cols = [col for col in CATEGORICAL_COLUMNS if col in X.columns]
-        for col in cat_cols:
-            if col == 'Region':
-                X[col] = (
-                    pd.Categorical(X[col].astype(str), categories=REGION_CATEGORIES, ordered=True)
-                    .codes
+        # Scale continuous features only
+        X_cont = data[continuous_features].copy() if continuous_features else pd.DataFrame(index=data.index)
+        X_cont_filled = X_cont.fillna(mask_value).astype(np.float32)
+        X_cont_scaled = scaler_X.transform(X_cont_filled) if len(continuous_features) > 0 else X_cont_filled.values
+
+        # Extract categorical codes — already int-encoded by derive_splits
+        cat_codes = {}
+        for col in categorical_features:
+            if col not in data.columns:
+                continue
+            if pd.api.types.is_integer_dtype(data[col]):
+                # Already encoded upstream (derive_splits)
+                cat_codes[col] = data[col].values.astype(np.int64)
+            elif col == 'Region':
+                cat_codes[col] = (
+                    pd.Categorical(data[col].astype(str), categories=REGION_CATEGORIES, ordered=True)
+                    .codes.astype(np.int64)
                 )
             else:
-                X[col] = X[col].astype('category').cat.codes
-        X_filled = X.fillna(mask_value).astype(np.float32)
-        return scaler_X.transform(X_filled)
-    def create_sequences(X_scaled, seq_len):
+                cat_codes[col] = data[col].astype('category').cat.codes.values.astype(np.int64)
+        X_cat = np.column_stack([cat_codes[c] for c in categorical_features]) if categorical_features else np.empty((len(data), 0), dtype=np.int64)
+        return X_cont_scaled, X_cat
+
+    def create_sequences(X_cont_scaled, X_cat, seq_len):
         import torch as _torch
-        seqs = []
-        for i in range(len(X_scaled) - seq_len + 1):
-            seqs.append(_torch.FloatTensor(X_scaled[i:i+seq_len]))
-        return _torch.stack(seqs) if seqs else _torch.empty(0, seq_len, X_scaled.shape[1])
+        cont_seqs, cat_seqs = [], []
+        for i in range(len(X_cont_scaled) - seq_len + 1):
+            cont_seqs.append(_torch.FloatTensor(X_cont_scaled[i:i+seq_len]))
+            cat_seqs.append(_torch.LongTensor(X_cat[i:i+seq_len]))
+        if cont_seqs:
+            return _torch.stack(cont_seqs), _torch.stack(cat_seqs)
+        return _torch.empty(0, seq_len, X_cont_scaled.shape[1]), _torch.empty(0, seq_len, X_cat.shape[1], dtype=_torch.long)
+
     background_size = min(200, len(X_test))
-    background_scaled = preprocess_features(X_test.iloc[:background_size], features, scaler_X)
-    background_sequences = create_sequences(background_scaled, sequence_length)
-    if len(background_sequences) > 50:
+    bg_cont, bg_cat = preprocess_features(X_test.iloc[:background_size], continuous_features, categorical_features, scaler_X)
+    bg_cont_seq, bg_cat_seq = create_sequences(bg_cont, bg_cat, sequence_length)
+    if len(bg_cont_seq) > 50:
         import numpy as _np
-        idx = _np.random.choice(len(background_sequences), 50, replace=False)
-        background_data = background_sequences[idx]
+        idx = _np.random.choice(len(bg_cont_seq), 50, replace=False)
+        background_data = bg_cont_seq[idx]
+        background_cat = bg_cat_seq[idx]
     else:
-        background_data = background_sequences
+        background_data = bg_cont_seq
+        background_cat = bg_cat_seq
     test_size = min(100, len(X_test))
-    test_scaled = preprocess_features(X_test.iloc[:test_size], features, scaler_X)
-    test_inputs = create_sequences(test_scaled, sequence_length)
+    test_cont, test_cat = preprocess_features(X_test.iloc[:test_size], continuous_features, categorical_features, scaler_X)
+    test_inputs, test_cat_seq = create_sequences(test_cont, test_cat, sequence_length)
     import torch as _torch
+
+    # SHAP explains continuous features only; categorical embeddings are held fixed
     class LSTMWrapperForSHAP(_torch.nn.Module):
-        def __init__(self, lstm_model, seq_len):
+        def __init__(self, lstm_model, seq_len, fixed_cat):
             super().__init__()
             self.lstm_model = lstm_model
             self.seq_len = seq_len
+            self.fixed_cat = fixed_cat  # [batch, seq_len, num_cat] — expanded per sample
         def forward(self, x):
             batch_size = x.shape[0]
             mask = _torch.ones(batch_size, self.seq_len, dtype=_torch.float32, device=x.device)
-            return self.lstm_model(x, mask=mask, teacher_forcing=False)
-    wrapper = LSTMWrapperForSHAP(model, sequence_length)
+            # Use the fixed categorical indices (broadcast if needed)
+            cat = self.fixed_cat[:batch_size] if self.fixed_cat.shape[0] >= batch_size else self.fixed_cat.expand(batch_size, -1, -1)
+            return self.lstm_model(x, mask=mask, teacher_forcing=False, cat_indices=cat)
+    wrapper = LSTMWrapperForSHAP(model, sequence_length, background_cat)
     wrapper.eval()
     background_data.requires_grad_(True)
     test_inputs.requires_grad_(True)
     explainer = shap.DeepExplainer(wrapper, background_data)
+    # Swap to test categorical indices for explanation pass
+    wrapper.fixed_cat = test_cat_seq
     logging.info("Calculating LSTM SHAP values...")
     shap_values = explainer.shap_values(test_inputs, check_additivity=False)
     import numpy as _np
@@ -222,7 +250,7 @@ def get_lstm_shap_values(run_id, X_test: pd.DataFrame, sequence_length=1):
     _np.save(os.path.join(get_run_root(run_id), "plots", "lstm_shap_values_temporal.npy"), original_temporal_shap)
     _np.save(os.path.join(get_run_root(run_id), "plots", "lstm_shap_values.npy"), averaged)
     n_samples = averaged.shape[0]
-    X_processed = X_test.iloc[:min(test_size, n_samples)].loc[:, features]
+    X_processed = X_test.iloc[:min(test_size, n_samples)].loc[:, continuous_features]
     test_sequences_np = _to_numpy(test_inputs)
     return original_temporal_shap, averaged, X_processed, test_sequences_np
 
@@ -645,13 +673,15 @@ def draw_shap_all_timesteps_plot(run_id: str, temporal_shap_values, test_sequenc
         return
     feature_count = temporal_shap_values.shape[2] if temporal_shap_values.ndim >= 3 else 0
     features = _align_feature_names(features, feature_count)
-    x_flat_parts = [test_sequences_np[:, t, :] for t in range(sequence_length)]
-    X_flat = _np.concatenate(x_flat_parts, axis=1)
-    # Create timestep-prefixed feature names for proper temporal differentiation
-    display_names = []
-    for t in range(sequence_length):
-        timestep_features = [f"timestep_{t}_{f}" for f in features]
-        display_names.extend(build_feature_display_names(timestep_features))
+
+    # Aggregate SHAP values across timesteps: sum absolute contributions per feature
+    # temporal_shap_values shape: [samples, timesteps, features, targets]
+    # test_sequences_np shape: [samples, timesteps, features]
+    # After aggregation: [samples, features] — one row per feature in beeswarm
+    shap_agg = _np.sum(temporal_shap_values, axis=1)  # [samples, features, targets]
+    X_agg = _np.mean(test_sequences_np, axis=1)        # [samples, features] — mean feature value for color
+
+    display_names = build_feature_display_names(features)
     import matplotlib.pyplot as plt
     plt.rcParams.update({'font.size': 12})
     num_targets = len(targets)
@@ -665,16 +695,12 @@ def draw_shap_all_timesteps_plot(run_id: str, temporal_shap_values, test_sequenc
         if i >= num_targets:
             ax.axis('off')
             continue
-        def _plot(fig_local):
-            # Flatten SHAP values across timesteps for this target
-            shap_flat_parts = [temporal_shap_values[:, t, :, i] for t in range(sequence_length)]
-            shap_flat = _np.concatenate(shap_flat_parts, axis=1)  # [samples, features*time]
-
+        def _plot(fig_local, _i=i):
             ax_local = fig_local.add_subplot(111)
             draw_shap_beeswarm(
                 ax_local,
-                shap_flat,
-                X_flat,
+                shap_agg[:, :, _i],
+                X_agg,
                 display_names,
                 max_display=8,
                 xlim_range=xlim_range,
@@ -685,15 +711,11 @@ def draw_shap_all_timesteps_plot(run_id: str, temporal_shap_values, test_sequenc
 
         # Save individual plot for this target
         fig_indiv = plt.figure(figsize=(10, 8))
-        # Recompute flattened SHAP for this target
-        shap_flat_parts = [temporal_shap_values[:, t, :, i] for t in range(sequence_length)]
-        shap_flat = _np.concatenate(shap_flat_parts, axis=1)
-
         ax_indiv = fig_indiv.add_subplot(111)
         draw_shap_beeswarm(
             ax_indiv,
-            shap_flat,
-            X_flat,
+            shap_agg[:, :, i],
+            X_agg,
             display_names,
             max_display=8,
             xlim_range=xlim_range,

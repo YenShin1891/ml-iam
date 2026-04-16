@@ -16,6 +16,8 @@ from configs.data import (
     MAX_YEAR,
     SPLIT_SEED,
     REGION_CATEGORIES,
+    INTERPOLATE_TARGETS,
+    SCALE_AWARE_IMPUTATION,
 )
 
 def split_data(
@@ -103,7 +105,14 @@ def impute_with_train_medians(
     time_known: Optional[List[str]] = None,
     categorical_columns: Optional[List[str]] = None,
 ):
-    """Impute continuous features with train medians to mirror legacy TFT runs."""
+    """Impute continuous features with train medians.
+
+    When SCALE_AWARE_IMPUTATION is enabled and a 'Region_Scale' column exists,
+    computes medians per Region_Scale group so that ISO3 countries are imputed
+    from other ISO3 values, R10 from R10, etc.  Falls back to global train
+    median for features that are entirely NaN within a scale group.  Raises
+    an error if a Region_Scale present in val/test has zero rows in train.
+    """
     if time_known is None:
         time_known = ["Year", "DeltaYears"]
     if categorical_columns is None:
@@ -111,18 +120,77 @@ def impute_with_train_medians(
 
     excluded = set(categorical_columns) | set(time_known)
 
-    for col in features:
-        if col in excluded or col.endswith("_is_missing"):
-            continue
-        if col not in train_df.columns:
-            continue
-        median_value = pd.to_numeric(train_df[col], errors="coerce").median()
-        if pd.isna(median_value):
-            logging.warning("Column '%s' has all-NaN in train; filling with 0.0", col)
-            median_value = 0.0
+    use_scale = (
+        SCALE_AWARE_IMPUTATION
+        and "Region_Scale" in train_df.columns
+    )
+
+    if use_scale:
+        # Validate: every Region_Scale in val/test must exist in train
+        train_scales = set(train_df["Region_Scale"].unique())
+        for split_name, split_df in [("val", val_df), ("test", test_df)]:
+            split_scales = set(split_df["Region_Scale"].unique()) if "Region_Scale" in split_df.columns else set()
+            missing = split_scales - train_scales
+            if missing:
+                raise ValueError(
+                    f"Region_Scale values {missing} found in {split_name} split but not in training data. "
+                    f"This means the train/val/test split left an entire geographic scale unrepresented in training. "
+                    f"Training scales: {sorted(train_scales)}. "
+                    f"Fix: check the split logic or the dataset — every Region_Scale must appear in the training set."
+                )
+
+        # Compute per-scale medians from train
+        scale_medians = {}
+        for scale in sorted(train_scales):
+            scale_data = train_df[train_df["Region_Scale"] == scale]
+            medians = {}
+            for col in features:
+                if col in excluded or col.endswith("_is_missing") or col not in scale_data.columns:
+                    continue
+                med = pd.to_numeric(scale_data[col], errors="coerce").median()
+                if pd.notna(med):
+                    medians[col] = med
+            scale_medians[scale] = medians
+
+        # Also compute global medians as fallback for features missing within a scale
+        global_medians = {}
+        for col in features:
+            if col in excluded or col.endswith("_is_missing") or col not in train_df.columns:
+                continue
+            med = pd.to_numeric(train_df[col], errors="coerce").median()
+            global_medians[col] = med if pd.notna(med) else 0.0
+
+        # Apply imputation per scale
         for frame in (train_df, val_df, test_df):
-            if col in frame.columns:
-                frame[col] = frame[col].fillna(median_value)
+            if "Region_Scale" not in frame.columns:
+                continue
+            for scale in frame["Region_Scale"].unique():
+                mask = frame["Region_Scale"] == scale
+                s_medians = scale_medians.get(scale, {})
+                for col in features:
+                    if col in excluded or col.endswith("_is_missing") or col not in frame.columns:
+                        continue
+                    fill_val = s_medians.get(col, global_medians.get(col, 0.0))
+                    frame.loc[mask, col] = frame.loc[mask, col].fillna(fill_val)
+
+        logging.info(
+            "Scale-aware imputation applied across %d Region_Scale groups: %s",
+            len(train_scales), sorted(train_scales),
+        )
+    else:
+        # Original global imputation
+        for col in features:
+            if col in excluded or col.endswith("_is_missing"):
+                continue
+            if col not in train_df.columns:
+                continue
+            median_value = pd.to_numeric(train_df[col], errors="coerce").median()
+            if pd.isna(median_value):
+                logging.warning("Column '%s' has all-NaN in train; filling with 0.0", col)
+                median_value = 0.0
+            for frame in (train_df, val_df, test_df):
+                if col in frame.columns:
+                    frame[col] = frame[col].fillna(median_value)
 
     return train_df, val_df, test_df
 
@@ -246,11 +314,58 @@ def load_and_process_data(version=None) -> pd.DataFrame:
     year_melted = processed_series.melt(
         id_vars=non_year_cols, value_vars=year_cols, var_name='Year', value_name='value'
     )
+    # Build pivot index — include Region_Scale if present
+    pivot_index = ['Model', 'Model_Family', 'Scenario', 'Scenario_Category', 'Region']
+    if 'Region_Scale' in non_year_cols:
+        pivot_index.append('Region_Scale')
+    pivot_index.append('Year')
+
     var_pivoted = year_melted.pivot_table(
-        index=['Model', 'Model_Family', 'Scenario', 'Scenario_Category', 'Region', 'Year'],
+        index=pivot_index,
         columns='Variable', values='value'
     ).reset_index()
     return var_pivoted
+
+
+def interpolate_targets(
+    data: pd.DataFrame,
+    group_cols: list,
+    output_variables: list,
+) -> pd.DataFrame:
+    """Interpolate/extrapolate target values within each group across years.
+
+    For each (Model, Scenario, Region) group, fills NaN target values using
+    linear interpolation (weighted by year), then forward/backward fill for
+    edges. This ensures lag features are computed from real (interpolated)
+    values instead of NaN.
+
+    Only fills targets that have at least one non-NaN value in the group.
+    """
+    data = data.sort_values(group_cols + ["Year"]).copy()
+
+    before_nans = data[output_variables].isna().sum().sum()
+
+    data["Year"] = pd.to_numeric(data["Year"], errors="coerce")
+
+    def _interp_group(grp):
+        grp = grp.set_index("Year").sort_index()
+        for col in output_variables:
+            if col in grp.columns and grp[col].notna().any():
+                grp[col] = pd.to_numeric(grp[col], errors="coerce")
+                grp[col] = grp[col].interpolate(method="index", limit_direction="both")
+                grp[col] = grp[col].ffill().bfill()
+        return grp.reset_index()
+
+    data = data.groupby(group_cols, group_keys=False).apply(_interp_group)
+    data = data.reset_index(drop=True)
+
+    after_nans = data[output_variables].isna().sum().sum()
+    filled = before_nans - after_nans
+    logging.info(
+        "Target interpolation: filled %d NaN values (%d → %d remaining)",
+        filled, before_nans, after_nans,
+    )
+    return data
 
 
 def add_lag_features(
@@ -291,6 +406,9 @@ def prepare_features_and_targets(data: pd.DataFrame, lag_required: bool = True) 
         "Preparing features and targets for XGBoost (lag_required=%s)...",
         lag_required,
     )
+
+    if INTERPOLATE_TARGETS:
+        data = interpolate_targets(data, INDEX_COLUMNS, OUTPUT_VARIABLES)
 
     prepared = add_lag_features(data, INDEX_COLUMNS, OUTPUT_VARIABLES, lag_required=lag_required)
     prepared['Year'] = prepared['Year'].astype(int)
@@ -333,6 +451,9 @@ def prepare_features_and_targets_sequence(
         "Preparing features and targets for sequence models (lag_required=%s)...",
         lag_required,
     )
+
+    if INTERPOLATE_TARGETS:
+        data = interpolate_targets(data, INDEX_COLUMNS, OUTPUT_VARIABLES)
 
     prepared = add_lag_features(data, INDEX_COLUMNS, OUTPUT_VARIABLES, lag_required=lag_required)
     prepared['Year'] = prepared['Year'].astype(int)

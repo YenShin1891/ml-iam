@@ -3,7 +3,7 @@
 
 model: lstm
 
-dataset: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-2025-09-24
+dataset: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-interp-targets-scale-impute-2026-04-13
 
 cuda_visible_devices:
   default: "4,5,6,7"
@@ -19,5 +19,5 @@ phases: [preprocess, train, test, plot]
 note: "seed is 0, not 42"
 
 # To resume an existing run, set run_id and resume (overrides 'phases'):
-# run_id: lstm_01       # existing run ID under results/lstm/
+# run_id: lstm_74       # existing run ID under results/lstm/
 # resume: train         # phase to resume from (preprocess, search, train, test, plot)
