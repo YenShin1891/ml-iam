@@ -299,6 +299,15 @@ def to_series_wide(processed_df_year: pd.DataFrame) -> pd.DataFrame:
     )
     # Insert Model_Family as the second column
     year_pivoted.insert(1, "Model_Family", year_pivoted["Model"].apply(get_model_family))
+    # Insert Region_Scale after Region
+    from configs.data import REGION_SCALE_PREFIXES, REGION_SCALE_DEFAULT
+    def _region_scale(r):
+        for prefix, scale in REGION_SCALE_PREFIXES:
+            if r == prefix or r.startswith(prefix):
+                return scale
+        return REGION_SCALE_DEFAULT
+    region_col_idx = year_pivoted.columns.get_loc("Region")
+    year_pivoted.insert(region_col_idx + 1, "Region_Scale", year_pivoted["Region"].apply(_region_scale))
     return year_pivoted
 
 
@@ -369,6 +378,10 @@ def run_pipeline(
     
     # Tag checks
     tags = list(getattr(dp, "TAGS", []))
+    if getattr(dp, "INTERPOLATE_TARGETS", False):
+        tags.append("interp-targets")
+    if getattr(dp, "SCALE_AWARE_IMPUTATION", False):
+        tags.append("scale-impute")
     include_intermediate = "include-intermediate" in tags
     apply_base_year = "apply-base-year" in tags
     
@@ -423,9 +436,8 @@ def run_pipeline(
     # Final time-series wide dataset
     logging.info("Creating final time-series wide dataset…")
     final_series = to_series_wide(processed_df_year)
-    final_series = add_ssp_family_column(final_series, ssp_families)
-    if "with-ssp" not in tags:
-        tags.append("with-ssp")
+    if "with-ssp" in tags:
+        final_series = add_ssp_family_column(final_series, ssp_families)
     logging.info(f"Final series shape: {final_series.shape}")
 
     # Build version label and versioned directory name

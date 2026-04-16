@@ -37,6 +37,9 @@ class LSTMTrainerConfig:
     dropout: float = 0.1
     bidirectional: bool = False
 
+    # Categorical embeddings
+    embedding_dim: int = 8
+
     # Dense layers after LSTM
     dense_hidden_size: int = 128
     dense_dropout: float = 0.0
@@ -115,6 +118,9 @@ class LSTMSearchSpace:
     batch_size: List[int] = field(default_factory=lambda: [64, 128])
     weight_decay: List[float] = field(default_factory=lambda: [0.0, 1e-5])
 
+    # Categorical embedding dimension
+    embedding_dim: List[int] = field(default_factory=lambda: [4, 8, 16, 32])
+
     # Sequence length to search (reintroduced)
     sequence_length: List[int] = field(default_factory=lambda: [1, 2, 3, 4])
 
@@ -133,6 +139,7 @@ class LSTMSearchSpace:
             "learning_rate": self.learning_rate,
             "batch_size": self.batch_size,
             "weight_decay": self.weight_decay,
+            "embedding_dim": self.embedding_dim,
             "sequence_length": self.sequence_length,
         }
 

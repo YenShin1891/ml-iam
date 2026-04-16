@@ -31,7 +31,7 @@ from configs.visualization import (
 
 __all__ = [
     'preprocess_data','format_large_numbers','create_single_trajectory_plot','create_single_scatter_plot','configure_axes',
-    'plot_scatter','plot_trajectories','get_saved_plots_metadata','apply_inverse_scaling','compute_r2'
+    'plot_scatter','plot_trajectories','get_saved_plots_metadata','apply_inverse_scaling','compute_r2',
 ]
 
 def get_model_type_from_log(run_id):
@@ -114,7 +114,7 @@ def create_single_trajectory_plot(ax, test_data, y_test, preds, target_index, ta
         group_indices = group_df.index
         group_y_test = y_test_valid[group_indices]
         group_preds = preds_valid[group_indices]
-        color = next(ax._get_lines.prop_cycler)['color']
+        color = ax._get_lines.get_next_color()
         ax.plot(group_years, group_y_test, color=color, linestyle='-',
                 alpha=alpha, linewidth=linewidth,
                 label='Original IAM' if first else None)
@@ -377,6 +377,7 @@ def plot_trajectories(
                 individual_filename = f"trajectories_{timestamp}_individual_{i}.png"
                 plt.savefig(os.path.join(plots_dir, individual_filename), bbox_inches='tight')
                 plt.close(individual_fig)
+
 
 def get_saved_plots_metadata(run_id):
     plots_dir = os.path.join(get_run_root(run_id), "saved_dashboard_plots")
