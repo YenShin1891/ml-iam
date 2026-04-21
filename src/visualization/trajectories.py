@@ -6,7 +6,10 @@ from typing import Optional, Tuple
 import numpy as np, pandas as pd, matplotlib.pyplot as plt
 from matplotlib import cm
 from matplotlib.ticker import FuncFormatter, MaxNLocator
-import streamlit as st
+try:
+    import streamlit as st
+except ModuleNotFoundError:
+    st = None
 
 from src.utils.utils import get_run_root
 
@@ -28,7 +31,7 @@ from configs.visualization import (
 
 __all__ = [
     'preprocess_data','format_large_numbers','create_single_trajectory_plot','create_single_scatter_plot','configure_axes',
-    'plot_scatter','plot_trajectories','get_saved_plots_metadata','apply_inverse_scaling','compute_r2'
+    'plot_scatter','plot_trajectories','get_saved_plots_metadata','apply_inverse_scaling','compute_r2',
 ]
 
 def get_model_type_from_log(run_id):
@@ -111,7 +114,7 @@ def create_single_trajectory_plot(ax, test_data, y_test, preds, target_index, ta
         group_indices = group_df.index
         group_y_test = y_test_valid[group_indices]
         group_preds = preds_valid[group_indices]
-        color = next(ax._get_lines.prop_cycler)['color']
+        color = ax._get_lines.get_next_color()
         ax.plot(group_years, group_y_test, color=color, linestyle='-',
                 alpha=alpha, linewidth=linewidth,
                 label='Original IAM' if first else None)
@@ -183,7 +186,7 @@ def apply_inverse_scaling(y_values: Optional[np.ndarray], preds_values: Optional
     scaler_key_used = None
     try:
         for key in scaler_candidates:
-            if key in st.session_state and st.session_state[key] is not None:
+            if st is not None and key in st.session_state and st.session_state[key] is not None:
                 scaler_found = st.session_state[key]
                 scaler_key_used = key
                 break
@@ -196,11 +199,15 @@ def apply_inverse_scaling(y_values: Optional[np.ndarray], preds_values: Optional
                 if hasattr(scaler_candidate, 'inverse_transform'):
                     scaler_found = scaler_candidate
                     scaler_key_used = 'file:y_scaler.pkl'
-                    st.session_state['scaler_y'] = scaler_found
+                    if st is not None:
+                        st.session_state['scaler_y'] = scaler_found
             except Exception as disk_e:  # noqa: BLE001
                 logging.info(f"No y_scaler.pkl loaded for run {run_id}: {disk_e}")
         if scaler_found is None:
-            st.info("No scaler found in session state; displaying scaled values (may be misleading).")
+            if st is not None:
+                st.info("No scaler found in session state; displaying scaled values (may be misleading).")
+            else:
+                logging.info("No scaler found; displaying scaled values.")
             return y_out, preds_out, None
         # Ensure 2D shape
         y_2d = y_out.reshape(-1, 1) if y_out.ndim == 1 else y_out
@@ -211,10 +218,16 @@ def apply_inverse_scaling(y_values: Optional[np.ndarray], preds_values: Optional
             y_out = y_inv.ravel() if y_out.ndim == 1 else y_inv
             preds_out = preds_inv.ravel() if preds_out.ndim == 1 else preds_inv
         else:
-            st.warning("Scaler found but missing inverse_transform; using scaled values.")
+            if st is not None:
+                st.warning("Scaler found but missing inverse_transform; using scaled values.")
+            else:
+                logging.warning("Scaler found but missing inverse_transform; using scaled values.")
         return y_out, preds_out, scaler_key_used
     except Exception as e:  # noqa: BLE001
-        st.warning(f"Automatic inverse scaling failed; using scaled values. Error: {e}")
+        if st is not None:
+            st.warning(f"Automatic inverse scaling failed; using scaled values. Error: {e}")
+        else:
+            logging.warning("Automatic inverse scaling failed; using scaled values. Error: %s", e)
         return y_values, preds_values, None
 
 def configure_axes(ax, min_val: float, max_val: float, xlabel: str, ylabel: str) -> None:
@@ -321,12 +334,13 @@ def plot_trajectories(
     #     if preds is not None:
     #         preds = preds[year_mask.values]
     if y_test is None or (hasattr(y_test, 'size') and y_test.size == 0):
-        st.warning("y_test is empty. Displaying blank plots.")
+        logging.warning("y_test is empty. Displaying blank plots.")
         for i, ax in enumerate(axes.flatten()):
             ax.set_title(targets[i])
             ax.set_xlabel("Year")
         plt.tight_layout()
-        st.pyplot(plt.gcf())
+        if st is not None:
+            st.pyplot(plt.gcf())
         return
     # Prepare copies for potential inverse scaling so we don't mutate caller data
     y_plot = None if y_test is None else np.array(y_test, copy=True)
@@ -341,7 +355,8 @@ def plot_trajectories(
     for i, ax in enumerate(axes.flatten()):
         create_single_trajectory_plot(ax, test_data, y_plot, preds_plot, i, targets, alpha, linewidth)
     plt.tight_layout()
-    st.pyplot(plt.gcf())
+    if st is not None:
+        st.pyplot(plt.gcf())
     if run_id and filter_metadata:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         plot_filename = f"trajectories_{timestamp}.png"
@@ -362,6 +377,7 @@ def plot_trajectories(
                 individual_filename = f"trajectories_{timestamp}_individual_{i}.png"
                 plt.savefig(os.path.join(plots_dir, individual_filename), bbox_inches='tight')
                 plt.close(individual_fig)
+
 
 def get_saved_plots_metadata(run_id):
     plots_dir = os.path.join(get_run_root(run_id), "saved_dashboard_plots")

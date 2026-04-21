@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 import torch
+from lightning.pytorch.callbacks import EarlyStopping
 from sklearn.model_selection import ParameterSampler
 
 from configs.paths import RESULTS_PATH
@@ -30,42 +31,156 @@ from .tft_model import (
 from .tft_utils import get_default_num_workers, single_gpu_env, teardown_distributed
 
 
+def _get_search_gpu_ids() -> List[int]:
+    """Get physical GPU IDs available for search from CUDA_VISIBLE_DEVICES."""
+    cuda_env = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    if cuda_env:
+        return [int(x.strip()) for x in cuda_env.split(",") if x.strip()]
+    n = torch.cuda.device_count()
+    return list(range(n)) if n > 0 else []
+
+
+def _get_best_epoch(trainer) -> int:
+    """Extract the epoch of the best val_loss from an EarlyStopping callback."""
+    for cb in trainer.callbacks:
+        if isinstance(cb, EarlyStopping):
+            # best_score is set at the epoch that had the lowest val_loss;
+            # current_epoch minus wait_count gives us that epoch.
+            return trainer.current_epoch - cb.wait_count
+    # Fallback: if no early stopping, the last epoch is the best we know.
+    return trainer.current_epoch
+
+
+def _search_worker(gpu_id, params_list, train_dataset, val_dataset, n_targets, trainer_cfg, result_queue, run_id):
+    """Run a batch of search trials on a single GPU (spawned subprocess)."""
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+
+    # Cap dataloader workers to avoid oversubscription across many GPU workers
+    num_workers = min(get_default_num_workers(), 4)
+    train_loader = train_dataset.to_dataloader(
+        train=True, batch_size=trainer_cfg.batch_size,
+        num_workers=num_workers, persistent_workers=num_workers > 0,
+    )
+    val_loader = val_dataset.to_dataloader(
+        train=False, batch_size=trainer_cfg.batch_size,
+        num_workers=num_workers, persistent_workers=num_workers > 0,
+    )
+
+    for i, params in enumerate(params_list):
+        logging.info("GPU %d - Trial %d/%d - Params: %s", gpu_id, i + 1, len(params_list), params)
+        tft = create_tft_model(train_dataset, params, n_targets)
+        log_dir = os.path.join(get_run_root(run_id), "search", f"gpu{gpu_id}_trial{i}")
+        trainer = create_search_trainer(trainer_cfg, log_dir=log_dir)
+        trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
+        val_loss = trainer.callback_metrics["val_loss"].item()
+        best_epoch = _get_best_epoch(trainer)
+        result_queue.put({**params, "val_loss": val_loss, "best_epoch": best_epoch})
+        logging.info("GPU %d - Trial %d/%d - val_loss: %.4f best_epoch: %d", gpu_id, i + 1, len(params_list), val_loss, best_epoch)
+
+
 def hyperparameter_search_tft(
     train_dataset,
     val_dataset,
     targets: List[str],
     run_id: str,
 ) -> Dict:
-    """Perform hyperparameter search for TFT model."""
+    """Perform hyperparameter search for TFT model.
+
+    When multiple GPUs are available, trials are distributed across GPUs
+    in parallel (one trial per GPU at a time, each GPU runs its share
+    sequentially).  Falls back to sequential search on a single GPU.
+    """
     search_cfg = TFTSearchSpace()
     trainer_cfg = TFTTrainerConfig()
+    n_targets = len(targets)
 
-    search_results = []
-    best_score = float("inf")
-    best_params = None
+    all_params = list(ParameterSampler(
+        search_cfg.param_dist, n_iter=search_cfg.search_iter_n, random_state=0,
+    ))
 
+    gpu_ids = _get_search_gpu_ids()
+
+    if len(gpu_ids) <= 1:
+        # Single GPU or CPU: run sequentially (original behaviour)
+        return _search_sequential(train_dataset, val_dataset, n_targets, all_params, trainer_cfg, run_id)
+
+    # --- parallel search across GPUs ---
+    import torch.multiprocessing as mp
+
+    logging.info("Parallel search across %d GPUs: %s", len(gpu_ids), gpu_ids)
+
+    # Round-robin trials to GPUs
+    gpu_params: List[List[Dict]] = [[] for _ in gpu_ids]
+    for i, params in enumerate(all_params):
+        gpu_params[i % len(gpu_ids)].append(params)
+
+    ctx = mp.get_context("spawn")
+    result_queue = ctx.Queue()
+
+    processes = []
+    for gpu_id, params_list in zip(gpu_ids, gpu_params):
+        if not params_list:
+            continue
+        p = ctx.Process(
+            target=_search_worker,
+            args=(gpu_id, params_list, train_dataset, val_dataset,
+                  n_targets, trainer_cfg, result_queue, run_id),
+        )
+        p.start()
+        processes.append(p)
+
+    for p in processes:
+        p.join()
+
+    # Check for worker failures
+    failed = [p for p in processes if p.exitcode != 0]
+    if failed:
+        raise RuntimeError(
+            f"{len(failed)} search worker(s) crashed — check logs for GPU-level errors"
+        )
+
+    results = []
+    while not result_queue.empty():
+        results.append(result_queue.get_nowait())
+
+    if not results:
+        raise RuntimeError("TFT hyperparameter search produced no results.")
+
+    best = min(results, key=lambda r: r["val_loss"])
+    best_score = best.pop("val_loss")
+    best_epoch = best.pop("best_epoch")
+    best_params = best
+    best_params["best_epoch"] = best_epoch
+
+    logging.info("Best TFT Params: %s with Val Loss: %.4f (best epoch: %d)", best_params, best_score, best_epoch)
+    return best_params
+
+
+def _search_sequential(train_dataset, val_dataset, n_targets, all_params, trainer_cfg, run_id) -> Dict:
+    """Sequential search fallback for single-GPU / CPU environments."""
     train_loader, val_loader = create_dataloaders(train_dataset, val_dataset, trainer_cfg.batch_size)
 
-    for i, params in enumerate(ParameterSampler(search_cfg.param_dist, n_iter=search_cfg.search_iter_n, random_state=0)):
-        logging.info(f"TFT Search Iteration {i+1}/{search_cfg.search_iter_n} - Params: {params}")
+    best_score = float("inf")
+    best_params = None
+    best_epoch = 0
 
-        n_targets = len(targets)
+    for i, params in enumerate(all_params):
+        logging.info("TFT Search Iteration %d/%d - Params: %s", i + 1, len(all_params), params)
         tft = create_tft_model(train_dataset, params, n_targets)
-
-        trainer = create_search_trainer(trainer_cfg)
-
+        log_dir = os.path.join(get_run_root(run_id), "search", f"trial{i}")
+        trainer = create_search_trainer(trainer_cfg, log_dir=log_dir)
         trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
-
         val_loss = trainer.callback_metrics["val_loss"].item()
-        search_results.append({**params, "val_loss": val_loss})
 
         if val_loss < best_score:
             best_score = val_loss
             best_params = params
+            best_epoch = _get_best_epoch(trainer)
 
-    logging.info(f"Best TFT Params: {best_params} with Val Loss: {best_score:.4f}")
+    logging.info("Best TFT Params: %s with Val Loss: %.4f (best epoch: %d)", best_params, best_score, best_epoch)
     if best_params is None:
         raise RuntimeError("TFT hyperparameter search did not identify a best parameter set.")
+    best_params["best_epoch"] = best_epoch
     return best_params
 
 
@@ -80,6 +195,24 @@ def _is_primary_rank() -> bool:
     return all(rv in (None, "0") for rv in rank_vars)
 
 
+def _split_by_groups(
+    df: pd.DataFrame,
+    group_cols: List[str],
+    monitor_frac: float = 0.1,
+    seed: int = 0,
+) -> tuple:
+    """Split a DataFrame by group IDs into train and monitor portions.
+
+    Returns (train_df, monitor_df) where monitor_df contains ~monitor_frac
+    of the unique groups (all their rows) and train_df contains the rest.
+    """
+    groups = df[group_cols].drop_duplicates()
+    monitor_groups = groups.sample(frac=monitor_frac, random_state=seed)
+    monitor_keys = set(map(tuple, monitor_groups.itertuples(index=False, name=None)))
+    is_monitor = df[group_cols].apply(lambda r: tuple(r) in monitor_keys, axis=1)
+    return df[~is_monitor].reset_index(drop=True), df[is_monitor].reset_index(drop=True)
+
+
 def train_final_tft(
     train_dataset,
     val_dataset,
@@ -88,12 +221,19 @@ def train_final_tft(
     best_params: Dict,
     session_state: Optional[Dict] = None,
 ) -> None:
-    """Train final TFT on combined train+val and save checkpoint.
+    """Train final TFT on combined train+val data with early stopping.
+
+    Combines train and val data to maximise training signal, then holds out
+    ~10% of groups as a monitoring-only validation set for early stopping.
+    Per-epoch metrics are logged via CSVLogger.
 
     All DDP ranks must execute the same code path so they all reach
     trainer.fit() together.  Only rank 0 writes logs, summaries, and
     the dataset template.
     """
+    from configs.data import INDEX_COLUMNS
+    from pytorch_forecasting import TimeSeriesDataSet
+
     trainer_cfg = TFTTrainerConfig()
     final_dir = os.path.join(get_run_root(run_id), "final")
     final_ckpt_path = os.path.join(final_dir, "best.ckpt")
@@ -102,62 +242,76 @@ def train_final_tft(
 
     os.makedirs(final_dir, exist_ok=True)
 
-    # Get original DataFrames from session_state
-    train_df = None
-    val_df = None
-    if session_state is not None:
-        train_df = session_state.get("train_data")
-        val_df = session_state.get("val_data")
+    # Pop search best_epoch — informational only, early stopping decides when to stop
+    search_best_epoch = best_params.pop("best_epoch", None)
 
+    # Get original DataFrames from session_state
+    train_df = session_state.get("train_data") if session_state else None
+    val_df = session_state.get("val_data") if session_state else None
     if not isinstance(train_df, pd.DataFrame) or not isinstance(val_df, pd.DataFrame):
         raise RuntimeError(
-            "train_final_tft requires session_state to include both train_data and val_data as DataFrames"
+            "train_final_tft requires session_state with train_data and val_data DataFrames"
         )
 
-    # Create combined dataset
-    combined_dataset = create_combined_dataset(train_dataset, train_df, val_df)
+    # Combine train+val, then re-split: ~90% for training, ~10% for monitoring
+    combined_df = pd.concat([train_df, val_df], ignore_index=True)
+    combined_train_df, monitor_df = _split_by_groups(combined_df, INDEX_COLUMNS)
+
+    # Create TimeSeriesDataSets from the splits using the original dataset as template
+    combined_train_dataset = TimeSeriesDataSet.from_dataset(train_dataset, combined_train_df)
+    monitor_dataset = TimeSeriesDataSet.from_dataset(train_dataset, monitor_df)
 
     if primary:
-        train_len = len(train_dataset)
-        val_len = len(val_dataset)
-        combined_len = len(combined_dataset)
-        train_df_rows = len(train_df)
-        val_df_rows = len(val_df)
         logging.info(
-            "TFT final training dataset sizes -> train=%d (rows=%d) val=%d (rows=%d) combined=%d",
-            train_len,
-            train_df_rows,
-            val_len,
-            val_df_rows,
-            combined_len,
+            "TFT final training dataset sizes -> combined=%d (train=%d monitor=%d)",
+            len(combined_df), len(combined_train_dataset), len(monitor_dataset),
+        )
+        logging.info(
+            "TFT final training for up to %d epochs with early stopping "
+            "(patience=%d, search best_epoch=%s)",
+            trainer_cfg.final_max_epochs,
+            trainer_cfg.final_patience,
+            search_best_epoch,
         )
 
-        # Save dataset template (used later for prediction)
-        save_dataset_template(combined_dataset, run_id)
+        # Save combined training dataset template (used later for prediction)
+        save_dataset_template(combined_train_dataset, run_id)
 
-    # Create model with best params; disable LR scheduler since there is
-    # no validation loader and ReduceLROnPlateau cannot monitor val_loss.
     n_targets = len(targets)
-    tft_final = create_tft_model(
-        train_dataset, best_params, n_targets, disable_lr_scheduler=True,
-    )
+    tft_final = create_tft_model(combined_train_dataset, best_params, n_targets)
 
-    combined_loader = combined_dataset.to_dataloader(
+    num_workers = get_default_num_workers()
+    train_loader = combined_train_dataset.to_dataloader(
         train=True,
         batch_size=trainer_cfg.batch_size,
-        num_workers=get_default_num_workers(),
+        num_workers=num_workers,
+        persistent_workers=True,
+    )
+    val_loader = monitor_dataset.to_dataloader(
+        train=False,
+        batch_size=trainer_cfg.batch_size,
+        num_workers=num_workers,
         persistent_workers=True,
     )
 
-    final_trainer = create_final_trainer(trainer_cfg)
-    final_trainer.fit(model=tft_final, train_dataloaders=combined_loader)
+    log_dir = os.path.join(final_dir, "logs")
+    final_trainer = create_final_trainer(trainer_cfg, ckpt_path=final_ckpt_path, log_dir=log_dir)
+    final_trainer.fit(model=tft_final, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
     # Tear down DDP process group immediately so non-primary ranks can exit
     # without NCCL watchdog timeouts on rank 0.
     teardown_distributed()
 
     if primary:
-        final_trainer.save_checkpoint(final_ckpt_path)
+        # ModelCheckpoint already saved the best weights to final_ckpt_path.
+        # Extract best-epoch info from the checkpoint callback.
+        from lightning.pytorch.callbacks import ModelCheckpoint as _MC
+        best_ckpt_score = None
+        for cb in final_trainer.callbacks:
+            if isinstance(cb, _MC) and cb.best_model_path:
+                best_ckpt_score = cb.best_model_score
+                break
+
         callback_metrics = final_trainer.callback_metrics if hasattr(final_trainer, "callback_metrics") else {}
 
         def _metric_to_float(value):
@@ -172,21 +326,28 @@ def train_final_tft(
 
         train_loss = _metric_to_float(callback_metrics.get("train_loss"))
         val_loss = _metric_to_float(callback_metrics.get("val_loss"))
+        best_val_loss = _metric_to_float(best_ckpt_score)
+        stopped_epoch = final_trainer.current_epoch
         logging.info(
-            "TFT final training losses -> train_loss=%s val_loss=%s",
+            "TFT final training done -> train_loss=%s val_loss=%s best_val_loss=%s stopped_epoch=%d",
             f"{train_loss:.6f}" if train_loss is not None else "NA",
             f"{val_loss:.6f}" if val_loss is not None else "NA",
+            f"{best_val_loss:.6f}" if best_val_loss is not None else "NA",
+            stopped_epoch,
         )
 
         summary = {
             "best_params": best_params,
-            "train_set_rows": train_len,
-            "val_set_rows": val_len,
-            "combined_rows": combined_len,
-            "train_dataframe_rows": train_df_rows,
-            "val_dataframe_rows": val_df_rows,
+            "combined_rows": len(combined_df),
+            "train_set_rows": len(combined_train_dataset),
+            "monitor_set_rows": len(monitor_dataset),
+            "final_max_epochs": trainer_cfg.final_max_epochs,
+            "final_patience": trainer_cfg.final_patience,
+            "stopped_epoch": stopped_epoch,
+            "search_best_epoch": search_best_epoch,
             "train_loss": train_loss,
             "val_loss": val_loss,
+            "best_val_loss": best_val_loss,
         }
         summary_path = os.path.join(final_dir, "training_summary.json")
         try:
