@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint, TQDMProgressBar
+from lightning.pytorch.loggers import CSVLogger
 from sklearn.model_selection import ParameterSampler
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset, DataLoader
@@ -440,7 +441,7 @@ class LSTMModel(LightningModule):
             y_hat = self(x, mask, teacher_forcing=False, cat_indices=cat)
 
         loss = F.mse_loss(y_hat, y)
-        self.log('train_loss', loss, prog_bar=True)
+        self.log('train_loss', loss, prog_bar=True, sync_dist=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -449,7 +450,7 @@ class LSTMModel(LightningModule):
 
         y_hat = self(x, mask, teacher_forcing=False, cat_indices=cat)
         loss = F.mse_loss(y_hat, y)
-        self.log('val_loss', loss, prog_bar=True)
+        self.log('val_loss', loss, prog_bar=True, sync_dist=True)
         return loss
 
     def test_step(self, batch, batch_idx):
@@ -458,7 +459,7 @@ class LSTMModel(LightningModule):
 
         y_hat = self(x, mask, teacher_forcing=False, cat_indices=cat)
         loss = F.mse_loss(y_hat, y)
-        self.log('test_loss', loss)
+        self.log('test_loss', loss, sync_dist=True)
         return y_hat
 
     def predict_step(self, batch, batch_idx):
@@ -631,10 +632,15 @@ def create_lstm_model(
 
 def create_lstm_search_trainer(
     config: LSTMTrainerConfig,
-    checkpoint_callback: ModelCheckpoint
+    checkpoint_callback: ModelCheckpoint,
+    log_dir: Optional[str] = None,
 ) -> Trainer:
     """Create trainer for LSTM hyperparameter search with multi-device support."""
     early_stop = EarlyStopping(monitor=config.monitor, patience=config.patience, mode=config.mode)
+
+    logger = False
+    if log_dir:
+        logger = CSVLogger(save_dir=log_dir, name="", version="")
 
     return Trainer(
         max_epochs=config.max_epochs,
@@ -643,15 +649,32 @@ def create_lstm_search_trainer(
         strategy="auto",
         gradient_clip_val=config.gradient_clip_val,
         callbacks=[early_stop, checkpoint_callback],
-        logger=False,
+        logger=logger,
         enable_progress_bar=False,
     )
 
 
-def create_lstm_final_trainer(config: LSTMTrainerConfig) -> Trainer:
-    """Create trainer for final LSTM model training."""
-    # Custom progress bar with less frequent updates
+def create_lstm_final_trainer(
+    config: LSTMTrainerConfig,
+    ckpt_path: str,
+    log_dir: Optional[str] = None,
+) -> Trainer:
+    """Create trainer for final LSTM model training with early stopping on val_loss."""
+    early_stop = EarlyStopping(
+        monitor="val_loss", patience=config.final_patience, mode="min",
+    )
+    checkpoint = ModelCheckpoint(
+        dirpath=os.path.dirname(ckpt_path),
+        filename=os.path.splitext(os.path.basename(ckpt_path))[0],
+        monitor="val_loss",
+        mode="min",
+        save_top_k=1,
+    )
     progress_bar = TQDMProgressBar(refresh_rate=5000)
+
+    logger = False
+    if log_dir:
+        logger = CSVLogger(save_dir=log_dir, name="", version="")
 
     return Trainer(
         max_epochs=config.max_epochs,
@@ -659,9 +682,8 @@ def create_lstm_final_trainer(config: LSTMTrainerConfig) -> Trainer:
         devices=config.devices,
         strategy="auto",
         gradient_clip_val=config.gradient_clip_val,
-        logger=True,
-        callbacks=[progress_bar],
-        enable_checkpointing=False,  # Manual saving
+        callbacks=[early_stop, checkpoint, progress_bar],
+        logger=logger,
         num_sanity_val_steps=0,  # Skip validation sanity checks
     )
 
@@ -810,6 +832,7 @@ def hyperparameter_search_lstm_parallel(
                     save_top_k=1
                 )
 
+                trial_log_dir = os.path.join(get_run_root(run_id), "search", f"trial_{trial_id}", "logs")
                 trainer = Trainer(
                     max_epochs=config.max_epochs,
                     accelerator="gpu",
@@ -817,7 +840,7 @@ def hyperparameter_search_lstm_parallel(
                     strategy="auto",
                     gradient_clip_val=config.gradient_clip_val,
                     callbacks=[EarlyStopping(monitor="val_loss", patience=config.patience, mode="min"), search_checkpoint],
-                    logger=False,
+                    logger=CSVLogger(save_dir=trial_log_dir, name="", version=""),
                     enable_progress_bar=False,
                 )
 
@@ -990,15 +1013,17 @@ def hyperparameter_search_lstm_sequential(
         )
 
         # Create trainer for search
+        trial_dir = os.path.join(get_run_root(run_id), "search", f"trial_{i}")
         search_checkpoint = ModelCheckpoint(
-            dirpath=os.path.join(get_run_root(run_id), "search", f"trial_{i}"),
+            dirpath=trial_dir,
             filename="best",
             monitor="val_loss",
             mode="min",
             save_top_k=1
         )
 
-        trainer = create_lstm_search_trainer(config, search_checkpoint)
+        trial_log_dir = os.path.join(trial_dir, "logs")
+        trainer = create_lstm_search_trainer(config, search_checkpoint, log_dir=trial_log_dir)
 
         # Train
         trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=val_loader)
@@ -1053,6 +1078,24 @@ def _is_primary_rank() -> bool:
     return all(rv in (None, "0") for rv in rank_vars)
 
 
+def _split_by_groups(
+    df: pd.DataFrame,
+    group_cols: List[str],
+    monitor_frac: float = 0.1,
+    seed: int = 0,
+) -> tuple:
+    """Split a DataFrame by group IDs into train and monitor portions.
+
+    Returns (train_df, monitor_df) where monitor_df contains ~monitor_frac
+    of the unique groups (all their rows) and train_df contains the rest.
+    """
+    groups = df[group_cols].drop_duplicates()
+    monitor_groups = groups.sample(frac=monitor_frac, random_state=seed)
+    monitor_keys = set(map(tuple, monitor_groups.itertuples(index=False, name=None)))
+    is_monitor = df[group_cols].apply(lambda r: tuple(r) in monitor_keys, axis=1)
+    return df[~is_monitor].reset_index(drop=True), df[is_monitor].reset_index(drop=True)
+
+
 def train_final_lstm(
     train_data: pd.DataFrame,
     val_data: pd.DataFrame,
@@ -1065,57 +1108,44 @@ def train_final_lstm(
     num_model_families: int = 0,
     num_regions: int = 0,
 ) -> None:
-    """Train final LSTM model with best parameters.
+    """Train final LSTM model on combined train+val data with early stopping.
+
+    Combines train and val data to maximise training signal, then holds out
+    ~10% of groups as a monitoring-only validation set for early stopping.
+    Per-epoch metrics are logged via CSVLogger.
 
     Under DDP, only rank 0 logs metrics and saves artifacts to session_state.
     All ranks build the dataset and model (cheap) so trainer.fit() can proceed.
     """
+    from configs.data import INDEX_COLUMNS
+
     primary = _is_primary_rank()
     categorical_features = categorical_features or []
 
-    # Combine train and validation data (like TFT's create_combined_dataset)
-    combined_data = pd.concat([train_data, val_data], ignore_index=True)
-    # Use features from preprocessing if provided, otherwise derive from columns (but this shouldn't happen)
     if features is None:
-        from configs.data import NON_FEATURE_COLUMNS, INDEX_COLUMNS
-        exclude_columns = NON_FEATURE_COLUMNS + INDEX_COLUMNS + ['Step']  # Step is added by sequence preprocessing
+        from configs.data import NON_FEATURE_COLUMNS
+        exclude_columns = NON_FEATURE_COLUMNS + INDEX_COLUMNS + ['Step']
         features = [col for col in train_data.columns if col not in targets and col not in exclude_columns]
 
-    # Create dataset with combined data
+    # Combine train+val, then re-split: ~90% for training, ~10% for monitoring
+    combined_data = pd.concat([train_data, val_data], ignore_index=True)
+    combined_train, monitor_data = _split_by_groups(combined_data, INDEX_COLUMNS)
+
     sequence_length = best_params.get("sequence_length", LSTMTrainerConfig().sequence_length)
     target_offset = best_params.get("target_offset", LSTMTrainerConfig().target_offset)
 
-    # Separate continuous features for encoding
-    continuous_features = [f for f in features if f not in categorical_features]
-
-    # Encode any remaining non-numeric feature columns on the combined dataset
-    combined_data_enc, _, encoded_features, non_numeric_cols = _one_hot_encode_and_align_features(
-        combined_data,
-        [],
-        continuous_features,
-    )
-    # Carry categorical columns through
-    for col in categorical_features:
-        if col in combined_data.columns:
-            combined_data_enc[col] = combined_data[col].values
-
-    all_features = encoded_features + categorical_features
-    combined_dataset = LSTMDataset(
-        combined_data_enc, all_features, targets,
+    # Create datasets: scalers fit on combined_train, applied to monitor
+    train_dataset, monitor_dataset, encoded_features = create_lstm_datasets(
+        combined_train, monitor_data, features, targets,
         sequence_length=sequence_length,
         target_offset=target_offset,
-        fit_scalers=True,
         categorical_features=categorical_features,
     )
+    non_numeric_cols = _infer_non_numeric_feature_columns(combined_train, [f for f in features if f not in categorical_features])
 
-    # Create data loader
     batch_size = best_params.get("batch_size", 32)
-    combined_loader = DataLoader(
-        combined_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=4,
-        persistent_workers=True
+    train_loader, val_loader = create_lstm_dataloaders(
+        train_dataset, monitor_dataset, batch_size=batch_size,
     )
 
     # Create final model
@@ -1143,31 +1173,44 @@ def train_final_lstm(
         num_regions=num_regions,
     )
 
-    # Create final trainer
+    # Create final trainer with early stopping and CSV logging
     final_dir = os.path.join(get_run_root(run_id), "final")
     os.makedirs(final_dir, exist_ok=True)
 
-    trainer = create_lstm_final_trainer(config)
-
-    # Train on combined data
-    trainer.fit(model=model, train_dataloaders=combined_loader)
+    final_ckpt_path = os.path.join(final_dir, "best.ckpt")
+    log_dir = os.path.join(final_dir, "logs")
+    trainer = create_lstm_final_trainer(config, ckpt_path=final_ckpt_path, log_dir=log_dir)
 
     if primary:
-        # Log final training loss
-        final_train_loss = trainer.callback_metrics.get("train_loss")
-        if final_train_loss is not None:
-            logging.info(f"Final training loss: {final_train_loss:.4f}")
+        logging.info(
+            "LSTM final training: combined=%d (train=%d monitor=%d), "
+            "up to %d epochs with early stopping (patience=%d)",
+            len(combined_data), len(train_dataset), len(monitor_dataset),
+            config.max_epochs, config.final_patience,
+        )
+
+    # Train with validation for early stopping
+    trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+
+    if primary:
+        train_loss = trainer.callback_metrics.get("train_loss")
+        val_loss = trainer.callback_metrics.get("val_loss")
+        stopped_epoch = trainer.current_epoch
+        if train_loss is not None:
+            logging.info(
+                "LSTM final training done -> train_loss=%.4f val_loss=%s stopped_epoch=%d",
+                train_loss,
+                f"{val_loss:.4f}" if val_loss is not None else "NA",
+                stopped_epoch,
+            )
         else:
             logging.warning("Final training loss not available in callback metrics")
 
-    # Save final checkpoint manually
-    final_ckpt_path = os.path.join(final_dir, "best.ckpt")
-    trainer.save_checkpoint(final_ckpt_path)
-
+    # ModelCheckpoint already saved the best weights to final_ckpt_path.
     # Save scalers and config to session state (only on primary rank)
     if primary and session_state is not None:
-        session_state["lstm_scaler_X"] = combined_dataset.scaler_X
-        session_state["lstm_scaler_y"] = combined_dataset.scaler_y
+        session_state["lstm_scaler_X"] = train_dataset.scaler_X
+        session_state["lstm_scaler_y"] = train_dataset.scaler_y
         session_state["lstm_config"] = config
         session_state["lstm_raw_features"] = features
         session_state["lstm_features"] = encoded_features

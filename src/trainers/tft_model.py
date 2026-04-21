@@ -6,7 +6,8 @@ from typing import Dict, List, Optional
 
 import torch
 from lightning.pytorch import Trainer
-from lightning.pytorch.callbacks import EarlyStopping
+from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
+from lightning.pytorch.loggers import CSVLogger
 from pytorch_forecasting import TemporalFusionTransformer, RMSE, TimeSeriesDataSet
 from pytorch_forecasting.metrics import MultiLoss
 
@@ -24,9 +25,9 @@ def create_tft_model(
     """Create TFT model with given parameters.
 
     Args:
-        disable_lr_scheduler: Set True for final training where no val_loss
-            is available to monitor.  Passes reduce_on_plateau_patience=None
-            so pytorch-forecasting skips the ReduceLROnPlateau scheduler.
+        disable_lr_scheduler: Set True when no val_loss is available to
+            monitor.  Sets an unreachably high patience so the
+            ReduceLROnPlateau scheduler never fires.
     """
     if n_targets > 1:
         output_size = [1] * n_targets
@@ -75,7 +76,7 @@ def create_dataloaders(
 
 
 
-def create_search_trainer(trainer_cfg: TFTTrainerConfig) -> Trainer:
+def create_search_trainer(trainer_cfg: TFTTrainerConfig, log_dir: Optional[str] = None) -> Trainer:
     """Create trainer for hyperparameter search.
 
     Uses a single device because search runs trials sequentially —
@@ -84,6 +85,10 @@ def create_search_trainer(trainer_cfg: TFTTrainerConfig) -> Trainer:
     """
     early_stop = EarlyStopping(monitor="val_loss", patience=trainer_cfg.patience, mode="min")
 
+    logger = False
+    if log_dir:
+        logger = CSVLogger(save_dir=log_dir, name="", version="")
+
     return Trainer(
         max_epochs=trainer_cfg.max_epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
@@ -91,19 +96,32 @@ def create_search_trainer(trainer_cfg: TFTTrainerConfig) -> Trainer:
         strategy="auto",
         gradient_clip_val=trainer_cfg.gradient_clip_val,
         callbacks=[early_stop],
-        logger=False,
+        logger=logger,
         enable_progress_bar=False,
         enable_checkpointing=False,
     )
 
 
-def create_final_trainer(trainer_cfg: TFTTrainerConfig, max_epochs_override: Optional[int] = None) -> Trainer:
-    """Create trainer for final model training.
+def create_final_trainer(
+    trainer_cfg: TFTTrainerConfig,
+    ckpt_path: str,
+    log_dir: Optional[str] = None,
+) -> Trainer:
+    """Create trainer for final model training with early stopping on val_loss."""
+    early_stop = EarlyStopping(
+        monitor="val_loss", patience=trainer_cfg.final_patience, mode="min",
+    )
+    checkpoint = ModelCheckpoint(
+        dirpath=os.path.dirname(ckpt_path),
+        filename=os.path.splitext(os.path.basename(ckpt_path))[0],
+        monitor="val_loss",
+        mode="min",
+        save_top_k=1,
+    )
 
-    Trains on combined train+val with no early stopping.  The epoch
-    count is determined by the search phase (best_epoch + headroom).
-    """
-    max_epochs = max_epochs_override if max_epochs_override is not None else trainer_cfg.final_max_epochs
+    logger = False
+    if log_dir:
+        logger = CSVLogger(save_dir=log_dir, name="", version="")
 
     # Use the devices configuration as-is for final training to allow multi-GPU usage
     # Only override if explicitly set to invalid values
@@ -111,14 +129,14 @@ def create_final_trainer(trainer_cfg: TFTTrainerConfig, max_epochs_override: Opt
     if isinstance(devices, int) and devices < 1:
         devices = 1
     return Trainer(
-        max_epochs=max_epochs,
+        max_epochs=trainer_cfg.final_max_epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=devices,
         strategy="auto",
         gradient_clip_val=trainer_cfg.gradient_clip_val,
-        logger=False,
+        callbacks=[early_stop, checkpoint],
+        logger=logger,
         enable_progress_bar=False,
-        enable_checkpointing=False,  # Manual saving
     )
 
 

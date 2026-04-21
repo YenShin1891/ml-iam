@@ -49,6 +49,7 @@ class LSTMTrainerConfig:
     batch_size: int = 128
     max_epochs: int = 100
     patience: int = 5
+    final_patience: int = 20
     gradient_clip_val: float = 1.0
 
     # Device configuration
