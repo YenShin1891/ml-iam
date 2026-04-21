@@ -441,6 +441,13 @@ def get_tft_shap_values(
                         else:
                             batch_dict[key] = value
 
+                # Move all tensors to the model's device
+                device = next(self.tft_model.parameters()).device
+                batch_dict = {
+                    k: v.to(device) if isinstance(v, _torch.Tensor) else v
+                    for k, v in batch_dict.items()
+                }
+
                 output = self.tft_model(batch_dict)
 
                 # Extract prediction tensor

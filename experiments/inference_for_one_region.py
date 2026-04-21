@@ -595,7 +595,6 @@ def _infer_lstm(artifacts, synthetic, features, targets):
 def _infer_tft(artifacts, synthetic, features, targets):
     import torch
     from src.trainers.tft_dataset import from_train_template
-    from src.trainers.tft_model import create_dataloaders
     from src.data.preprocess import add_missingness_indicators
     from configs.models.tft import TFTTrainerConfig
 
@@ -604,12 +603,23 @@ def _infer_tft(artifacts, synthetic, features, targets):
     # Add missingness indicators
     data, features_with_missing = add_missingness_indicators(data, features)
 
-    # Encode categoricals (use training vocab so codes match embeddings)
-    data = encode_categorical_columns(data, model_family_categories=artifacts.get("model_family_categories"))
+    # TFT handles categorical encoding internally via NaNLabelEncoder in the
+    # saved dataset template — do NOT pre-encode to integer codes here.
+    # Just ensure categorical columns are strings so the template's encoders
+    # can map them.
+    for col in ("Region", "Model_Family"):
+        if col in data.columns:
+            data[col] = data[col].astype(str)
 
     # Impute NaN — TFT uses per-group normalization so 0.0 is less harmful here
     for col in features_with_missing:
         if col in data.columns and col not in ("Region", "Model_Family"):
+            data[col] = data[col].fillna(0.0)
+
+    # TFT requires non-NaN targets even in predict mode (they're not used as
+    # inputs but TimeSeriesDataSet validates them). Fill with 0.0.
+    for col in targets:
+        if col in data.columns:
             data[col] = data[col].fillna(0.0)
 
     # Add Step and DeltaYears
@@ -623,6 +633,21 @@ def _infer_tft(artifacts, synthetic, features, targets):
     model = artifacts["model"]
     template = artifacts["dataset_template"]
 
+    # Drop rows with Model names not in the training vocabulary — TFT's
+    # NaNLabelEncoder rejects unknown categories, and patching it after the
+    # fact breaks the code ↔ index alignment during inverse_transform.
+    model_enc = template._categorical_encoders.get("__group_id__Model")
+    if model_enc is not None and hasattr(model_enc, "classes_"):
+        known_models = set(model_enc.classes_.keys())
+        unknown_mask = ~data["Model"].isin(known_models)
+        if unknown_mask.any():
+            dropped = data.loc[unknown_mask, "Model"].unique().tolist()
+            logger.warning(
+                "Dropping %d rows with models unseen during training: %s",
+                unknown_mask.sum(), dropped,
+            )
+            data = data[~unknown_mask].reset_index(drop=True)
+
     try:
         test_dataset = from_train_template(template, data, mode="predict")
     except Exception as e:
@@ -633,8 +658,14 @@ def _infer_tft(artifacts, synthetic, features, targets):
         train=False, batch_size=trainer_cfg.batch_size, num_workers=1,
     )
 
+    # Force single-GPU inference via trainer_kwargs — without this,
+    # model.predict() creates a Trainer that auto-detects all GPUs and
+    # launches DDP, duplicating the script and failing on tiny datasets.
     logger.info("Running TFT prediction...")
-    returns = model.predict(test_loader, return_index=True)
+    returns = model.predict(
+        test_loader, return_index=True,
+        trainer_kwargs={"accelerator": "gpu", "devices": 1},
+    )
 
     from pytorch_forecasting.models.base._base_model import Prediction as _PFPrediction
     outputs = returns.output
