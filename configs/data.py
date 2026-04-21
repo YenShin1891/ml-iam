@@ -53,13 +53,13 @@ NAME_PREFIX = "pipeline"
 INCLUDE_DATE = True
 DATE_FMT = "%Y-%m-%d"
 # Tags include dynamic count of output variables
-# Pre-defined tags: include-intermediate, apply-base-year
-TAGS = [f"out={len(OUTPUT_VARIABLES)}vars", "exclude-year", "apply-base-year", "with-ssp"]
+# Pre-defined tags: include-intermediate, apply-base-year, with-ssp
+TAGS = [f"out={len(OUTPUT_VARIABLES)}vars", "exclude-year", "apply-base-year"]
 SAVE_ANALYSIS = True
 
 # Optional data structure hints (used by TFT & plotting)
 INDEX_COLUMNS = ['Model', 'Scenario', 'Region']
-NON_FEATURE_COLUMNS = ['Model', 'Scenario', 'Scenario_Category', 'Year']
+NON_FEATURE_COLUMNS = ['Model', 'Scenario', 'Scenario_Category', 'Region_Scale', 'Year']
 CATEGORICAL_COLUMNS = ['Region', 'Model_Family']
 
 # Feature engineering knobs for downstream (kept here for single stop)
@@ -81,3 +81,30 @@ REGION_CATEGORIES = [
     'USA', 'VEN', 'World', 'ZAF'
 ]
 REGION_CODE_TO_LABEL = {idx: region for idx, region in enumerate(REGION_CATEGORIES)}
+
+
+# ── Region scale classification ───────────────────────────────────────────
+# Each region belongs to a geographic aggregation scale.
+# Used for scale-aware imputation and dashboard grouping.
+# Mapping: prefix → scale. Checked in order; first match wins.
+# Regions not matching any prefix (ISO3 codes, EU, etc.) default to "ISO3".
+REGION_SCALE_PREFIXES = [
+    ("World", "World"),
+    ("R5", "R5"),
+    ("R6", "R6"),
+    ("R10", "R10"),
+]
+REGION_SCALE_DEFAULT = "ISO3"
+REGION_SCALE_ORDER = ["World", "R5", "R6", "R10", "ISO3"]
+
+
+# ── Preprocessing options ─────────────────────────────────────────────────
+
+# When True, interpolate/extrapolate target values within each
+# (Model, Scenario, Region) group across years BEFORE computing lag features.
+# This fills partial year coverage so lags are computed from real values.
+INTERPOLATE_TARGETS = True
+
+# When True, impute missing continuous features using train medians
+# computed per Region_Scale group instead of a single global median.
+SCALE_AWARE_IMPUTATION = True
