@@ -33,7 +33,7 @@ class TFTDatasetConfig:
         mode: str,
     ) -> Dict[str, Any]:
         # Lazy import to avoid heavy deps at module import time
-        from pytorch_forecasting.data import GroupNormalizer, MultiNormalizer
+        from pytorch_forecasting.data import EncoderNormalizer, MultiNormalizer
 
         if isinstance(targets, str):
             targets = [targets]
@@ -47,10 +47,11 @@ class TFTDatasetConfig:
             if f not in (CATEGORICAL_COLUMNS + time_known_reals)
         ]
 
-        # Shared normalizer across targets, grouped by group_ids
-        # IMPORTANT: create a distinct GroupNormalizer per target
+        # Per-sample normalization from each sample's encoder window.
+        # Avoids GroupNormalizer's silent fallback to global median stats
+        # for unseen groups at test time (data is split by group).
         target_normalizer = MultiNormalizer([
-            GroupNormalizer(groups=self.group_ids) for _ in targets
+            EncoderNormalizer() for _ in targets
         ])
 
         min_encoder_length, max_encoder_length = self.resolve_encoder_lengths()

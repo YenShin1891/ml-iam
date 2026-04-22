@@ -2,7 +2,13 @@
 
 import logging
 import os
+import warnings
 from typing import Dict, List, Optional
+
+# Suppress per-sample warnings from EncoderNormalizer's __getitem__ re-fitting
+# and pytorch_forecasting's group-drop notices (logged once is enough).
+warnings.filterwarnings("ignore", message="X does not have valid feature names")
+warnings.filterwarnings("ignore", message="Min encoder length and/or min_prediction_idx")
 
 import torch
 from lightning.pytorch import Trainer

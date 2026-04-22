@@ -5,11 +5,11 @@ from typing import Any, Dict, List, Tuple
 @dataclass
 class TFTDefaultParams:
     """Default TFT parameters for when search is skipped."""
-    hidden_size: int = 512
-    lstm_layers: int = 1
+    hidden_size: int = 256
+    lstm_layers: int = 2
     dropout: float = 0.3
-    learning_rate: float = 0.001
-    best_epoch: int = 2
+    learning_rate: float = 0.01
+    best_epoch: int = 12
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary format expected by trainer."""
