@@ -3,12 +3,12 @@
 
 model: tft
 
-dataset: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-interp-targets-scale-impute-2026-04-13
+dataset: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-interp-targets-scale-impute-2026-04-23
 
 cuda_visible_devices:
-  default: "0,1,2,3,4,5,6,7"
-  search: "0,1,2,3,4,5,6,7"
-  train: "0,1,2,3,4,5,6,7"
+  default: "0,1,2,3,4,5"
+  search: "0,1,2,3,4,5"
+  train: "0,1,2,3,4,5"
 
 # TFT-specific: whether to require full lag history
 lag_required: true
@@ -18,8 +18,8 @@ lag_required: true
 two_window: true
 
 # Omit 'search' to skip hyperparameter search and use defaults instead.
-phases: [preprocess, train, test, plot]
+phases: [preprocess, search, train, test, plot]
 
 # To resume an existing run, set run_id and resume (overrides 'phases'):
-run_id: tft_79        # existing run ID under results/tft/
-resume: train         # phase to resume from (preprocess, search, train, test, plot)
+run_id: tft_01        # existing run ID under results/tft/
+resume: search         # phase to resume from (preprocess, search, train, test, plot)
