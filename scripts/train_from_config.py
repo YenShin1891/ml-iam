@@ -25,6 +25,13 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 _ALLOWED_MODELS = {"xgb", "lstm", "tft"}
 _ALLOWED_PHASES = {"preprocess", "search", "train", "test", "plot"}
 
+_SKLEARN_FEATURENAME_WARN_1 = (
+    "ignore:X does not have valid feature names, but StandardScaler was fitted with feature names:UserWarning"
+)
+_SKLEARN_FEATURENAME_WARN_2 = (
+    "ignore:X has feature names, but StandardScaler was fitted without feature names:UserWarning"
+)
+
 
 def _assert_run_dir_exists(run_id: str) -> None:
     from src.utils.utils import get_run_root
@@ -369,6 +376,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     # Prepare env for subprocesses
     child_env = dict(os.environ)
+
+    # Ensure spawned phase processes (and their workers) suppress sklearn feature-name warning spam.
+    existing_pywarnings = child_env.get("PYTHONWARNINGS", "")
+    warning_parts = [p for p in existing_pywarnings.split(",") if p]
+    for rule in (_SKLEARN_FEATURENAME_WARN_1, _SKLEARN_FEATURENAME_WARN_2):
+        if rule not in warning_parts:
+            warning_parts.append(rule)
+    child_env["PYTHONWARNINGS"] = ",".join(warning_parts)
 
     # Apply global/default CUDA setting (if provided) so phases that don't override are stable.
     if cfg.cuda_visible_devices_by_phase and "default" in cfg.cuda_visible_devices_by_phase:
