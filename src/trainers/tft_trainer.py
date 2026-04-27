@@ -1,8 +1,11 @@
 """TFT trainer with main orchestration functions."""
 
+import hashlib
 import json
 import logging
+import math
 import os
+import queue
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -31,6 +34,87 @@ from .tft_model import (
 from .tft_utils import get_default_num_workers, single_gpu_env, teardown_distributed
 
 
+_SEARCH_PARAM_KEYS = ("hidden_size", "lstm_layers", "dropout", "learning_rate")
+
+
+def _is_completed_trial_row(row: Dict) -> bool:
+    """True only for rows usable for dedup and best-param selection."""
+    if not isinstance(row, dict):
+        return False
+    # Explicit completion marker is required to avoid counting partial trials.
+    if row.get("status") != "completed":
+        return False
+    if not all(k in row for k in _SEARCH_PARAM_KEYS):
+        return False
+    try:
+        val_loss = float(row["val_loss"])
+    except Exception:
+        return False
+    if not math.isfinite(val_loss):
+        return False
+    return True
+
+
+def _canonicalize_search_params(params: Dict) -> Dict:
+    """Return canonical params dict for stable signatures / comparisons."""
+    canonical = {}
+    for k in _SEARCH_PARAM_KEYS:
+        if k not in params:
+            continue
+        v = params[k]
+        if isinstance(v, float):
+            canonical[k] = float(format(v, ".12g"))
+        else:
+            canonical[k] = v
+    return canonical
+
+
+def _params_signature(params: Dict) -> str:
+    """Stable signature for a parameter set (only search-relevant keys)."""
+    canonical = _canonicalize_search_params(params)
+    # Ensure all expected keys are present for a unique signature
+    missing = [k for k in _SEARCH_PARAM_KEYS if k not in canonical]
+    if missing:
+        raise ValueError(f"Missing search params for signature: {missing}. Got keys={list(params.keys())}")
+    return json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+
+
+def _trial_dirname_from_params(params: Dict) -> str:
+    sig = _params_signature(params)
+    h = hashlib.sha1(sig.encode("utf-8")).hexdigest()[:10]
+    return f"trial_{h}"
+
+
+def _read_trials_ledger(run_id: str) -> List[Dict]:
+    """Read search/trials.jsonl if present."""
+    ledger_path = os.path.join(get_run_root(run_id), "search", "trials.jsonl")
+    if not os.path.exists(ledger_path):
+        return []
+    out: List[Dict] = []
+    with open(ledger_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except Exception:
+                continue
+    return out
+
+
+def _append_trials_ledger(run_id: str, rows: List[Dict]) -> None:
+    """Append rows to search/trials.jsonl (best-effort)."""
+    if not rows:
+        return
+    search_root = os.path.join(get_run_root(run_id), "search")
+    os.makedirs(search_root, exist_ok=True)
+    ledger_path = os.path.join(search_root, "trials.jsonl")
+    with open(ledger_path, "a", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, sort_keys=True) + "\n")
+
+
 def _get_search_gpu_ids() -> List[int]:
     """Get physical GPU IDs available for search from CUDA_VISIBLE_DEVICES."""
     cuda_env = os.environ.get("CUDA_VISIBLE_DEVICES", "")
@@ -57,7 +141,7 @@ def _get_best_score(trainer):
     return trainer.current_epoch, trainer.callback_metrics["val_loss"].item()
 
 
-def _search_worker(gpu_id, params_list, train_dataset, val_dataset, n_targets, trainer_cfg, result_queue, run_id):
+def _search_worker(gpu_id, trials, train_dataset, val_dataset, n_targets, trainer_cfg, result_queue, run_id, stage):
     """Run a batch of search trials on a single GPU (spawned subprocess)."""
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
@@ -72,15 +156,142 @@ def _search_worker(gpu_id, params_list, train_dataset, val_dataset, n_targets, t
         num_workers=num_workers, persistent_workers=num_workers > 0,
     )
 
-    for i, params in enumerate(params_list):
-        logging.info("GPU %d - Trial %d/%d - Params: %s", gpu_id, i + 1, len(params_list), params)
+    for i, trial in enumerate(trials):
+        params = trial["params"]
+        trial_id = trial["trial_id"]
+        logging.info("[%s] GPU %d - Trial %d/%d - Params: %s", stage, gpu_id, i + 1, len(trials), params)
         tft = create_tft_model(train_dataset, params, n_targets)
-        log_dir = os.path.join(get_run_root(run_id), "search", f"gpu{gpu_id}_trial{i}")
+        log_dir = os.path.join(get_run_root(run_id), "search", "trials", trial_id)
+        os.makedirs(log_dir, exist_ok=True)
         trainer = create_search_trainer(trainer_cfg, log_dir=log_dir)
         trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
         best_epoch, best_val_loss = _get_best_score(trainer)
-        result_queue.put({**params, "val_loss": best_val_loss, "best_epoch": best_epoch})
-        logging.info("GPU %d - Trial %d/%d - best_val_loss: %.4f best_epoch: %d", gpu_id, i + 1, len(params_list), best_val_loss, best_epoch)
+        result_queue.put({
+            **_canonicalize_search_params(params),
+            "val_loss": float(best_val_loss),
+            "best_epoch": int(best_epoch),
+            "trial_id": trial_id,
+            "signature": trial["signature"],
+            "status": "completed",
+            "stage": stage,
+        })
+        logging.info(
+            "[%s] GPU %d - Trial %d/%d - best_val_loss: %.4f best_epoch: %d",
+            stage, gpu_id, i + 1, len(trials), best_val_loss, best_epoch,
+        )
+
+
+def _run_trials_once(
+    train_dataset,
+    val_dataset,
+    n_targets: int,
+    params_list: List[Dict],
+    trainer_cfg: TFTTrainerConfig,
+    run_id: str,
+    stage: str,
+) -> List[Dict]:
+    """Run one stage of trials and return completed result rows."""
+    if not params_list:
+        return []
+
+    trials = []
+    for p in params_list:
+        sig = _params_signature(p)
+        trials.append({
+            "params": p,
+            "signature": sig,
+            "trial_id": f"{stage}_{_trial_dirname_from_params(p)}",
+        })
+
+    gpu_ids = _get_search_gpu_ids()
+    if len(gpu_ids) <= 1:
+        train_loader, val_loader = create_dataloaders(train_dataset, val_dataset, trainer_cfg.batch_size)
+        results: List[Dict] = []
+        for i, trial in enumerate(trials):
+            params = trial["params"]
+            logging.info("[%s] Trial %d/%d - Params: %s", stage, i + 1, len(trials), params)
+            tft = create_tft_model(train_dataset, params, n_targets)
+            log_dir = os.path.join(get_run_root(run_id), "search", "trials", trial["trial_id"])
+            os.makedirs(log_dir, exist_ok=True)
+            trainer = create_search_trainer(trainer_cfg, log_dir=log_dir)
+            trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
+            epoch, val_loss = _get_best_score(trainer)
+            results.append({
+                **_canonicalize_search_params(params),
+                "val_loss": float(val_loss),
+                "best_epoch": int(epoch),
+                "trial_id": trial["trial_id"],
+                "signature": trial["signature"],
+                "status": "completed",
+                "stage": stage,
+            })
+            # Persist immediately so progress tracking and resume are up-to-date.
+            try:
+                _append_trials_ledger(run_id, [results[-1]])
+            except Exception:
+                pass
+        return results
+
+    # Multi-GPU parallel run
+    import torch.multiprocessing as mp
+
+    logging.info("[%s] Parallel search across %d GPUs: %s", stage, len(gpu_ids), gpu_ids)
+    gpu_trials: List[List[Dict]] = [[] for _ in gpu_ids]
+    for i, trial in enumerate(trials):
+        gpu_trials[i % len(gpu_ids)].append(trial)
+
+    ctx = mp.get_context("spawn")
+    result_queue = ctx.Queue()
+    processes = []
+    for gpu_id, assigned in zip(gpu_ids, gpu_trials):
+        if not assigned:
+            continue
+        p = ctx.Process(
+            target=_search_worker,
+            args=(gpu_id, assigned, train_dataset, val_dataset, n_targets, trainer_cfg, result_queue, run_id, stage),
+        )
+        p.start()
+        processes.append(p)
+
+    results = []
+
+    # Stream completed trial rows from workers and append to ledger in real time.
+    while True:
+        try:
+            row = result_queue.get(timeout=1)
+            results.append(row)
+            try:
+                _append_trials_ledger(run_id, [row])
+            except Exception:
+                pass
+        except queue.Empty:
+            pass
+
+        if all(not p.is_alive() for p in processes):
+            break
+
+    for p in processes:
+        p.join()
+
+    # Drain any rows that were queued right before workers exited.
+    while True:
+        try:
+            row = result_queue.get_nowait()
+            results.append(row)
+            try:
+                _append_trials_ledger(run_id, [row])
+            except Exception:
+                pass
+        except queue.Empty:
+            break
+
+    failed = [p for p in processes if p.exitcode != 0]
+    if failed:
+        raise RuntimeError(f"{len(failed)} search worker(s) crashed during {stage} — check logs.")
+
+    if not results:
+        raise RuntimeError(f"TFT {stage} produced no results.")
+    return results
 
 
 def hyperparameter_search_tft(
@@ -99,93 +310,191 @@ def hyperparameter_search_tft(
     trainer_cfg = TFTTrainerConfig()
     n_targets = len(targets)
 
-    all_params = list(ParameterSampler(
-        search_cfg.param_dist, n_iter=search_cfg.search_iter_n, random_state=0,
-    ))
+    # Resume/dedup now uses only the append-only trials ledger.
+    existing_ledger_rows = _read_trials_ledger(run_id)
+    completed_ledger_rows = [r for r in existing_ledger_rows if _is_completed_trial_row(r)]
+    skipped_rows = len(existing_ledger_rows) - len(completed_ledger_rows)
+    if skipped_rows > 0:
+        logging.warning(
+            "Ignoring %d row(s) in search/trials.jsonl that are missing completed status or valid metrics.",
+            skipped_rows,
+        )
 
-    gpu_ids = _get_search_gpu_ids()
+    all_params = list(
+        ParameterSampler(
+            search_cfg.param_dist,
+            n_iter=search_cfg.search_iter_n,
+            random_state=0,
+        )
+    )
 
-    if len(gpu_ids) <= 1:
-        # Single GPU or CPU: run sequentially (original behaviour)
-        return _search_sequential(train_dataset, val_dataset, n_targets, all_params, trainer_cfg, run_id)
-
-    # --- parallel search across GPUs ---
-    import torch.multiprocessing as mp
-
-    logging.info("Parallel search across %d GPUs: %s", len(gpu_ids), gpu_ids)
-
-    # Round-robin trials to GPUs
-    gpu_params: List[List[Dict]] = [[] for _ in gpu_ids]
-    for i, params in enumerate(all_params):
-        gpu_params[i % len(gpu_ids)].append(params)
-
-    ctx = mp.get_context("spawn")
-    result_queue = ctx.Queue()
-
-    processes = []
-    for gpu_id, params_list in zip(gpu_ids, gpu_params):
-        if not params_list:
+    sig_to_params = {}
+    for p in all_params:
+        try:
+            sig_to_params[_params_signature(p)] = p
+        except Exception:
             continue
-        p = ctx.Process(
-            target=_search_worker,
-            args=(gpu_id, params_list, train_dataset, val_dataset,
-                  n_targets, trainer_cfg, result_queue, run_id),
+
+    stage1_epochs = int(getattr(search_cfg, "stage1_max_epochs", 40))
+    stage2_top_k = int(getattr(search_cfg, "stage2_top_k", 10))
+
+    stage1_sigs = set()
+    stage2_sigs = set()
+    for r in completed_ledger_rows:
+        sig = r.get("signature") or _params_signature(r)
+        stage = r.get("stage", "stage1")
+        if stage == "stage2":
+            stage2_sigs.add(sig)
+        else:
+            stage1_sigs.add(sig)
+
+    # If stage2 is completed for a signature, treat stage1 as done too.
+    explored_sigs = stage1_sigs | stage2_sigs
+    stage1_remaining = [p for sig, p in sig_to_params.items() if sig not in explored_sigs]
+
+    if explored_sigs:
+        logging.info(
+            "TFT resume: %d signature(s) already explored; %d/%d remain for stage1.",
+            len(explored_sigs), len(stage1_remaining), len(sig_to_params),
         )
-        p.start()
-        processes.append(p)
+    else:
+        logging.info("No prior completed TFT trials detected; starting two-stage search.")
 
-    for p in processes:
-        p.join()
+    # Stage 1: cheap exploration
+    stage1_cfg = TFTTrainerConfig()
+    stage1_cfg.max_epochs = stage1_epochs
+    stage1_cfg.batch_size = trainer_cfg.batch_size
+    stage1_cfg.gradient_clip_val = trainer_cfg.gradient_clip_val
+    stage1_cfg.patience = min(trainer_cfg.patience, max(1, stage1_epochs // 4))
+    stage1_cfg.devices = trainer_cfg.devices
 
-    # Check for worker failures
-    failed = [p for p in processes if p.exitcode != 0]
-    if failed:
-        raise RuntimeError(
-            f"{len(failed)} search worker(s) crashed — check logs for GPU-level errors"
-        )
+    stage1_new_results = _run_trials_once(
+        train_dataset, val_dataset, n_targets,
+        stage1_remaining, stage1_cfg, run_id, stage="stage1",
+    )
 
-    results = []
-    while not result_queue.empty():
-        results.append(result_queue.get_nowait())
+    # Build stage1 pool from completed rows (legacy rows without stage count as stage1)
+    stage1_pool = [
+        r for r in completed_ledger_rows
+        if r.get("stage", "stage1") != "stage2"
+    ]
+    stage1_pool.extend([r for r in stage1_new_results if _is_completed_trial_row(r)])
 
-    if not results:
-        raise RuntimeError("TFT hyperparameter search produced no results.")
+    if not stage1_pool:
+        raise RuntimeError("TFT stage1 produced no completed trials.")
 
-    best = min(results, key=lambda r: r["val_loss"])
-    best_score = best.pop("val_loss")
-    best_epoch = best.pop("best_epoch")
-    best_params = best
+    # Stage 2: deeper rerank on top-K stage1 candidates
+    ranked_stage1 = sorted(stage1_pool, key=lambda r: float(r["val_loss"]))
+    top_signatures = []
+    seen = set()
+    for r in ranked_stage1:
+        sig = r.get("signature") or _params_signature(r)
+        if sig in seen:
+            continue
+        seen.add(sig)
+        top_signatures.append(sig)
+        if len(top_signatures) >= max(1, stage2_top_k):
+            break
+
+    stage2_remaining = [
+        sig_to_params[sig]
+        for sig in top_signatures
+        if sig in sig_to_params and sig not in stage2_sigs
+    ]
+
+    logging.info(
+        "TFT stage2 candidate signatures: %d (top_k=%d), remaining to run: %d",
+        len(top_signatures), stage2_top_k, len(stage2_remaining),
+    )
+
+    stage2_new_results = _run_trials_once(
+        train_dataset, val_dataset, n_targets,
+        stage2_remaining, trainer_cfg, run_id, stage="stage2",
+    )
+
+    # Final best: prefer stage2-completed rows; fallback to stage1-completed rows.
+    combined_completed = list(completed_ledger_rows)
+    combined_completed.extend([r for r in stage1_new_results if _is_completed_trial_row(r)])
+    combined_completed.extend([r for r in stage2_new_results if _is_completed_trial_row(r)])
+
+    stage2_completed = [r for r in combined_completed if r.get("stage") == "stage2"]
+    best_pool = stage2_completed if stage2_completed else [
+        r for r in combined_completed if r.get("stage", "stage1") != "stage2"
+    ]
+
+    if not best_pool:
+        raise RuntimeError("No completed TFT trials available to select best parameters.")
+
+    best = min(best_pool, key=lambda r: float(r["val_loss"]))
+    best_score = float(best["val_loss"])
+    best_epoch = int(best.get("best_epoch", 0))
+    best_params = {k: best[k] for k in _SEARCH_PARAM_KEYS}
     best_params["best_epoch"] = best_epoch
-
-    logging.info("Best TFT Params: %s with Val Loss: %.4f (best epoch: %d)", best_params, best_score, best_epoch)
+    logging.info(
+        "Best TFT Params (%s): %s with Val Loss: %.4f (best epoch: %d)",
+        "stage2" if stage2_completed else "stage1",
+        best_params,
+        best_score,
+        best_epoch,
+    )
     return best_params
 
 
-def _search_sequential(train_dataset, val_dataset, n_targets, all_params, trainer_cfg, run_id) -> Dict:
+def _search_sequential(
+    train_dataset,
+    val_dataset,
+    n_targets,
+    all_params,
+    trainer_cfg,
+    run_id,
+    existing_ledger_rows=None,
+) -> Dict:
     """Sequential search fallback for single-GPU / CPU environments."""
     train_loader, val_loader = create_dataloaders(train_dataset, val_dataset, trainer_cfg.batch_size)
 
-    best_score = float("inf")
-    best_params = None
-    best_epoch = 0
-
+    new_results = []
     for i, params in enumerate(all_params):
         logging.info("TFT Search Iteration %d/%d - Params: %s", i + 1, len(all_params), params)
         tft = create_tft_model(train_dataset, params, n_targets)
-        log_dir = os.path.join(get_run_root(run_id), "search", f"trial{i}")
+        trial_id = _trial_dirname_from_params(params)
+        log_dir = os.path.join(get_run_root(run_id), "search", "trials", trial_id)
+        os.makedirs(log_dir, exist_ok=True)
         trainer = create_search_trainer(trainer_cfg, log_dir=log_dir)
         trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
         epoch, val_loss = _get_best_score(trainer)
 
-        if val_loss < best_score:
-            best_score = val_loss
-            best_params = params
-            best_epoch = epoch
+        row = {
+            **_canonicalize_search_params(params),
+            "val_loss": float(val_loss),
+            "best_epoch": int(epoch),
+            "trial_id": trial_id,
+        }
+        new_results.append(row)
 
-    logging.info("Best TFT Params: %s with Val Loss: %.4f (best epoch: %d)", best_params, best_score, best_epoch)
-    if best_params is None:
-        raise RuntimeError("TFT hyperparameter search did not identify a best parameter set.")
-    best_params["best_epoch"] = best_epoch
+        # Append each trial to ledger so a killed job can resume without redoing work
+        try:
+            _append_trials_ledger(run_id, [{
+                **{k: row.get(k) for k in _SEARCH_PARAM_KEYS},
+                "val_loss": float(row["val_loss"]),
+                "best_epoch": int(row["best_epoch"]),
+                "signature": _params_signature(row),
+                "trial_id": trial_id,
+                "status": "completed",
+            }])
+        except Exception:
+            pass
+
+    # Choose best across existing ledger + new
+    combined = []
+    if existing_ledger_rows:
+        combined.extend([r for r in existing_ledger_rows if _is_completed_trial_row(r)])
+    combined.extend([r for r in new_results if _is_completed_trial_row(r)])
+
+    best = min(combined, key=lambda r: float(r["val_loss"]))
+    best_params = {k: best[k] for k in _SEARCH_PARAM_KEYS}
+    best_params["best_epoch"] = int(best.get("best_epoch", 0))
+    best_score = float(best["val_loss"])
+    logging.info("Best TFT Params: %s with Val Loss: %.4f (best epoch: %d)", best_params, best_score, best_params["best_epoch"])
     return best_params
 
 
