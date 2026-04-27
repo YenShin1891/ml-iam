@@ -35,3 +35,6 @@ class TFTSearchSpace:
         ("lstm_layers", "learning_rate"),
     ])
     search_iter_n: int = 50
+    # Two-stage search: cheap exploration, then deeper rerank on top candidates.
+    stage1_max_epochs: int = 25
+    stage2_top_k: int = 10
