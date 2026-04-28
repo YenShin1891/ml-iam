@@ -145,15 +145,18 @@ def _search_worker(gpu_id, trials, train_dataset, val_dataset, n_targets, traine
     """Run a batch of search trials on a single GPU (spawned subprocess)."""
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
-    # Cap dataloader workers to avoid oversubscription across many GPU workers
+    # Cap dataloader workers to avoid oversubscription across many GPU workers.
+    # persistent_workers=False: reusing persistent workers across sequential trials in a
+    # spawned subprocess causes a deadlock where workers spin at 100% CPU waiting for
+    # a prefetch queue that the previous trial's training loop has already abandoned.
     num_workers = min(get_default_num_workers(), 4)
     train_loader = train_dataset.to_dataloader(
         train=True, batch_size=trainer_cfg.batch_size,
-        num_workers=num_workers, persistent_workers=num_workers > 0,
+        num_workers=num_workers, persistent_workers=False,
     )
     val_loader = val_dataset.to_dataloader(
         train=False, batch_size=trainer_cfg.batch_size,
-        num_workers=num_workers, persistent_workers=num_workers > 0,
+        num_workers=num_workers, persistent_workers=False,
     )
 
     for i, trial in enumerate(trials):
@@ -228,8 +231,8 @@ def _run_trials_once(
             # Persist immediately so progress tracking and resume are up-to-date.
             try:
                 _append_trials_ledger(run_id, [results[-1]])
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.warning("Failed to write trial to ledger (result kept in memory): %s", exc)
         return results
 
     # Multi-GPU parallel run
@@ -262,8 +265,8 @@ def _run_trials_once(
             results.append(row)
             try:
                 _append_trials_ledger(run_id, [row])
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.warning("Failed to write trial to ledger (result kept in memory): %s", exc)
         except queue.Empty:
             pass
 
@@ -271,7 +274,11 @@ def _run_trials_once(
             break
 
     for p in processes:
-        p.join()
+        p.join(timeout=300)
+        if p.is_alive():
+            logging.warning("Search worker PID %d did not exit within 300 s; killing it.", p.pid)
+            p.kill()
+            p.join()
 
     # Drain any rows that were queued right before workers exited.
     while True:
@@ -280,8 +287,8 @@ def _run_trials_once(
             results.append(row)
             try:
                 _append_trials_ledger(run_id, [row])
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.warning("Failed to write trial to ledger (result kept in memory): %s", exc)
         except queue.Empty:
             break
 
@@ -481,8 +488,8 @@ def _search_sequential(
                 "trial_id": trial_id,
                 "status": "completed",
             }])
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.warning("Failed to write trial to ledger (result kept in memory): %s", exc)
 
     # Choose best across existing ledger + new
     combined = []
