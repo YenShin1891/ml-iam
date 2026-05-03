@@ -30,7 +30,9 @@ class TFTSearchSpace:
         "dropout": [0.1, 0.2, 0.3],
         "learning_rate": [0.001, 0.01],
     })
-    param_pairs: List[Tuple[str, str]] = field(default_factory=lambda: [
+    param_pairs: List[Tuple[str, str]] = field(default_factory=lambda: [    
+        # not actually used
+        # add implementation if you want smaller search space 
         ("hidden_size", "dropout"),
         ("lstm_layers", "learning_rate"),
     ])
