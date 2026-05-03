@@ -239,6 +239,10 @@ def test_lstm(store, lag_required=True):
     horizon_df = session_state.get("horizon_df")
     horizon_y_true = session_state.get("horizon_y_true")
     store.save_predictions(preds, horizon_df=horizon_df, horizon_y_true=horizon_y_true)
+    # Save test_data for dashboard filters; y_test extracted from target columns
+    test_data = splits["test_data"]
+    y_test = test_data[splits["targets"]].values
+    store.save_test_data(test_data, y_test)
     return preds
 
 

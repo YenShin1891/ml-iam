@@ -5,11 +5,11 @@ from typing import Any, Dict, List, Tuple
 @dataclass
 class TFTDefaultParams:
     """Default TFT parameters for when search is skipped."""
-    hidden_size: int = 512
-    lstm_layers: int = 1
+    hidden_size: int = 256
+    lstm_layers: int = 2
     dropout: float = 0.3
-    learning_rate: float = 0.001
-    best_epoch: int = 2
+    learning_rate: float = 0.01
+    best_epoch: int = 12
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary format expected by trainer."""
@@ -27,11 +27,13 @@ class TFTSearchSpace:
     param_dist: Dict[str, List[Any]] = field(default_factory=lambda: {
         "hidden_size": [128, 256, 512],
         "lstm_layers": [1, 2, 3],
-        "dropout": [0.1, 0.3],
+        "dropout": [0.1, 0.2, 0.3],
         "learning_rate": [0.001, 0.01],
     })
-    param_pairs: List[Tuple[str, str]] = field(default_factory=lambda: [
+    param_pairs: List[Tuple[str, str]] = field(default_factory=lambda: [    
+        # not actually used
+        # add implementation if you want smaller search space 
         ("hidden_size", "dropout"),
         ("lstm_layers", "learning_rate"),
     ])
-    search_iter_n: int = 20
+    search_iter_n: int = 50

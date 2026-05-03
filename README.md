@@ -205,7 +205,7 @@ pip install -r requirements-advanced.txt
 
 Verify PyTorch CUDA availability:
 ```bash
-python -c "import torch; print(f’CUDA available: {torch.cuda.is_available()}’)"
+python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
 ```
 
 ### Training LSTM / TFT
