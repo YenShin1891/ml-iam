@@ -126,6 +126,31 @@ class RunStore:
         return (self._artifacts_dir() / "train_meta.json").exists()
 
     # ------------------------------------------------------------------
+    # Test data (for dashboard — avoids expensive re-derivation)
+    # ------------------------------------------------------------------
+
+    def save_test_data(self, test_data: pd.DataFrame, y_test) -> None:
+        """Save test split and targets for dashboard use."""
+        import numpy as np
+        td_path = self._cache_dir() / "test_data.parquet"
+        test_data.to_parquet(td_path, index=False)
+        yt_path = self._cache_dir() / "y_test.npy"
+        np.save(yt_path, y_test)
+        logging.info("Saved test_data (%d rows) and y_test to %s", len(test_data), self._cache_dir())
+
+    def load_test_data(self):
+        """Load cached test split and targets."""
+        import numpy as np
+        td_path = self._cache_dir() / "test_data.parquet"
+        yt_path = self._cache_dir() / "y_test.npy"
+        test_data = pd.read_parquet(td_path)
+        y_test = np.load(yt_path)
+        return test_data, y_test
+
+    def has_test_data(self) -> bool:
+        return (self._cache_dir() / "test_data.parquet").exists() and (self._cache_dir() / "y_test.npy").exists()
+
+    # ------------------------------------------------------------------
     # Predictions (pickle — numpy arrays may contain NaN)
     # ------------------------------------------------------------------
 
