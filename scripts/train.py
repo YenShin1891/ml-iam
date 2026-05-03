@@ -13,6 +13,7 @@ import argparse
 import logging
 import os
 import sys
+from pathlib import Path
 
 
 _ALLOWED_MODELS = ("xgb", "lstm", "tft")
@@ -118,6 +119,18 @@ def _set_default_params(model, store):
         store.save_best_params(TFTDefaultParams().to_dict())
 
 
+def _assert_resume_run_exists(run_id: str) -> None:
+    """Fail fast if resume is requested for a non-existent run directory."""
+    from src.utils.utils import get_run_root
+
+    run_root = Path(get_run_root(run_id))
+    if not run_root.exists() or not run_root.is_dir():
+        raise FileNotFoundError(
+            f"Cannot resume run '{run_id}': run directory does not exist at {run_root}. "
+            "Check run_id or run preprocess/full pipeline first."
+        )
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -185,6 +198,7 @@ def main(argv=None):
 
     # Resume mode: single phase
     run_id = args.run_id
+    _assert_resume_run_exists(run_id)
     if _is_primary_rank():
         setup_logging(run_id)
 

@@ -443,10 +443,14 @@ def get_tft_shap_values(
 
                 # Move all tensors to the model's device
                 device = next(self.tft_model.parameters()).device
-                batch_dict = {
-                    k: v.to(device) if isinstance(v, _torch.Tensor) else v
-                    for k, v in batch_dict.items()
-                }
+                def _to_device(v):
+                    if isinstance(v, _torch.Tensor):
+                        return v.to(device)
+                    elif isinstance(v, (list, tuple)):
+                        moved = [_to_device(item) for item in v]
+                        return type(v)(moved)
+                    return v
+                batch_dict = {k: _to_device(v) for k, v in batch_dict.items()}
 
                 output = self.tft_model(batch_dict)
 
@@ -506,12 +510,16 @@ def get_tft_shap_values(
         wrapper = TFTWrapperForSHAP(model, train_template, target_idx, sample_x)
         wrapper.eval()
 
-        background_inputs.requires_grad_(True)
-        test_inputs.requires_grad_(True)
+        device = next(model.parameters()).device
+        background_inputs = background_inputs.to(device).requires_grad_(True)
+        test_inputs = test_inputs.to(device).requires_grad_(True)
 
-        explainer = shap.DeepExplainer(wrapper, background_inputs)
-        logging.info(f"Calculating SHAP values for {target_name}...")
-        shap_values = explainer.shap_values(test_inputs, check_additivity=False)
+        # Disable cuDNN so the native LSTM backward works in eval mode
+        # (cuDNN's RNN backward requires training mode, but DeepExplainer needs gradients)
+        with _torch.backends.cudnn.flags(enabled=False):
+            explainer = shap.DeepExplainer(wrapper, background_inputs)
+            logging.info(f"Calculating SHAP values for {target_name}...")
+            shap_values = explainer.shap_values(test_inputs, check_additivity=False)
 
         import numpy as _np
         if isinstance(shap_values, list):

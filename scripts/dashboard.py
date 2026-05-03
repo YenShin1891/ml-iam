@@ -36,21 +36,13 @@ st.markdown("""
 def get_unique_values(test_data):
     """Cache unique values for filters."""
     scenario_categories = test_data['Scenario_Category'].unique()
-    
-    region_series = test_data['Region']
-    if pd.api.types.is_numeric_dtype(region_series):
-        # Map encoded region codes back to their labels when older session states saved integers
-        codes = region_series.astype('Int64')
-        region_series = codes.map(
-            lambda code: REGION_CODE_TO_LABEL.get(int(code), str(code))
-            if pd.notna(code) and int(code) >= 0 else None
-        )
-    regions = [region for region in region_series.dropna().astype(str).unique()]
-    R10 = [region for region in regions if region.startswith('R10')]
-    R6 = [region for region in regions if region.startswith('R6')]
-    R5 = [region for region in regions if region.startswith('R5')]
-    World = [region for region in regions if region.startswith('World')]
-    ISO = [region for region in regions if not (region.startswith('R10') or region.startswith('R6') or region.startswith('R5') or region.startswith('World'))]
+
+    regions = [r for r in test_data['Region'].dropna().astype(str).unique()]
+    R10 = [r for r in regions if r.startswith('R10')]
+    R6 = [r for r in regions if r.startswith('R6')]
+    R5 = [r for r in regions if r.startswith('R5')]
+    World = [r for r in regions if r.startswith('World')]
+    ISO = [r for r in regions if not (r.startswith('R10') or r.startswith('R6') or r.startswith('R5') or r.startswith('World'))]
     new_region_order = ISO + R10 + R6 + R5 + World
 
     model_families = test_data['Model_Family'].unique()
@@ -112,26 +104,21 @@ def make_filters(test_data):
 
 def apply_filters():
     logging.info("Applying filters to test data...")
-    # XGBoost case: has y_test directly
-    if hasattr(st.session_state, 'y_test') and st.session_state.y_test is not None:
+    preds = st.session_state.get('preds')
+    if preds is None:
+        st.error("No predictions found in session state.")
+        return
+
+    # TFT/LSTM case: use horizon subset when available (predictions cover forecast horizon only)
+    horizon_df = st.session_state.get('horizon_df')
+    horizon_y_true = st.session_state.get('horizon_y_true')
+    if horizon_df is not None and horizon_y_true is not None:
+        test_data = horizon_df
+        y_test = horizon_y_true
+    # XGBoost / generic case: use full test split
+    elif hasattr(st.session_state, 'y_test') and st.session_state.y_test is not None:
         y_test = st.session_state.y_test
-        preds = st.session_state.preds
         test_data = st.session_state.test_data
-    # TFT case: extract y_test from test_data using targets, handle horizon subset
-    elif hasattr(st.session_state, 'test_data') and hasattr(st.session_state, 'targets'):
-        preds = st.session_state.preds
-        targets = st.session_state.targets
-        
-        # Use horizon subset if available (TFT predictions are on forecast horizon)
-        horizon_df = st.session_state.get('horizon_df')
-        horizon_y_true = st.session_state.get('horizon_y_true')
-        
-        if horizon_df is not None and horizon_y_true is not None:
-            test_data = horizon_df
-            y_test = horizon_y_true
-        else:
-            st.error("TFT horizon data not found in session state.")
-            return
     else:
         st.error("Required data not found in session state. Please ensure the model has been trained.")
         return
@@ -389,50 +376,75 @@ def display_selected_plot():
             img = load_plot_image(plot_info['plot_path'])
             st.image(img, caption="Temporal trajectories", use_container_width=True)
 
+def _decode_categorical_columns(store, session_state):
+    """Decode integer-encoded Region/Model_Family columns back to string labels."""
+    # Build mappings
+    region_map = REGION_CODE_TO_LABEL
+    model_family_map = None
+    if store.has_train_meta():
+        meta = store.load_train_meta()
+        categories = meta.get('lstm_model_family_categories')
+        if categories:
+            model_family_map = {i: name for i, name in enumerate(categories)}
+
+    # Decode in all DataFrames that the dashboard uses for filtering
+    for attr in ('test_data', 'horizon_df'):
+        df = getattr(session_state, attr, None)
+        if df is None:
+            continue
+        if 'Region' in df.columns and pd.api.types.is_numeric_dtype(df['Region']):
+            df['Region'] = df['Region'].map(region_map)
+        if 'Model_Family' in df.columns and pd.api.types.is_numeric_dtype(df['Model_Family']) and model_family_map:
+            df['Model_Family'] = df['Model_Family'].map(model_family_map)
+
+
 def setup_session_and_logging(run_id):
     """Initialize logging and load run artifacts via RunStore."""
+    # Reset state if run_id changed (e.g. via URL query param)
+    if st.session_state.get("current_run_id") != run_id:
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.session_state.current_run_id = run_id
+
     if st.session_state.get("logging_initialized", False) is False:
         setup_logging(run_id)
         st.session_state.logging_initialized = True
 
     store = RunStore(run_id)
-    if not store.has_processed_data():
-        st.error("No trained model found. Run the training pipeline first.")
-        return None
 
-    # Determine model type from run_id prefix
-    model_type = run_id.split("_", 1)[0]
+    if not st.session_state.get("data_initialized"):
+        # Load test_data + y_test from pre-saved artifacts (fast path)
+        if store.has_test_data():
+            test_data, y_test = store.load_test_data()
+            features, targets = store.load_features()
+            st.session_state.test_data = test_data
+            st.session_state.y_test = y_test
+            st.session_state.features = features
+            st.session_state.targets = targets
+        else:
+            st.error(
+                "No test data artifacts found. Re-run the test phase to generate them.\n\n"
+                f"Run: `make test RUN_ID={run_id}`"
+            )
+            return None
 
-    # Re-derive splits from cached parquet
-    data = store.load_processed_data()
-    if model_type == "xgb":
-        from scripts.train_xgb import derive_splits
-        splits = derive_splits(data)
-        st.session_state.update(splits)
-    elif model_type == "lstm":
-        from scripts.train_lstm import derive_splits
-        splits = derive_splits(data)
-        st.session_state.update(splits)
-    elif model_type == "tft":
-        from scripts.train_tft import derive_splits
-        splits = derive_splits(data)
-        st.session_state.update(splits)
-    else:
-        st.error(f"Unknown model type: {model_type}")
-        return None
+        # Load predictions
+        if store.has_predictions():
+            pred_bundle = store.load_predictions()
+            st.session_state.preds = pred_bundle["preds"]
+            if "horizon_df" in pred_bundle:
+                st.session_state.horizon_df = pred_bundle["horizon_df"]
+            if "horizon_y_true" in pred_bundle:
+                st.session_state.horizon_y_true = pred_bundle["horizon_y_true"]
+        else:
+            st.warning("No predictions found. Run the test phase first.")
 
-    # Load predictions
-    if store.has_predictions():
-        pred_bundle = store.load_predictions()
-        st.session_state.preds = pred_bundle["preds"]
-        if "horizon_df" in pred_bundle:
-            st.session_state.horizon_df = pred_bundle["horizon_df"]
-        if "horizon_y_true" in pred_bundle:
-            st.session_state.horizon_y_true = pred_bundle["horizon_y_true"]
-    else:
-        st.warning("No predictions found. Run the test phase first.")
+        # Decode integer-encoded categoricals (LSTM stores Region/Model_Family as int codes)
+        _decode_categorical_columns(store, st.session_state)
 
-    return splits
+        st.session_state.data_initialized = True
+
+    return True
 
 def handle_filtering_and_plotting(run_id):
     """Handle the filter application and plotting logic."""

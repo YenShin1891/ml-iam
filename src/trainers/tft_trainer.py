@@ -42,13 +42,19 @@ def _get_search_gpu_ids() -> List[int]:
 
 def _get_best_epoch(trainer) -> int:
     """Extract the epoch of the best val_loss from an EarlyStopping callback."""
+    best_epoch, _ = _get_best_score(trainer)
+    return best_epoch
+
+
+def _get_best_score(trainer):
+    """Return (best_epoch, best_val_loss) from the EarlyStopping callback."""
     for cb in trainer.callbacks:
         if isinstance(cb, EarlyStopping):
-            # best_score is set at the epoch that had the lowest val_loss;
-            # current_epoch minus wait_count gives us that epoch.
-            return trainer.current_epoch - cb.wait_count
-    # Fallback: if no early stopping, the last epoch is the best we know.
-    return trainer.current_epoch
+            best_epoch = trainer.current_epoch - cb.wait_count
+            best_val_loss = cb.best_score.item()
+            return best_epoch, best_val_loss
+    # Fallback: if no early stopping, use last epoch's metrics.
+    return trainer.current_epoch, trainer.callback_metrics["val_loss"].item()
 
 
 def _search_worker(gpu_id, params_list, train_dataset, val_dataset, n_targets, trainer_cfg, result_queue, run_id):
@@ -72,10 +78,9 @@ def _search_worker(gpu_id, params_list, train_dataset, val_dataset, n_targets, t
         log_dir = os.path.join(get_run_root(run_id), "search", f"gpu{gpu_id}_trial{i}")
         trainer = create_search_trainer(trainer_cfg, log_dir=log_dir)
         trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
-        val_loss = trainer.callback_metrics["val_loss"].item()
-        best_epoch = _get_best_epoch(trainer)
-        result_queue.put({**params, "val_loss": val_loss, "best_epoch": best_epoch})
-        logging.info("GPU %d - Trial %d/%d - val_loss: %.4f best_epoch: %d", gpu_id, i + 1, len(params_list), val_loss, best_epoch)
+        best_epoch, best_val_loss = _get_best_score(trainer)
+        result_queue.put({**params, "val_loss": best_val_loss, "best_epoch": best_epoch})
+        logging.info("GPU %d - Trial %d/%d - best_val_loss: %.4f best_epoch: %d", gpu_id, i + 1, len(params_list), best_val_loss, best_epoch)
 
 
 def hyperparameter_search_tft(
@@ -170,12 +175,12 @@ def _search_sequential(train_dataset, val_dataset, n_targets, all_params, traine
         log_dir = os.path.join(get_run_root(run_id), "search", f"trial{i}")
         trainer = create_search_trainer(trainer_cfg, log_dir=log_dir)
         trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
-        val_loss = trainer.callback_metrics["val_loss"].item()
+        epoch, val_loss = _get_best_score(trainer)
 
         if val_loss < best_score:
             best_score = val_loss
             best_params = params
-            best_epoch = _get_best_epoch(trainer)
+            best_epoch = epoch
 
     logging.info("Best TFT Params: %s with Val Loss: %.4f (best epoch: %d)", best_params, best_score, best_epoch)
     if best_params is None:

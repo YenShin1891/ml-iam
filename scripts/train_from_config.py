@@ -26,6 +26,17 @@ _ALLOWED_MODELS = {"xgb", "lstm", "tft"}
 _ALLOWED_PHASES = {"preprocess", "search", "train", "test", "plot"}
 
 
+def _assert_run_dir_exists(run_id: str) -> None:
+    from src.utils.utils import get_run_root
+
+    run_root = Path(get_run_root(run_id))
+    if not run_root.exists() or not run_root.is_dir():
+        raise FileNotFoundError(
+            f"Cannot resume run '{run_id}': run directory does not exist at {run_root}. "
+            "Check run_id or run preprocess/full pipeline first."
+        )
+
+
 @dataclass(frozen=True)
 class RunConfig:
     model: str
@@ -345,12 +356,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     config_path = (repo_root / args.run).resolve() if not os.path.isabs(args.run) else Path(args.run).resolve()
 
     obj = _load_run_file(config_path)
+    has_resume_field = obj.get("resume") is not None
     cfg = _parse_config(obj, config_path=config_path)
     _validate_model_constraints(cfg)
 
     run_id = _allocate_run_id(cfg)
 
     phases = _effective_phases(cfg)
+
+    if has_resume_field:
+        _assert_run_dir_exists(run_id)
 
     # Prepare env for subprocesses
     child_env = dict(os.environ)
