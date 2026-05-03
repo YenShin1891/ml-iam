@@ -85,7 +85,7 @@ git clone https://github.com/YenShin1891/ml-iam.git
 cd ml-iam
 
 # Create virtual environment (Python 3.9)
-conda create -n ml-iam python=3.9
+conda create -n ml-iam python=3.9 pip
 conda activate ml-iam
 # If you don't have conda, install Miniconda or Anaconda first: https://docs.conda.io/en/latest/miniconda.html
 
