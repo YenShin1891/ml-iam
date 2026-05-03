@@ -133,7 +133,7 @@ dashboard:
 	@ts=$$(date +%Y%m%d_%H%M%S); \
 	log="$(LOG_DIR)/dashboard_$${ts}.log"; \
 	pid="$(LOG_DIR)/dashboard_$${ts}.pid"; \
-	nohup env SAVE_INDIVIDUAL_PLOTS=true INDIVIDUAL_PLOT_INDICES="[$(SAVE_PLOTS)]" \
+	setsid nohup env SAVE_INDIVIDUAL_PLOTS=true INDIVIDUAL_PLOT_INDICES="[$(SAVE_PLOTS)]" \
 		PYTHONUNBUFFERED=1 \
 		streamlit run scripts/dashboard.py \
 		--logger.level=debug \
@@ -144,3 +144,4 @@ dashboard:
 	echo "- pidfile: $$pid"; \
 	echo "- logfile: $$log"; \
 	echo "Tip: Open http://localhost:8501"
+	echo "Stop: make stop PID_FILE=$$pid"

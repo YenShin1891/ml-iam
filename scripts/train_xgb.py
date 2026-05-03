@@ -146,6 +146,7 @@ def test_xgb(store):
 
     preds = test_xgb_autoregressively(X_test_with_index, y_test, store.run_id)
     store.save_predictions(preds)
+    store.save_test_data(test_data, y_test)
     save_metrics(store.run_id, y_test, preds, test_data)
     return preds
 
