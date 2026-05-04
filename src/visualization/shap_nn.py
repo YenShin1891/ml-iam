@@ -221,19 +221,25 @@ def get_lstm_shap_values(run_id, X_test: pd.DataFrame, sequence_length=1):
             self.fixed_cat = fixed_cat  # [batch, seq_len, num_cat] — expanded per sample
         def forward(self, x):
             batch_size = x.shape[0]
-            mask = _torch.ones(batch_size, self.seq_len, dtype=_torch.float32, device=x.device)
+            device = x.device
+            mask = _torch.ones(batch_size, self.seq_len, dtype=_torch.float32, device=device)
             # Use the fixed categorical indices (broadcast if needed)
             cat = self.fixed_cat[:batch_size] if self.fixed_cat.shape[0] >= batch_size else self.fixed_cat.expand(batch_size, -1, -1)
+            cat = cat.to(device)
             return self.lstm_model(x, mask=mask, teacher_forcing=False, cat_indices=cat)
     wrapper = LSTMWrapperForSHAP(model, sequence_length, background_cat)
     wrapper.eval()
-    background_data.requires_grad_(True)
-    test_inputs.requires_grad_(True)
-    explainer = shap.DeepExplainer(wrapper, background_data)
-    # Swap to test categorical indices for explanation pass
-    wrapper.fixed_cat = test_cat_seq
-    logging.info("Calculating LSTM SHAP values...")
-    shap_values = explainer.shap_values(test_inputs, check_additivity=False)
+    device = next(model.parameters()).device
+    background_data = background_data.to(device).requires_grad_(True)
+    test_inputs = test_inputs.to(device).requires_grad_(True)
+    # Disable cuDNN so the native LSTM backward works in eval mode
+    # (cuDNN's RNN backward requires training mode, but DeepExplainer needs gradients)
+    with _torch.backends.cudnn.flags(enabled=False):
+        explainer = shap.DeepExplainer(wrapper, background_data)
+        # Swap to test categorical indices for explanation pass
+        wrapper.fixed_cat = test_cat_seq
+        logging.info("Calculating LSTM SHAP values...")
+        shap_values = explainer.shap_values(test_inputs, check_additivity=False)
     import numpy as _np
     if isinstance(shap_values, list):
         shap_values = [_to_numpy(sv) for sv in shap_values]
