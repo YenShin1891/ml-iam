@@ -1,6 +1,6 @@
 # Trajectory and scatter plotting (migrated from utils.plot_trajectories)
-from configs.paths import RESULTS_PATH
-from configs.data import INDEX_COLUMNS, OUTPUT_UNITS
+from configs.paths import RESULTS_PATH, RAW_DATA_PATH
+from configs.data import INDEX_COLUMNS, OUTPUT_UNITS, OUTPUT_VARIABLES
 import os, json, datetime, glob, logging
 from typing import Optional, Tuple
 import numpy as np, pandas as pd, matplotlib.pyplot as plt
@@ -33,6 +33,64 @@ __all__ = [
     'preprocess_data','format_large_numbers','create_single_trajectory_plot','create_single_scatter_plot','configure_axes',
     'plot_scatter','plot_trajectories','get_saved_plots_metadata','apply_inverse_scaling','compute_r2',
 ]
+
+# ── Marker scenario for paper overlay ────────────────────────────────────
+MARKER_MODEL = "IMAGE 3.0.1"
+MARKER_SCENARIO = "SSP1-26"
+MARKER_REGION = "World"
+MARKER_LABEL = f"{MARKER_MODEL} / {MARKER_SCENARIO}"
+MARKER_COLOR = "#1a1a1a"  # near-black
+MARKER_LINEWIDTH = 2
+
+_marker_cache: Optional[pd.DataFrame] = None
+
+
+def load_marker_scenario(targets: list) -> Optional[pd.DataFrame]:
+    """Load marker scenario ground truth from raw AR6 World CSV.
+
+    Returns a long-format DataFrame with columns ['Year'] + targets,
+    or None if the data cannot be found.
+    """
+    global _marker_cache  # noqa: PLW0603
+    if _marker_cache is not None:
+        # Return subset of cached columns that match requested targets
+        cols = ['Year'] + [t for t in targets if t in _marker_cache.columns]
+        return _marker_cache[cols] if len(cols) > 1 else None
+
+    raw_path = os.path.join(RAW_DATA_PATH, "AR6_Scenarios_Database_World_v1.1.csv")
+    if not os.path.exists(raw_path):
+        logging.warning("Raw AR6 World CSV not found at %s; skipping marker overlay.", raw_path)
+        return None
+
+    try:
+        raw = pd.read_csv(raw_path)
+        marker_rows = raw[
+            (raw['Model'] == MARKER_MODEL)
+            & (raw['Scenario'] == MARKER_SCENARIO)
+            & (raw['Region'] == MARKER_REGION)
+            & (raw['Variable'].isin(OUTPUT_VARIABLES))
+        ]
+        if marker_rows.empty:
+            logging.warning("Marker scenario (%s, %s, %s) not found in raw data.", MARKER_MODEL, MARKER_SCENARIO, MARKER_REGION)
+            return None
+
+        year_cols = [c for c in raw.columns if c.isdigit()]
+        records = []
+        for _, row in marker_rows.iterrows():
+            var_name = row['Variable']
+            for yc in year_cols:
+                val = row[yc]
+                if pd.notna(val):
+                    records.append({'Year': int(yc), 'Variable': var_name, 'value': float(val)})
+        long = pd.DataFrame(records)
+        pivoted = long.pivot_table(index='Year', columns='Variable', values='value').reset_index()
+        pivoted.sort_values('Year', inplace=True)
+        _marker_cache = pivoted
+        cols = ['Year'] + [t for t in targets if t in pivoted.columns]
+        return pivoted[cols] if len(cols) > 1 else None
+    except Exception:
+        logging.exception("Failed to load marker scenario data.")
+        return None
 
 def get_model_type_from_log(run_id):
     """Infer model type from run_id prefix (e.g., "xgb_01" -> "xgb")."""
@@ -297,6 +355,56 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[s
     plt.savefig(os.path.join(plots_dir, nolegend_filename), bbox_inches='tight')
     plt.close()
 
+def _overlay_marker(ax, marker_df: pd.DataFrame, target_name: str) -> None:
+    """Overlay the marker scenario ground truth on a single axis."""
+    if marker_df is None or target_name not in marker_df.columns:
+        return
+    years = marker_df['Year'].values
+    values = marker_df[target_name].values
+    ax.plot(
+        years, values,
+        color=MARKER_COLOR, linewidth=MARKER_LINEWIDTH,
+        linestyle='-', alpha=0.9, zorder=0,
+        label=MARKER_LABEL,
+    )
+
+
+def _save_paper_plots(
+    test_data, y_plot, preds_plot, targets, marker_df,
+    alpha, linewidth, run_id, timestamp, plots_dir,
+    individual_indices,
+):
+    """Save paper-ready plots (grid + individual) with marker overlay."""
+    rows, cols = PLOT_GRID_ROWS, PLOT_GRID_COLS
+
+    # ── Grid paper plot ──────────────────────────────────────────────
+    fig, axes = plt.subplots(rows, cols, figsize=TRAJECTORY_GRID_FIGSIZE)
+    plt.rcParams.update({'font.size': PLOT_FONT_SIZE})
+    for i, ax in enumerate(axes.flatten()):
+        create_single_trajectory_plot(ax, test_data, y_plot, preds_plot, i, targets, alpha, linewidth)
+        if i < len(targets):
+            _overlay_marker(ax, marker_df, targets[i])
+    # Add a single legend entry for the marker in the first subplot
+    handles, labels = axes.flatten()[0].get_legend_handles_labels()
+    fig.tight_layout()
+    paper_grid = os.path.join(plots_dir, f"trajectories_{timestamp}_paper.png")
+    fig.savefig(paper_grid, bbox_inches='tight', dpi=200)
+    plt.close(fig)
+    logging.info("Saved paper grid plot to %s", paper_grid)
+
+    # ── Individual paper plots ───────────────────────────────────────
+    for i in individual_indices:
+        if 0 <= i < len(targets):
+            fig_ind, ax_ind = plt.subplots(figsize=TRAJECTORY_INDIVIDUAL_FIGSIZE)
+            create_single_trajectory_plot(ax_ind, test_data, y_plot, preds_plot, i, targets, alpha, linewidth)
+            _overlay_marker(ax_ind, marker_df, targets[i])
+            fig_ind.tight_layout()
+            ind_path = os.path.join(plots_dir, f"trajectories_{timestamp}_individual_{i}_paper.png")
+            fig_ind.savefig(ind_path, bbox_inches='tight', dpi=200)
+            plt.close(fig_ind)
+            logging.info("Saved paper individual plot to %s", ind_path)
+
+
 def plot_trajectories(
     test_data,
     y_test,
@@ -391,6 +499,21 @@ def plot_trajectories(
                 individual_filename = f"trajectories_{timestamp}_individual_{i}.png"
                 plt.savefig(os.path.join(plots_dir, individual_filename), bbox_inches='tight')
                 plt.close(individual_fig)
+    # ── Paper plots with marker overlay ──────────────────────────────
+    if run_id and filter_metadata:
+        marker_df = load_marker_scenario(targets)
+        if marker_df is not None:
+            if 'timestamp' not in dir():
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            if 'plots_dir' not in dir():
+                plots_dir = os.path.join(get_run_root(run_id), "saved_dashboard_plots")
+                os.makedirs(plots_dir, exist_ok=True)
+            paper_indices = individual_indices if (save_individual and individual_indices) else list(range(len(targets)))
+            _save_paper_plots(
+                test_data, y_plot, preds_plot, targets, marker_df,
+                alpha, linewidth, run_id, timestamp, plots_dir,
+                paper_indices,
+            )
 
 
 def get_saved_plots_metadata(run_id):
