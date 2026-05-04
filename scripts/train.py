@@ -14,10 +14,39 @@ import logging
 import os
 import sys
 from pathlib import Path
+import warnings
 
 
 _ALLOWED_MODELS = ("xgb", "lstm", "tft")
 _ALLOWED_PHASES = ("preprocess", "search", "train", "test", "plot")
+
+_SKLEARN_FEATURENAME_WARN_1 = (
+    "ignore:X does not have valid feature names, but StandardScaler was fitted with feature names:UserWarning"
+)
+_SKLEARN_FEATURENAME_WARN_2 = (
+    "ignore:X has feature names, but StandardScaler was fitted without feature names:UserWarning"
+)
+
+
+def _install_warning_filters() -> None:
+    """Install warning filters for current process and spawned Python workers."""
+    warnings.filterwarnings(
+        "ignore",
+        message=r"X does not have valid feature names, but StandardScaler was fitted with feature names",
+        category=UserWarning,
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=r"X has feature names, but StandardScaler was fitted without feature names",
+        category=UserWarning,
+    )
+
+    existing = os.environ.get("PYTHONWARNINGS", "")
+    parts = [p for p in existing.split(",") if p]
+    for rule in (_SKLEARN_FEATURENAME_WARN_1, _SKLEARN_FEATURENAME_WARN_2):
+        if rule not in parts:
+            parts.append(rule)
+    os.environ["PYTHONWARNINGS"] = ",".join(parts)
 
 
 def _seed(model: str) -> None:
@@ -160,6 +189,7 @@ def parse_arguments(argv=None):
 
 
 def main(argv=None):
+    _install_warning_filters()
     args = parse_arguments(argv)
     model = args.model
 
