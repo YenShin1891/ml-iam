@@ -12,6 +12,7 @@ from src.visualization.trajectories import plot_trajectories, get_saved_plots_me
 from src.utils.utils import setup_logging
 from src.utils.run_store import RunStore
 from configs.data import REGION_CODE_TO_LABEL
+from configs.dashboard import DEFAULT_RUNS
 import datetime
 
 st.set_page_config(layout="wide")
@@ -458,15 +459,17 @@ def handle_filtering_and_plotting(run_id):
             filter_and_plot(run_id)
         st.session_state.apply_filters_clicked = False
 
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="ML-IAM Emulation Viewer", add_help=False)
-    parser.add_argument("--run_id", "-r", dest="run_id", help="Default run_id to load results from", required=True)
+    parser.add_argument("--run_id", "-r", dest="run_id", help="Default run_id to load results from", required=False, default="xgb")
     # Parse known args to ignore Streamlit's own args
     args, _ = parser.parse_known_args(sys.argv[1:])
     return args
 
 def resolve_run_id() -> str:
-    # Require CLI run_id; allow URL ?run_id= to override; reflect final value
+    # CLI run_id as fallback; allow URL ?run_id= to override; reflect final value
     args = parse_args()
     run_id = args.run_id
     try:
@@ -478,6 +481,9 @@ def resolve_run_id() -> str:
             run_id = vals
     except Exception:
         pass
+
+    # Resolve model-type shortcuts (e.g. "xgb" → "xgb_76")
+    run_id = DEFAULT_RUNS.get(run_id, run_id)
 
     # Reflect chosen run_id in URL for bookmarking
     try:
