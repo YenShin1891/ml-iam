@@ -275,12 +275,26 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[s
         create_single_scatter_plot(ax_indiv, test_data_valid, y_test_valid, preds_valid, i, targets, model_name, OUTPUT_UNITS)
         fig_indiv.tight_layout()
         fig_indiv.savefig(indiv_path, bbox_inches='tight')
+        # Save no-legend version
+        legend = ax_indiv.get_legend()
+        if legend is not None:
+            legend.remove()
+        nolegend_path = os.path.join(indiv_dir, f"scatter_{i}_{targets[i] if i < len(targets) else 'unknown'}_nolegend.png")
+        fig_indiv.savefig(nolegend_path, bbox_inches='tight')
         plt.close(fig_indiv)
     plt.tight_layout()
     if filename is None:
         filename = "scatter_plot.png"
-    os.makedirs(os.path.join(get_run_root(run_id), "plots"), exist_ok=True)
-    plt.savefig(os.path.join(get_run_root(run_id), "plots", filename), bbox_inches='tight')
+    plots_dir = os.path.join(get_run_root(run_id), "plots")
+    os.makedirs(plots_dir, exist_ok=True)
+    plt.savefig(os.path.join(plots_dir, filename), bbox_inches='tight')
+    # Save no-legend version of grid plot
+    for ax in axes.flatten():
+        legend = ax.get_legend()
+        if legend is not None:
+            legend.remove()
+    nolegend_filename = filename.replace(".png", "_nolegend.png")
+    plt.savefig(os.path.join(plots_dir, nolegend_filename), bbox_inches='tight')
     plt.close()
 
 def plot_trajectories(
