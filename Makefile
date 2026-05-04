@@ -115,18 +115,14 @@ status:
 # Dashboard
 # ----------------------
 
-# Required: RUN_ID (e.g. xgb_37)
-RUN_ID ?=
+# RUN_ID: pass a specific run (e.g. xgb_76) or just a model type (xgb, lstm, tft)
+RUN_ID ?= xgb
 # Optional: save individual plots (comma-separated indices, default: 6)
 SAVE_PLOTS ?= 6
 
 DASHBOARD_ENV ?= mliam_st
 
 dashboard:
-	@if [ -z "$(RUN_ID)" ]; then \
-		echo "ERROR: RUN_ID is required (e.g. RUN_ID=xgb_37)"; \
-		exit 2; \
-	fi
 	@mkdir -p "$(LOG_DIR)"
 	source "$(CONDA_SH)"
 	conda activate "$(DASHBOARD_ENV)"
@@ -140,8 +136,8 @@ dashboard:
 		--server.runOnSave=false \
 		-- --run_id=$(RUN_ID) > "$$log" 2>&1 & \
 	echo $$! > "$$pid"; \
-	echo "Started dashboard for run $(RUN_ID)"; \
+	echo "Started dashboard (default run: $(RUN_ID))"; \
 	echo "- pidfile: $$pid"; \
 	echo "- logfile: $$log"; \
-	echo "Tip: Open http://localhost:8501"
+	echo "Tip: http://localhost:8501/?run_id=xgb | lstm | tft"
 	echo "Stop: make stop PID_FILE=$$pid"
