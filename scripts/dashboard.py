@@ -503,6 +503,17 @@ def main():
 
     # Main dashboard UI
     st.title("ML-IAM Emulation Viewer")
+
+    # Model selector tabs
+    model_type = run_id.split("_", 1)[0]
+    cols = st.columns(len(DEFAULT_RUNS))
+    for i, (key, default_id) in enumerate(DEFAULT_RUNS.items()):
+        label = key.upper()
+        with cols[i]:
+            if st.button(label, key=f"nav_{key}", use_container_width=True, disabled=(key == model_type)):
+                st.query_params["run_id"] = key
+                st.rerun()
+
     make_filters(st.session_state.test_data)
     
     # Handle filtering and plotting
