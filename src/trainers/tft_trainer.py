@@ -167,7 +167,17 @@ def _search_worker(gpu_id, trials, train_dataset, val_dataset, n_targets, traine
         log_dir = os.path.join(get_run_root(run_id), "search", "trials", trial_id)
         os.makedirs(log_dir, exist_ok=True)
         trainer = create_search_trainer(trainer_cfg, log_dir=log_dir)
-        trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
+        try:
+            trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
+        except torch.cuda.OutOfMemoryError:
+            logging.warning(
+                "[%s] GPU %d - Trial %d/%d OOM — skipping trial %s. "
+                "Consider reducing batch_size or excluding this GPU if another process holds memory.",
+                stage, gpu_id, i + 1, len(trials), trial_id,
+            )
+            del tft, trainer
+            torch.cuda.empty_cache()
+            continue
         best_epoch, best_val_loss = _get_best_score(trainer)
         result_queue.put({
             **_canonicalize_search_params(params),
@@ -182,6 +192,8 @@ def _search_worker(gpu_id, trials, train_dataset, val_dataset, n_targets, traine
             "[%s] GPU %d - Trial %d/%d - best_val_loss: %.4f best_epoch: %d",
             stage, gpu_id, i + 1, len(trials), best_val_loss, best_epoch,
         )
+        del tft, trainer
+        torch.cuda.empty_cache()
 
 
 def _run_trials_once(
