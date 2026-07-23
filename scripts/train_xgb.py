@@ -139,12 +139,25 @@ def test_xgb(store):
     splits = derive_splits(data)
 
     X_test_with_index = splits["X_test_with_index"]
-    y_test = splits["y_test"]
+    y_test_scaled = splits["y_test"]
     test_data = splits["test_data"]
+    targets = splits["targets"]
+    y_scaler = splits["y_scaler"]
 
     from src.trainers.evaluation import test_xgb_autoregressively, save_metrics
+    from src.data.preprocess import denormalize_by_population
+    from configs.data import POPULATION_COLUMN
 
-    preds = test_xgb_autoregressively(X_test_with_index, y_test, store.run_id)
+    preds_scaled = test_xgb_autoregressively(X_test_with_index, y_test_scaled, store.run_id)
+
+    # Convert scaled model outputs back to per-capita units, then multiply by
+    # Population to recover absolute values. Ground truth comes straight from
+    # test_data (raw, per-capita) rather than the scaled y_test array, matching
+    # how LSTM/TFT already source their ground truth.
+    population = test_data[POPULATION_COLUMN].values
+    preds = denormalize_by_population(y_scaler.inverse_transform(preds_scaled), population)
+    y_test = denormalize_by_population(test_data[targets].values, population)
+
     store.save_predictions(preds)
     store.save_test_data(test_data, y_test)
     save_metrics(store.run_id, y_test, preds, test_data)
@@ -164,8 +177,9 @@ def plot_xgb(store):
     features = splits["features"]
     targets = splits["targets"]
     X_test_with_index = splits["X_test_with_index"]
-    y_test = splits["y_test"]
-    test_data = splits["test_data"]
+    # Load already-absolute test_data/y_test as persisted by test_xgb(), rather
+    # than re-deriving the scaled versions from derive_splits().
+    test_data, y_test = store.load_test_data()
 
     plot_scatter(store.run_id, test_data, y_test, preds, targets, model_name="XGBoost")
     index_region = test_data['Region'] if isinstance(test_data, pd.DataFrame) and 'Region' in test_data.columns else None

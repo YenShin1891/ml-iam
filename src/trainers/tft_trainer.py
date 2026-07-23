@@ -819,9 +819,11 @@ def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
                 preds_flat = preds_flat.reshape(n_samples * pred_len, out_size)
 
         # Evaluate only the forecast horizon rows returned by predict=True.
+        from configs.data import POPULATION_COLUMN
+
         key_cols = group_ids + [time_idx_name]
         # Collect reference columns (ensure presence in test_data)
-        ref_cols = [c for c in key_cols + ['Year'] + targets if c in test_data.columns]
+        ref_cols = [c for c in key_cols + ['Year'] + targets + [POPULATION_COLUMN] if c in test_data.columns]
         horizon_df = index_df[key_cols].merge(
             test_data[ref_cols].drop_duplicates(key_cols),
             on=key_cols,
@@ -871,10 +873,13 @@ def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
                 f"Prediction rows ({preds_flat.shape[0]}) != horizon_df rows ({len(horizon_df)})."
             )
 
-        y_true = horizon_df[targets].values
+        # Convert per-capita target/prediction back to absolute units.
+        from src.data.preprocess import denormalize_by_population
+        population = horizon_df[POPULATION_COLUMN].values
+        y_true = denormalize_by_population(horizon_df[targets].values, population)
 
         # Handle RMSE predictions (standard case)
-        y_pred = preds_flat
+        y_pred = denormalize_by_population(preds_flat, population)
         valid_mask = (~np.isnan(y_true).any(axis=1)) & (~np.isnan(y_pred).any(axis=1))
         if valid_mask.any():
             save_metrics(run_id, y_true[valid_mask], y_pred[valid_mask])

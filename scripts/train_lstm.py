@@ -240,8 +240,13 @@ def test_lstm(store, lag_required=True):
     horizon_y_true = session_state.get("horizon_y_true")
     store.save_predictions(preds, horizon_df=horizon_df, horizon_y_true=horizon_y_true)
     # Save test_data for dashboard filters; y_test extracted from target columns
+    # and converted from per-capita back to absolute (preds are already absolute).
+    from src.data.preprocess import denormalize_by_population
+    from configs.data import POPULATION_COLUMN
     test_data = splits["test_data"]
-    y_test = test_data[splits["targets"]].values
+    y_test = denormalize_by_population(
+        test_data[splits["targets"]].values, test_data[POPULATION_COLUMN].values
+    )
     store.save_test_data(test_data, y_test)
     return preds
 
@@ -266,14 +271,21 @@ def plot_lstm(store, lag_required=True):
     # Use horizon data if available, otherwise fall back to test data
     horizon_df = pred_bundle.get("horizon_df")
 
+    from src.data.preprocess import denormalize_by_population
+    from configs.data import POPULATION_COLUMN
+
     if horizon_df is not None:
         logging.info("Using forecast horizon subset (%d rows) for plotting.", len(horizon_df))
-        y_true_aligned = horizon_df[targets].values
+        y_true_aligned = denormalize_by_population(
+            horizon_df[targets].values, horizon_df[POPULATION_COLUMN].values
+        )
         plot_scatter(store.run_id, horizon_df, y_true_aligned, preds, targets, model_name="LSTM")
         test_data_for_shap = horizon_df
     else:
         test_data = splits["test_data"]
-        test_targets = test_data[targets].values
+        test_targets = denormalize_by_population(
+            test_data[targets].values, test_data[POPULATION_COLUMN].values
+        )
         plot_scatter(store.run_id, test_data, test_targets, preds, targets, model_name="LSTM")
         test_data_for_shap = test_data
 

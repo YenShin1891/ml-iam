@@ -18,6 +18,8 @@ from configs.data import (
     REGION_CATEGORIES,
     INTERPOLATE_TARGETS,
     SCALE_AWARE_IMPUTATION,
+    NORMALIZE_TARGETS_BY_POPULATION,
+    POPULATION_COLUMN,
 )
 
 def split_data(
@@ -368,6 +370,51 @@ def interpolate_targets(
     return data
 
 
+def normalize_targets_by_population(
+    data: pd.DataFrame,
+    targets: list,
+    population_col: str = POPULATION_COLUMN,
+) -> pd.DataFrame:
+    """Divide each target column by population, in place (same column names).
+
+    Rows with missing or non-positive population get NaN targets (they will
+    be dropped downstream by the existing dropna(subset=targets) logic, same
+    as any other row with a missing target). Callers should interpolate
+    `population_col` (e.g. via `interpolate_targets(data, group_cols, [population_col])`)
+    before calling this, to avoid unnecessarily dropping otherwise-good rows.
+    """
+    data = data.copy()
+
+    population = pd.to_numeric(data[population_col], errors="coerce")
+    invalid = population.isna() | (population <= 0)
+    n_invalid = int(invalid.sum())
+    if n_invalid:
+        logging.warning(
+            "Population normalization: %d/%d rows have missing/non-positive %s; "
+            "affected target values set to NaN and will be dropped downstream.",
+            n_invalid, len(data), population_col,
+        )
+
+    safe_population = population.where(~invalid)
+    for col in targets:
+        data[col] = pd.to_numeric(data[col], errors="coerce") / safe_population
+
+    return data
+
+
+def denormalize_by_population(values: np.ndarray, population: np.ndarray) -> np.ndarray:
+    """Multiply per-capita values back to absolute units, elementwise by row.
+
+    `values` may be shape (n,) or (n, k); `population` is shape (n,) and is
+    broadcast across the k target columns. NaNs propagate naturally.
+    """
+    values = np.asarray(values, dtype=float)
+    population_col_vec = np.asarray(population, dtype=float).reshape(-1, 1)
+    if values.ndim == 1:
+        return (values.reshape(-1, 1) * population_col_vec).ravel()
+    return values * population_col_vec
+
+
 def add_lag_features(
     data: pd.DataFrame,
     group_cols: list,
@@ -406,6 +453,10 @@ def prepare_features_and_targets(data: pd.DataFrame, lag_required: bool = True) 
         "Preparing features and targets for XGBoost (lag_required=%s)...",
         lag_required,
     )
+
+    if NORMALIZE_TARGETS_BY_POPULATION:
+        data = interpolate_targets(data, INDEX_COLUMNS, [POPULATION_COLUMN])
+        data = normalize_targets_by_population(data, OUTPUT_VARIABLES, POPULATION_COLUMN)
 
     if INTERPOLATE_TARGETS:
         data = interpolate_targets(data, INDEX_COLUMNS, OUTPUT_VARIABLES)
@@ -451,6 +502,10 @@ def prepare_features_and_targets_sequence(
         "Preparing features and targets for sequence models (lag_required=%s)...",
         lag_required,
     )
+
+    if NORMALIZE_TARGETS_BY_POPULATION:
+        data = interpolate_targets(data, INDEX_COLUMNS, [POPULATION_COLUMN])
+        data = normalize_targets_by_population(data, OUTPUT_VARIABLES, POPULATION_COLUMN)
 
     if INTERPOLATE_TARGETS:
         data = interpolate_targets(data, INDEX_COLUMNS, OUTPUT_VARIABLES)

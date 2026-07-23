@@ -52,7 +52,9 @@ from configs.data import (
     N_LAG_FEATURES,
     OUTPUT_VARIABLES,
     REGION_CATEGORIES,
+    POPULATION_COLUMN,
 )
+from src.data.preprocess import denormalize_by_population
 from src.trainers.evaluation import test_xgb_autoregressively
 from src.utils.run_store import RunStore
 from src.utils.utils import get_run_root
@@ -495,6 +497,7 @@ def _infer_xgb(artifacts, synthetic, features, targets):
         disable_progress=True,
     )
     preds_original = artifacts["y_scaler"].inverse_transform(preds_scaled)
+    preds_original = denormalize_by_population(preds_original, test_data[POPULATION_COLUMN].values)
     return _build_results(test_data, preds_original, targets), preds_original
 
 
@@ -589,6 +592,7 @@ def _infer_lstm(artifacts, synthetic, features, targets):
     logger.info("LSTM predictions aligned: %d/%d rows have values",
                 (~np.isnan(aligned[:, 0])).sum(), len(data))
 
+    aligned = denormalize_by_population(aligned, data[POPULATION_COLUMN].values)
     return _build_results(data, aligned, targets), aligned
 
 
@@ -687,6 +691,7 @@ def _infer_tft(artifacts, synthetic, features, targets):
     aligned[-len(preds_flat):] = preds_flat[:len(aligned)]
 
     logger.info("TFT predictions: %d rows", len(preds_flat))
+    aligned = denormalize_by_population(aligned, data[POPULATION_COLUMN].values)
     return _build_results(data, aligned, targets), aligned
 
 

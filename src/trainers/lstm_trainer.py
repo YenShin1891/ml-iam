@@ -1341,6 +1341,14 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
 
     # Get valid (non-NaN) predictions and targets for metrics (like TFT pattern)
     y_test = test_data[targets].values
+
+    # Convert per-capita predictions/targets back to absolute units.
+    from src.data.preprocess import denormalize_by_population
+    from configs.data import POPULATION_COLUMN
+    population = test_data[POPULATION_COLUMN].values
+    aligned_preds = denormalize_by_population(aligned_preds, population)
+    y_test = denormalize_by_population(y_test, population)
+
     valid_mask = ~np.isnan(aligned_preds).any(axis=1)
     valid_preds = aligned_preds[valid_mask]
     valid_targets = y_test[valid_mask]
