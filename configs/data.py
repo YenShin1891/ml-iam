@@ -116,5 +116,5 @@ SCALE_AWARE_IMPUTATION = True
 # dropped downstream like any other missing-target row. Predictions must be
 # multiplied back by population at evaluation/inference time to recover
 # absolute units (see src.data.preprocess.denormalize_by_population).
-NORMALIZE_TARGETS_BY_POPULATION = False
+NORMALIZE_TARGETS_BY_POPULATION = True
 POPULATION_COLUMN = "Population"
