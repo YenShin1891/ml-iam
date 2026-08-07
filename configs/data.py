@@ -108,3 +108,13 @@ INTERPOLATE_TARGETS = True
 # When True, impute missing continuous features using train medians
 # computed per Region_Scale group instead of a single global median.
 SCALE_AWARE_IMPUTATION = True
+
+# When True, divide every OUTPUT_VARIABLES column by POPULATION_COLUMN before
+# interpolation/lagging/scaling, so models predict per-capita values instead of
+# absolute totals. Population gaps are filled (via interpolate_targets) before
+# dividing; rows with missing/non-positive population get NaN targets and are
+# dropped downstream like any other missing-target row. Predictions must be
+# multiplied back by population at evaluation/inference time to recover
+# absolute units (see src.data.preprocess.denormalize_by_population).
+NORMALIZE_TARGETS_BY_POPULATION = False
+POPULATION_COLUMN = "Population"

@@ -92,10 +92,6 @@ def load_marker_scenario(targets: list) -> Optional[pd.DataFrame]:
         logging.exception("Failed to load marker scenario data.")
         return None
 
-def get_model_type_from_log(run_id):
-    """Infer model type from run_id prefix (e.g., "xgb_01" -> "xgb")."""
-    return run_id.split("_", 1)[0] if run_id else None
-
 def create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, target_index, targets, model_name, output_units):
     unique_years = sorted(test_data_valid['Year'].unique()) if len(test_data_valid) else []
     cmap = cm.get_cmap('viridis')
@@ -302,22 +298,12 @@ def configure_axes(ax, min_val: float, max_val: float, xlabel: str, ylabel: str)
     ax.yaxis.set_major_locator(MaxNLocator(nbins=AXIS_NBINS))
 
 def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[str] = None, model_name: str = "Model"):
-    logging.info("Creating scatter plot (model-aware inverse scaling)...")
-    model_type = get_model_type_from_log(run_id)
+    logging.info("Creating scatter plot...")
+    # All three model types (XGB, LSTM, TFT) now persist already-absolute
+    # (population-denormalized where applicable) values by the time they reach
+    # this function, so no inverse scaling is applied here.
     y_plot = None if y_test is None else np.array(y_test, copy=True)
     preds_plot = None if preds is None else np.array(preds, copy=True)
-    scaler_key = None
-    model_name_norm = (model_name or "").lower()
-    should_apply_inverse = False
-    if model_type and ("xgb" in model_type or "xgboost" in model_type):
-        should_apply_inverse = True
-    elif "xgb" in model_name_norm or "xgboost" in model_name_norm:
-        should_apply_inverse = True
-    # Only apply inverse scaling for models we know use scaled targets
-    if should_apply_inverse:
-        y_plot, preds_plot, scaler_key = apply_inverse_scaling(y_plot, preds_plot, run_id)
-        if scaler_key:
-            logging.info(f"Scatter: applied inverse scaling using scaler key '{scaler_key}'")
     rows, cols = PLOT_GRID_ROWS, PLOT_GRID_COLS
     fig, axes = plt.subplots(rows, cols, figsize=SCATTER_GRID_FIGSIZE)
     plt.rcParams.update({'font.size': PLOT_FONT_SIZE})
@@ -464,16 +450,11 @@ def plot_trajectories(
         if st is not None:
             st.pyplot(plt.gcf())
         return
-    # Prepare copies for potential inverse scaling so we don't mutate caller data
+    # Prepare copies so we don't mutate caller data. All three model types now
+    # persist already-absolute values by the time they reach this function, so
+    # no inverse scaling is applied here.
     y_plot = None if y_test is None else np.array(y_test, copy=True)
     preds_plot = None if preds is None else np.array(preds, copy=True)
-    model_type = get_model_type_from_log(run_id)
-    scaler_key = None
-    # Only apply inverse scaling for xgb (or other non-lstm models)
-    if model_type and ("xgb" in model_type or "xgboost" in model_type):
-        y_plot, preds_plot, scaler_key = apply_inverse_scaling(y_plot, preds_plot, run_id)
-        if scaler_key:
-            logging.info(f"Applied inverse scaling using scaler in session_state key: {scaler_key}")
     for i, ax in enumerate(axes.flatten()):
         create_single_trajectory_plot(ax, test_data, y_plot, preds_plot, i, targets, alpha, linewidth)
     plt.tight_layout()

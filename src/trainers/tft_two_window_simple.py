@@ -281,8 +281,9 @@ def _predict_early_window(session_state: dict, run_id: str) -> WindowPrediction:
         )
 
         # Build horizon dataframe
+        from configs.data import POPULATION_COLUMN
         key_cols = list(template_group_ids) + [template_time_idx]
-        ref_cols = [c for c in key_cols + ['Year'] + targets if c in early_test_data.columns]
+        ref_cols = [c for c in key_cols + ['Year'] + targets + [POPULATION_COLUMN] if c in early_test_data.columns]
         horizon_df = idx_df[key_cols].merge(
             early_test_data.drop_duplicates(subset=key_cols)[ref_cols],
             on=key_cols,
@@ -300,6 +301,10 @@ def _predict_early_window(session_state: dict, run_id: str) -> WindowPrediction:
                 )
                 horizon_df = horizon_df.loc[horizon_mask].reset_index(drop=True)
                 preds_flat = preds_flat[horizon_mask.to_numpy()]
+
+        # Convert per-capita predictions back to absolute units.
+        from src.data.preprocess import denormalize_by_population
+        preds_flat = denormalize_by_population(preds_flat, horizon_df[POPULATION_COLUMN].values)
 
         logging.info(f"Early window predictions: {preds_flat.shape}, horizon_df: {horizon_df.shape}")
         return WindowPrediction(preds=preds_flat, horizon=horizon_df, name="early")
@@ -428,8 +433,9 @@ def _predict_late_window(session_state: dict, run_id: str) -> WindowPrediction:
         )
 
         # Build horizon dataframe
+        from configs.data import POPULATION_COLUMN
         key_cols = list(template_group_ids) + [template_time_idx]
-        ref_cols = [c for c in key_cols + ['Year'] + targets if c in late_test_data.columns]
+        ref_cols = [c for c in key_cols + ['Year'] + targets + [POPULATION_COLUMN] if c in late_test_data.columns]
         horizon_df = idx_df[key_cols].merge(
             late_test_data.drop_duplicates(subset=key_cols)[ref_cols],
             on=key_cols,
@@ -447,6 +453,10 @@ def _predict_late_window(session_state: dict, run_id: str) -> WindowPrediction:
                 )
                 horizon_df = horizon_df.loc[horizon_mask].reset_index(drop=True)
                 preds_flat = preds_flat[horizon_mask.to_numpy()]
+
+        # Convert per-capita predictions back to absolute units.
+        from src.data.preprocess import denormalize_by_population
+        preds_flat = denormalize_by_population(preds_flat, horizon_df[POPULATION_COLUMN].values)
 
         logging.info(f"Late window predictions: {preds_flat.shape}, horizon_df: {horizon_df.shape}")
         return WindowPrediction(preds=preds_flat, horizon=horizon_df, name="late")
@@ -671,9 +681,16 @@ def predict_tft_two_window(session_state: Dict, run_id: str) -> np.ndarray:
                 len(all_test_trajectories),
             )
 
-    # Update session state
+    # Update session state. final_preds (and early_window.preds/late_window.preds)
+    # are already absolute (denormalized in _predict_early_window/_predict_late_window
+    # and in predict_tft's single-window fallback); ground truth here is read
+    # fresh from final_horizon and must be denormalized to match.
+    from src.data.preprocess import denormalize_by_population
+    from configs.data import POPULATION_COLUMN
     session_state['horizon_df'] = final_horizon
-    session_state['horizon_y_true'] = final_horizon[targets].values
+    session_state['horizon_y_true'] = denormalize_by_population(
+        final_horizon[targets].values, final_horizon[POPULATION_COLUMN].values
+    )
     session_state['early_predictions'] = early_window.preds
     session_state['late_predictions'] = late_window.preds
 
