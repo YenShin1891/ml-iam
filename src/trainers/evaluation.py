@@ -141,6 +141,15 @@ def autoregressive_predictions(model, group_indices, group_matrix, lag_indices_d
         isinstance(y_means_attr, (list, np.ndarray)) and isinstance(y_scales_attr, (list, np.ndarray)) and
         _safe_len(x_means_attr) == _safe_len(feature_columns)
     )
+    if not use_scalers:
+        if x_scaler is not None or y_scaler is not None:
+            logging.warning(
+                "Scalers provided but unusable (x_scaler.mean_ length %d != feature_columns length %d); "
+                "lag updates will insert y-scaled values into x-scaled columns",
+                _safe_len(x_means_attr), _safe_len(feature_columns),
+            )
+        else:
+            logging.debug("No scalers provided; lag updates will insert predictions as-is")
     if use_scalers:
         y_means = np.asarray(y_means_attr)[:num_targets]
         y_scales = np.asarray(y_scales_attr)[:num_targets]
@@ -150,8 +159,8 @@ def autoregressive_predictions(model, group_indices, group_matrix, lag_indices_d
         x_means_full = np.asarray(x_means_attr)
         x_scales_full = np.asarray(x_scales_attr)
         for lag, cols in lag_col_indices.items():
-            lag_x_means[lag] = np.array([(x_means_full[c] if c is not None else np.nan) for c in cols])
-            lag_x_scales[lag] = np.array([(x_scales_full[c] if c is not None else np.nan) for c in cols])
+            lag_x_means[lag] = np.array([(x_means_full[c] if c is not None else 0.0) for c in cols])
+            lag_x_scales[lag] = np.array([(x_scales_full[c] if c is not None else 1.0) for c in cols])
 
     # Roll forward autoregressively
     for t in range(start_pos + 1, len(group_indices)):
@@ -168,18 +177,11 @@ def autoregressive_predictions(model, group_indices, group_matrix, lag_indices_d
                     continue
                 y_val_scaled = preds_target[src_t, pred_idx]
                 if use_scalers:
-                    # y_scaled -> raw -> x_scaled(prev)
                     raw_val = y_val_scaled * y_scales[pred_idx] + y_means[pred_idx]
                     x_mean = lag_x_means[lag][pred_idx]
                     x_scale = lag_x_scales[lag][pred_idx]
-                    if np.isfinite(x_mean) and np.isfinite(x_scale) and x_scale != 0:
-                        x_val_scaled = (raw_val - x_mean) / x_scale
-                        X_test_curr[col_idx] = x_val_scaled
-                    else:
-                        # Fallback: insert y-scaled value if stats are invalid
-                        X_test_curr[col_idx] = y_val_scaled
+                    X_test_curr[col_idx] = (raw_val - x_mean) / x_scale
                 else:
-                    # No scalers: assume spaces match and insert as-is
                     X_test_curr[col_idx] = y_val_scaled
 
         # Predict for all targets at time t
