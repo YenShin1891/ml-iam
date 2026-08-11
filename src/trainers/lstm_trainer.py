@@ -264,6 +264,17 @@ class LSTMModel(LightningModule):
         self.lag_indices = lag_indices or {}
         self.has_lag_features = bool(self.lag_indices)
 
+        # Register placeholder buffers so load_from_checkpoint can find them.
+        # Actual values are set by set_lag_scale_buffers() after construction.
+        if self.has_lag_features:
+            n = sum(len(v) for v in self.lag_indices.values())
+            self.register_buffer("_lag_x_indices", torch.zeros(n, dtype=torch.long))
+            self.register_buffer("_lag_y_indices", torch.zeros(n, dtype=torch.long))
+            self.register_buffer("_lag_nums", torch.zeros(n, dtype=torch.long))
+            self.register_buffer("_lag_scale", torch.zeros(n, dtype=torch.float32))
+            self.register_buffer("_lag_offset", torch.zeros(n, dtype=torch.float32))
+            self._max_lag = max(self.lag_indices.keys())
+
         # Categorical embeddings
         self.has_embeddings = num_model_families > 0 or num_regions > 0
         total_embedding_size = 0
