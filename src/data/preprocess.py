@@ -334,12 +334,11 @@ def interpolate_targets(
     group_cols: list,
     output_variables: list,
 ) -> pd.DataFrame:
-    """Interpolate/extrapolate target values within each group across years.
+    """Interpolate target values within each group across years.
 
-    For each (Model, Scenario, Region) group, fills NaN target values using
-    linear interpolation (weighted by year), then forward/backward fill for
-    edges. This ensures lag features are computed from real (interpolated)
-    values instead of NaN.
+    For each (Model, Scenario, Region) group, fills interior NaN target
+    values using linear interpolation (weighted by year). This ensures lag
+    features are computed from real (interpolated) values instead of NaN.
 
     Only fills targets that have at least one non-NaN value in the group.
     """
@@ -354,8 +353,7 @@ def interpolate_targets(
         for col in output_variables:
             if col in grp.columns and grp[col].notna().any():
                 grp[col] = pd.to_numeric(grp[col], errors="coerce")
-                grp[col] = grp[col].interpolate(method="index", limit_direction="both")
-                grp[col] = grp[col].ffill().bfill()
+                grp[col] = grp[col].interpolate(method="index")
         return grp.reset_index()
 
     data = data.groupby(group_cols, group_keys=False).apply(_interp_group)
