@@ -37,14 +37,20 @@ class TFTDatasetConfig:
 
         if isinstance(targets, str):
             targets = [targets]
-        time_known = ["Year", "DeltaYears"]
-        indicator_cols = [f for f in features if f.endswith("_is_missing")]
-        time_known_reals = time_known + indicator_cols
+        excluded = set(CATEGORICAL_COLUMNS)
 
-        # Unknown real-valued features exclude categoricals, known time columns, and indicator categoricals
+        # Lagged target columns (prev_X, prev2_X, …) are unknown at forecast
+        # time.  Everything else — scenario drivers, indicators, time columns
+        # — is known future by construction.
+        import re
+        _lag_re = re.compile(r"^prev\d*_")
         unknown_reals = [
             f for f in features
-            if f not in (CATEGORICAL_COLUMNS + time_known_reals)
+            if f not in excluded and _lag_re.match(f)
+        ]
+        time_known_reals = [
+            f for f in features
+            if f not in excluded and not _lag_re.match(f)
         ]
 
         # Per-sample normalization from each sample's encoder window.

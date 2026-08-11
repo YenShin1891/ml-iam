@@ -50,6 +50,7 @@ def create_tft_model(
         output_size=output_size,
         loss=loss,
         log_interval=0,
+        causal_attention=True,
     )
     if disable_lr_scheduler:
         # Setting patience to None causes pytorch-forecasting to return an
