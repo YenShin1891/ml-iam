@@ -149,10 +149,13 @@ def get_lstm_shap_values(run_id, X_test: pd.DataFrame, sequence_length=1):
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"LSTM model checkpoint not found: {model_path}")
     model = LSTMModel.load_from_checkpoint(model_path)
-    model.eval()
     from src.utils.run_store import RunStore
     store = RunStore(run_id)
     scaler_X = store.load_artifact("lstm_scaler_X.pkl")
+    if model.has_lag_features and store.has_artifact("lstm_scaler_y.pkl"):
+        scaler_y = store.load_artifact("lstm_scaler_y.pkl")
+        model.set_lag_scale_buffers(scaler_X, scaler_y)
+    model.eval()
     features, targets = store.load_features()
     categorical_features = []
     if store.has_train_meta():

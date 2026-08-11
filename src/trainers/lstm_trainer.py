@@ -101,6 +101,7 @@ class LSTMDataset(Dataset):
         scaler_y: Optional[StandardScaler] = None,
         fit_scalers: bool = True,
         categorical_features: Optional[List[str]] = None,
+        lag_indices: Optional[Dict[int, List[int]]] = None,
     ):
         from configs.data import INDEX_COLUMNS
         self.sequence_length = sequence_length
@@ -111,6 +112,7 @@ class LSTMDataset(Dataset):
         self.time_idx = time_idx
         self.group_ids = group_ids if group_ids is not None else INDEX_COLUMNS
         self.categorical_features = categorical_features or []
+        self.lag_indices = lag_indices or {}  # {lag_num: [feat_idx, ...]}
 
         # Separate continuous features (to be scaled) from categorical (kept as int codes)
         continuous_features = [f for f in features if f not in self.categorical_features]
@@ -161,7 +163,6 @@ class LSTMDataset(Dataset):
         self.X_sequences = []       # continuous features (scaled)
         self.cat_sequences = []     # categorical indices (unscaled)
         self.y_sequences = []
-        self.previous_targets = []  # Previous targets for teacher forcing
         self.masks = []
         self.group_info = []
 
@@ -189,9 +190,6 @@ class LSTMDataset(Dataset):
                 # Target is offset ahead of sequence end
                 y_seq = self.y_scaled[target_pos]
 
-                # Create previous targets for teacher forcing
-                prev_targets_seq = self.y_scaled[start_pos:start_pos + sequence_length]
-
                 # Create mask for padded values
                 mask_data = X_cont_filled.iloc[start_pos:start_pos + sequence_length]
                 mask = (mask_data != mask_value).all(axis=1) if len(continuous_features) > 0 else pd.Series(True, index=mask_data.index)
@@ -199,14 +197,12 @@ class LSTMDataset(Dataset):
                 self.X_sequences.append(torch.FloatTensor(x_seq))
                 self.cat_sequences.append(torch.LongTensor(cat_seq))
                 self.y_sequences.append(torch.FloatTensor(y_seq))
-                self.previous_targets.append(torch.FloatTensor(prev_targets_seq))
                 self.masks.append(torch.FloatTensor(mask.values if hasattr(mask, 'values') else [mask]))
                 self.group_info.append(group_name)
 
         self.X_sequences = torch.stack(self.X_sequences)
         self.cat_sequences = torch.stack(self.cat_sequences)
         self.y_sequences = torch.stack(self.y_sequences)
-        self.previous_targets = torch.stack(self.previous_targets)
         self.masks = torch.stack(self.masks)
 
     def __len__(self):
@@ -217,7 +213,6 @@ class LSTMDataset(Dataset):
             'x': self.X_sequences[idx],
             'cat': self.cat_sequences[idx],
             'y': self.y_sequences[idx],
-            'previous_targets': self.previous_targets[idx],  # For teacher forcing
             'mask': self.masks[idx],
             'group': self.group_info[idx]
         }
@@ -232,7 +227,6 @@ class LSTMModel(LightningModule):
         hidden_size: int = 64,
         num_layers: int = 1,
         output_size: int = 1,
-        include_previous_target: bool = True,  # Whether to include previous target as input
         dropout: float = 0.0,
         bidirectional: bool = False,
         dense_hidden_size: int = 64,
@@ -247,6 +241,7 @@ class LSTMModel(LightningModule):
         num_model_families: int = 0,
         num_regions: int = 0,
         embedding_dim: int = 8,
+        lag_indices: Optional[Dict[int, List[int]]] = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -255,13 +250,19 @@ class LSTMModel(LightningModule):
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.output_size = output_size
-        self.include_previous_target = include_previous_target
         self.learning_rate = learning_rate
         self.mask_value = mask_value
         self.target_offset = target_offset
         self.num_model_families = num_model_families
         self.num_regions = num_regions
         self.embedding_dim = embedding_dim
+
+        # Lag-feature indices: {lag_num: [feat_idx, ...]} — positions of
+        # prev_*  / prev{N}_* columns in the continuous feature vector.
+        # During autoregressive inference these positions are overwritten
+        # with the model's own predictions instead of ground-truth values.
+        self.lag_indices = lag_indices or {}
+        self.has_lag_features = bool(self.lag_indices)
 
         # Categorical embeddings
         self.has_embeddings = num_model_families > 0 or num_regions > 0
@@ -273,8 +274,8 @@ class LSTMModel(LightningModule):
             self.region_embedding = nn.Embedding(num_regions, embedding_dim)
             total_embedding_size += embedding_dim
 
-        # LSTM layer - input = continuous (u_t) + embeddings + (previous target y_{t-1} if enabled)
-        lstm_input_size = exogenous_size + total_embedding_size + (output_size if include_previous_target else 0)
+        # LSTM layer — lag features are already part of exogenous_size
+        lstm_input_size = exogenous_size + total_embedding_size
         self.lstm = nn.LSTM(
             input_size=lstm_input_size,
             hidden_size=hidden_size,
@@ -299,6 +300,54 @@ class LSTMModel(LightningModule):
         self.weight_decay = weight_decay
         self.scheduler_name = scheduler
         self.scheduler_params = scheduler_params or {}
+
+    def set_lag_scale_buffers(self, scaler_X: StandardScaler, scaler_y: StandardScaler):
+        """Precompute conversion factors to map y-scaled predictions to X-scaled lag space.
+
+        For each lag column at feature index ``i`` corresponding to target ``j``:
+          x_scaled[i] = pred_y_scaled[j] * scale[j] + offset[j]
+        where
+          scale  = y_std[j] / x_std[i]
+          offset = (y_mean[j] - x_mean[i]) / x_std[i]
+
+        Called once after model construction when lag_indices is non-empty.
+        """
+        if not self.lag_indices:
+            return
+
+        x_mean = scaler_X.mean_
+        x_std = scaler_X.scale_
+        y_mean = scaler_y.mean_
+        y_std = scaler_y.scale_
+
+        # Build (n_lag_positions, ) tensors in the order they'll be used.
+        # Also build a flat index list for efficient scatter.
+        all_x_indices: List[int] = []   # feature indices in x
+        all_y_indices: List[int] = []   # target indices in y (0..output_size-1)
+        all_lags: List[int] = []        # lag number for each entry
+
+        for lag_num in sorted(self.lag_indices.keys()):
+            feat_indices = self.lag_indices[lag_num]
+            for target_j, feat_i in enumerate(feat_indices):
+                all_x_indices.append(feat_i)
+                all_y_indices.append(target_j)
+                all_lags.append(lag_num)
+
+        scales = []
+        offsets = []
+        for feat_i, target_j in zip(all_x_indices, all_y_indices):
+            s = y_std[target_j] / x_std[feat_i]
+            o = (y_mean[target_j] - x_mean[feat_i]) / x_std[feat_i]
+            scales.append(s)
+            offsets.append(o)
+
+        self.register_buffer("_lag_x_indices", torch.tensor(all_x_indices, dtype=torch.long))
+        self.register_buffer("_lag_y_indices", torch.tensor(all_y_indices, dtype=torch.long))
+        self.register_buffer("_lag_nums", torch.tensor(all_lags, dtype=torch.long))
+        self.register_buffer("_lag_scale", torch.tensor(scales, dtype=torch.float32))
+        self.register_buffer("_lag_offset", torch.tensor(offsets, dtype=torch.float32))
+        # Max lag determines how many past predictions to keep
+        self._max_lag = max(self.lag_indices.keys())
 
     def _embed_categoricals(self, cat_indices):
         """Compute embedding vectors from categorical indices.
@@ -325,21 +374,41 @@ class LSTMModel(LightningModule):
             col += 1
         return torch.cat(parts, dim=-1)
 
-    def forward(self, exogenous_seq, mask=None, previous_targets=None, teacher_forcing=True, cat_indices=None):
-        """
-        Step-by-step LSTM unrolling with proper teacher forcing.
+    def _inject_lag_predictions(self, u_t, past_preds):
+        """Overwrite lag-feature positions in ``u_t`` with model predictions.
 
-        At each timestep t, input is: v_t = [u_t, emb_t, y_{t-1}]
-        - u_t: continuous exogenous features observed at timestep t
-        - emb_t: categorical embeddings (static per scenario, repeated each step)
-        - y_{t-1}: previous target (teacher forcing vs autoregressive)
+        Args:
+            u_t: [batch, exogenous_size] — will be modified **in-place**.
+            past_preds: list of past y-scaled predictions, most recent last.
+                        Length must be >= self._max_lag.
+        """
+        for k, (x_idx, y_idx, lag_num, scale, offset) in enumerate(zip(
+            self._lag_x_indices, self._lag_y_indices, self._lag_nums,
+            self._lag_scale, self._lag_offset,
+        )):
+            lag = lag_num.item()
+            if lag > len(past_preds):
+                continue  # not enough history yet — keep dataframe value
+            pred_y = past_preds[-lag][:, y_idx.item()]  # [batch]
+            u_t[:, x_idx.item()] = pred_y * scale + offset
+
+    def forward(self, exogenous_seq, mask=None, teacher_forcing=True, cat_indices=None):
+        """
+        Step-by-step LSTM unrolling with lag features in u_t.
+
+        During training (teacher_forcing=True) the lag columns in
+        exogenous_seq contain ground-truth shifted targets from the
+        dataframe — correct for supervised learning.
+
+        During inference (teacher_forcing=False) the lag columns are
+        overwritten with the model's own predictions (converted from
+        y-scaled to X-scaled space via precomputed affine coefficients).
 
         Args:
             exogenous_seq: Continuous features [batch_size, seq_len, exogenous_size]
             mask: Optional mask for variable-length sequences
-            previous_targets: Previous targets for teacher forcing [batch_size, seq_len, output_size]
-            teacher_forcing: Whether to use teacher forcing (True) or autoregressive (False)
-            cat_indices: Categorical indices [batch_size, seq_len, num_cat_features] (LongTensor)
+            teacher_forcing: If True, use ground-truth lag values; if False, autoregressive
+            cat_indices: Categorical indices [batch_size, seq_len, num_cat_features]
         """
         batch_size, seq_len, _ = exogenous_seq.size()
 
@@ -348,98 +417,91 @@ class LSTMModel(LightningModule):
         if emb is not None:
             exogenous_seq = torch.cat([exogenous_seq, emb], dim=-1)
 
-        if not self.include_previous_target:
-            # Simple case: no previous targets, just use exogenous features + embeddings
+        if not self.has_lag_features:
+            # No lag features — simple batched forward (no step-by-step needed)
             x = exogenous_seq
-
             if mask is not None:
-                mask_expanded = mask.unsqueeze(-1).expand_as(x)
-                x = x * mask_expanded
+                x = x * mask.unsqueeze(-1).expand_as(x)
 
             lstm_out, (hidden, cell) = self.lstm(x)
 
             if mask is not None:
-                valid_lengths = mask.sum(dim=1) - 1
+                valid_lengths = mask.sum(dim=1).long() - 1
                 batch_indices = torch.arange(batch_size, device=x.device)
                 last_output = lstm_out[batch_indices, valid_lengths]
             else:
                 last_output = lstm_out[:, -1, :]
 
-            # If forecasting offset is requested but no previous target is included,
-            # we can optionally run one extra step using repeated last exogenous only.
             if getattr(self, "target_offset", 0) and self.target_offset > 0:
-                u_forecast = x[:, -1, :]
-                v_t = u_forecast.unsqueeze(1)
+                v_t = x[:, -1, :].unsqueeze(1)
                 lstm_out2, _ = self.lstm(v_t, (hidden, cell))
                 return self.dense(lstm_out2[:, 0, :])
-            else:
-                return self.dense(last_output)
+            return self.dense(last_output)
 
-        # Step-by-step unrolling with teacher forcing
+        if teacher_forcing:
+            # Training path — lag values from the dataframe are correct.
+            # Can run the full sequence through the LSTM in one shot.
+            x = exogenous_seq
+            if mask is not None:
+                x = x * mask.unsqueeze(-1).expand_as(x)
+
+            lstm_out, (hidden, cell) = self.lstm(x)
+
+            if mask is not None:
+                valid_lengths = mask.sum(dim=1).long() - 1
+                batch_indices = torch.arange(batch_size, device=x.device)
+                last_output = lstm_out[batch_indices, valid_lengths]
+            else:
+                last_output = lstm_out[:, -1, :]
+
+            if getattr(self, "target_offset", 0) and self.target_offset > 0:
+                v_t = x[:, -1, :].unsqueeze(1)
+                lstm_out2, _ = self.lstm(v_t, (hidden, cell))
+                return self.dense(lstm_out2[:, 0, :])
+            return self.dense(last_output)
+
+        # --- Autoregressive inference: step-by-step with lag injection ---
         hidden = None
         cell = None
         predictions = []
-
-        # Initialize previous target (zeros for first timestep)
-        prev_target = torch.zeros(batch_size, self.output_size, device=exogenous_seq.device, dtype=exogenous_seq.dtype)
+        past_preds = []  # ring buffer of y-scaled predictions for lag injection
 
         for t in range(seq_len):
-            # Current exogenous features u_t (continuous + embeddings already concatenated)
-            u_t = exogenous_seq[:, t, :]  # [batch_size, exogenous_size + embedding_size]
+            u_t = exogenous_seq[:, t, :].clone()  # clone so we can modify
 
-            # Previous target y_{t-1} (teacher forcing or autoregressive)
-            if t == 0:
-                y_prev = prev_target  # First timestep uses zero
-            else:
-                if teacher_forcing and previous_targets is not None:
-                    y_prev = previous_targets[:, t-1, :]  # Ground truth y_{t-1}
-                else:
-                    y_prev = prev_target  # Predicted y_{t-1}
+            # Overwrite lag positions with model's own past predictions
+            if past_preds:
+                self._inject_lag_predictions(u_t, past_preds)
 
-            # Construct input: v_t = [u_t, y_{t-1}]
-            v_t = torch.cat([u_t, y_prev], dim=-1)
-            v_t = v_t.unsqueeze(1)  # [batch_size, 1, input_size]
+            v_t = u_t.unsqueeze(1)  # [batch, 1, input_size]
 
-            # Apply mask if needed
             if mask is not None and not mask[:, t].all():
-                # Skip masked timesteps - keep previous prediction
-                current_pred = prev_target
+                current_pred = past_preds[-1] if past_preds else torch.zeros(
+                    batch_size, self.output_size, device=u_t.device, dtype=u_t.dtype
+                )
             else:
-                # LSTM forward step
                 lstm_out, (hidden, cell) = self.lstm(v_t, (hidden, cell) if hidden is not None else None)
-                current_pred = self.dense(lstm_out[:, 0, :])  # [batch_size, output_size]
+                current_pred = self.dense(lstm_out[:, 0, :])
 
             predictions.append(current_pred)
-            prev_target = current_pred  # Update for next timestep
+            past_preds.append(current_pred.detach())
 
-        # Optional dedicated forecast step when predicting future offset
+        # Optional forecast step
         if getattr(self, "target_offset", 0) and self.target_offset > 0:
-            # Determine y_{t-1}: use last ground-truth target in context when teacher forcing is enabled
-            if teacher_forcing and previous_targets is not None:
-                y_prev = previous_targets[:, -1, :]
-            else:
-                y_prev = prev_target  # last predicted target from in-window unroll
+            u_forecast = exogenous_seq[:, -1, :].clone()
+            if past_preds:
+                self._inject_lag_predictions(u_forecast, past_preds)
+            v_t = u_forecast.unsqueeze(1)
+            lstm_out2, _ = self.lstm(v_t, (hidden, cell) if hidden is not None else None)
+            return self.dense(lstm_out2[:, 0, :])
 
-            # Exogenous at forecast time: repeat last exogenous as a simple policy
-            u_forecast = exogenous_seq[:, -1, :]
-            v_t = torch.cat([u_forecast, y_prev], dim=-1).unsqueeze(1)
-            lstm_out2, (hidden, cell) = self.lstm(v_t, (hidden, cell) if hidden is not None else None)
-            forecast_pred = self.dense(lstm_out2[:, 0, :])
-            return forecast_pred
-
-        # Return only the last in-window prediction when no offset
         return predictions[-1]
 
     def training_step(self, batch, batch_idx):
         x, y, mask = batch['x'], batch['y'], batch['mask']
         cat = batch.get('cat', None)
-        previous_targets = batch.get('previous_targets', None)
 
-        if self.include_previous_target and previous_targets is not None:
-            y_hat = self(x, mask, previous_targets=previous_targets, teacher_forcing=True, cat_indices=cat)
-        else:
-            y_hat = self(x, mask, teacher_forcing=False, cat_indices=cat)
-
+        y_hat = self(x, mask, teacher_forcing=True, cat_indices=cat)
         loss = F.mse_loss(y_hat, y)
         self.log('train_loss', loss, prog_bar=True, sync_dist=True)
         return loss
@@ -511,6 +573,33 @@ class LSTMModel(LightningModule):
         }
 
 
+def _find_lag_feature_indices(
+    features: List[str],
+    targets: List[str],
+) -> Dict[int, List[int]]:
+    """Map lag number -> list of feature indices for lagged-target columns.
+
+    Naming convention from ``add_lag_features``:
+      lag-1: ``prev_<target>``
+      lag-k: ``prev<k>_<target>``
+
+    Returns e.g. ``{1: [4, 5, ...], 2: [13, 14, ...]}``  (indices into
+    *features*).
+    """
+    import re
+    lag_map: Dict[int, List[int]] = {}
+    for idx, col in enumerate(features):
+        for t in targets:
+            if col == f"prev_{t}":
+                lag_map.setdefault(1, []).append(idx)
+                break
+            m = re.match(rf"prev(\d+)_{re.escape(t)}$", col)
+            if m:
+                lag_map.setdefault(int(m.group(1)), []).append(idx)
+                break
+    return lag_map
+
+
 def create_lstm_datasets(
     train_data: pd.DataFrame,
     val_data: pd.DataFrame,
@@ -541,6 +630,16 @@ def create_lstm_datasets(
     # Full feature list = encoded continuous + categorical
     all_features = encoded_features + categorical_features
 
+    # Identify lag-target feature indices within the *continuous* feature list.
+    # These indices correspond to positions in the scaled X tensor (categoricals
+    # are handled separately via embeddings and are not part of X_cont_scaled).
+    lag_indices = _find_lag_feature_indices(encoded_features, targets)
+    if lag_indices:
+        logging.info(
+            "LSTM lag-feature indices (in continuous features): %s",
+            {k: v for k, v in sorted(lag_indices.items())},
+        )
+
     train_dataset = LSTMDataset(
         train_data_enc, all_features, targets,
         sequence_length=sequence_length,
@@ -548,6 +647,7 @@ def create_lstm_datasets(
         mask_value=mask_value,
         fit_scalers=True,
         categorical_features=categorical_features,
+        lag_indices=lag_indices,
     )
 
     val_dataset = LSTMDataset(
@@ -559,6 +659,7 @@ def create_lstm_datasets(
         scaler_y=train_dataset.scaler_y,
         fit_scalers=False,
         categorical_features=categorical_features,
+        lag_indices=lag_indices,
     )
 
     return train_dataset, val_dataset, encoded_features
@@ -595,14 +696,15 @@ def create_lstm_model(
     features: List[str],
     output_size: int,
     config: LSTMTrainerConfig,
-    include_previous_target: bool = True,
     num_model_families: int = 0,
     num_regions: int = 0,
+    lag_indices: Optional[Dict[int, List[int]]] = None,
 ) -> LSTMModel:
     """Create LSTM model with given configuration.
 
     Args:
         features: Continuous (encoded) feature names — categoricals are handled via embeddings.
+        lag_indices: {lag_num: [feat_idx, ...]} mapping for autoregressive lag injection.
     """
     # exogenous_size = number of continuous features in the data tensor
     exogenous_size = len(features)
@@ -612,7 +714,6 @@ def create_lstm_model(
         hidden_size=config.hidden_size,
         num_layers=config.num_layers,
         output_size=output_size,
-        include_previous_target=include_previous_target,
         dropout=config.dropout,
         bidirectional=config.bidirectional,
         dense_hidden_size=config.dense_hidden_size,
@@ -627,6 +728,7 @@ def create_lstm_model(
         num_model_families=num_model_families,
         num_regions=num_regions,
         embedding_dim=config.embedding_dim,
+        lag_indices=lag_indices,
     )
 
 
@@ -821,7 +923,9 @@ def hyperparameter_search_lstm_parallel(
                 model = create_lstm_model(
                     model_features, output_size, config,
                     num_model_families=num_model_families, num_regions=num_regions,
+                    lag_indices=train_dataset.lag_indices,
                 )
+                model.set_lag_scale_buffers(train_dataset.scaler_X, train_dataset.scaler_y)
 
                 # Create trainer for single GPU
                 search_checkpoint = ModelCheckpoint(
@@ -1010,7 +1114,9 @@ def hyperparameter_search_lstm_sequential(
         model = create_lstm_model(
             model_features, output_size, config,
             num_model_families=num_model_families, num_regions=num_regions,
+            lag_indices=train_dataset.lag_indices,
         )
+        model.set_lag_scale_buffers(train_dataset.scaler_X, train_dataset.scaler_y)
 
         # Create trainer for search
         trial_dir = os.path.join(get_run_root(run_id), "search", f"trial_{i}")
@@ -1171,7 +1277,9 @@ def train_final_lstm(
         encoded_features, output_size, config,
         num_model_families=num_model_families,
         num_regions=num_regions,
+        lag_indices=train_dataset.lag_indices,
     )
+    model.set_lag_scale_buffers(train_dataset.scaler_X, train_dataset.scaler_y)
 
     # Create final trainer with early stopping and CSV logging
     final_dir = os.path.join(get_run_root(run_id), "final")
@@ -1252,6 +1360,7 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
 
     # Load model
     model = LSTMModel.load_from_checkpoint(final_ckpt_path)
+    model.set_lag_scale_buffers(scaler_X, scaler_y)
     model.eval()
 
     # Ensure test_data has the same encoded feature columns as during training
@@ -1274,6 +1383,7 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
     all_features = features + categorical_features
 
     # Create test dataset - autoregressive prediction during inference
+    lag_indices = model.lag_indices if model.has_lag_features else {}
     test_dataset = LSTMDataset(
         test_data_enc, all_features, targets,
         sequence_length=sequence_length,
@@ -1282,6 +1392,7 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
         scaler_y=scaler_y,
         fit_scalers=False,
         categorical_features=categorical_features,
+        lag_indices=lag_indices,
     )
 
     # Create data loader
