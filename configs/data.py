@@ -118,4 +118,4 @@ POPULATION_COLUMN = "Population"
 # rows independently.  When False, drop any row with a missing target
 # (original behaviour) so all models see complete target vectors — XGBoost
 # uses native multi-output regression with cross-target tree splits.
-KEEP_PARTIAL_TARGETS = False
+KEEP_PARTIAL_TARGETS = True
