@@ -65,6 +65,33 @@ def build_datasets(session_state: Dict) -> Tuple[TimeSeriesDataSet, TimeSeriesDa
     return train_dataset, val_dataset
 
 
+def compute_target_scale_floors(
+    train_data: pd.DataFrame,
+    targets: List[str],
+    fraction: float = 0.01,
+) -> Dict[str, float]:
+    """Compute per-target minimum scale floors from training data.
+
+    Returns ``fraction`` of the global standard deviation per target.  This
+    prevents the per-sample EncoderNormalizer from using a near-zero scale
+    when the encoder window has little or no variance (e.g. variables that
+    start at zero for many regions).
+    """
+    import numpy as np
+
+    floors: Dict[str, float] = {}
+    for target in targets:
+        if target in train_data.columns:
+            global_std = float(
+                pd.to_numeric(train_data[target], errors="coerce").std(skipna=True)
+            )
+            floors[target] = max(global_std * fraction, np.finfo(np.float32).eps)
+        else:
+            floors[target] = np.finfo(np.float32).eps
+    logging.info("Target scale floors (%.1f%% of global σ): %s", fraction * 100, floors)
+    return floors
+
+
 def create_train_dataset(session_state: Dict) -> Tuple[TimeSeriesDataSet, Any]:
     """Create training dataset with configuration, coercing categorical-like columns first."""
     from configs.models.tft import TFTDatasetConfig
@@ -77,6 +104,11 @@ def create_train_dataset(session_state: Dict) -> Tuple[TimeSeriesDataSet, Any]:
     target_offset = session_state.get("tft_target_offset")
     if target_offset is not None:
         config.target_offset = int(target_offset)
+
+    # Compute per-target scale floors from training data
+    config.target_scale_floors = compute_target_scale_floors(
+        train_data, targets, fraction=config.scale_floor_fraction,
+    )
 
     # Build union encoders (include group ids to stabilize mapping) then inject
     categorical_cols = _ordered_categorical_cols(features)
@@ -160,9 +192,11 @@ def create_dataset_with_custom_encoders(
     features = session_state["features"]
     targets = session_state["targets"]
 
-    # Create config with custom encoders - no monkey patching needed!
     config = TFTDatasetConfig()
     config.pretrained_categorical_encoders = custom_encoders
+    config.target_scale_floors = compute_target_scale_floors(
+        train_data, targets, fraction=config.scale_floor_fraction,
+    )
 
     params = config.build(features, targets, mode="train")
 
