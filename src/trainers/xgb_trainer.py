@@ -25,6 +25,76 @@ from src.trainers.evaluation import test_xgb_autoregressively
 FINAL_MODEL_FILENAME = "final_best.json"
 
 
+class PerTargetXGBRegressor:
+    """Wrapper that trains one XGBRegressor per target, dropping NaN rows
+    independently per target.  Exposes the same `predict()` / `save_model()` /
+    `load_model()` interface as XGBRegressor so that autoregressive evaluation
+    works without modification.
+    """
+
+    def __init__(self, targets: List[str], **xgb_kwargs):
+        self.targets = list(targets)
+        self.models: List[XGBRegressor] = [
+            XGBRegressor(**xgb_kwargs) for _ in targets
+        ]
+
+    def fit(self, X, y_df, *, eval_set=None, verbose=25):
+        """Fit one model per target, dropping rows with NaN for that target.
+
+        *y_df* must be a DataFrame with columns matching ``self.targets``.
+        *eval_set* is a list of ``(X_val, y_val_df)`` tuples — each val y is
+        also a DataFrame.
+        """
+        for i, (target, model) in enumerate(zip(self.targets, self.models)):
+            y_col = y_df[target]
+            valid = y_col.notna()
+            X_t = X[valid] if isinstance(X, pd.DataFrame) else X[valid.values]
+            y_t = y_col[valid]
+            ev = None
+            if eval_set:
+                ev = []
+                for Xv, yv_df in eval_set:
+                    yv_col = yv_df[target]
+                    vv = yv_col.notna()
+                    Xv_t = Xv[vv] if isinstance(Xv, pd.DataFrame) else Xv[vv.values]
+                    yv_t = yv_col[vv]
+                    ev.append((Xv_t, yv_t))
+            logging.info(
+                "PerTarget[%s] fitting on %d/%d rows (dropped %d NaN)",
+                target, int(valid.sum()), len(y_col), int((~valid).sum()),
+            )
+            model.fit(X_t, y_t, eval_set=ev, verbose=verbose)
+
+    def predict(self, X):
+        """Predict all targets; returns (n, n_targets) array."""
+        preds = []
+        for model in self.models:
+            p = model.predict(X)
+            if p.ndim == 1:
+                p = p.reshape(-1, 1)
+            preds.append(p)
+        return np.hstack(preds)
+
+    def save_model(self, path):
+        """Save each model as ``{stem}_{i}.json``."""
+        stem, ext = os.path.splitext(path)
+        for i, model in enumerate(self.models):
+            model.save_model(f"{stem}_{i}{ext}")
+
+    @classmethod
+    def load_model(cls, path, targets: List[str]):
+        """Load per-target models from ``{stem}_{i}.json`` files."""
+        stem, ext = os.path.splitext(path)
+        obj = cls.__new__(cls)
+        obj.targets = list(targets)
+        obj.models = []
+        for i in range(len(targets)):
+            m = XGBRegressor()
+            m.load_model(f"{stem}_{i}{ext}")
+            obj.models.append(m)
+        return obj
+
+
 def group_k_fold_split(groups: np.array, n_splits: int, shuffle: bool = True, random_state: int = 42):
     """
     Create k-fold splits ensuring each group appears exactly once in test set across all folds.
@@ -161,6 +231,8 @@ def train_and_evaluate_single_config(
     show_autoreg_progress: bool = False,
     n_jobs: Optional[int] = None,
     use_autoregressive_eval: bool = True,
+    obs_mask: Optional[np.ndarray] = None,
+    obs_val_mask: Optional[np.ndarray] = None,
 ) -> Tuple[Dict, float]:
     """
     Train and evaluate a single parameter configuration using either k-fold CV or single validation set.
@@ -206,6 +278,8 @@ def train_and_evaluate_single_config(
                 X_train, X_val_fold = X.iloc[train_idx], X.iloc[val_idx]
                 X_val_with_index_fold = X_with_index.iloc[val_idx]
                 y_train, y_val_fold = y[train_idx], y[val_idx]
+                obs_t = obs_mask[train_idx] if obs_mask is not None else None
+                obs_v = obs_mask[val_idx] if obs_mask is not None else None
 
                 cache_key = f"fold_{fold}"
                 if cache_key not in fold_cache:
@@ -226,6 +300,8 @@ def train_and_evaluate_single_config(
                     show_autoreg_progress=show_autoreg_progress,
                     n_jobs=n_jobs,
                     use_autoregressive_eval=use_autoregressive_eval,
+                    obs_train=obs_t,
+                    obs_val=obs_v,
                 )
                 scores.append(fold_rmse)
 
@@ -251,6 +327,8 @@ def train_and_evaluate_single_config(
                 show_autoreg_progress=show_autoreg_progress,
                 n_jobs=n_jobs,
                 use_autoregressive_eval=use_autoregressive_eval,
+                obs_train=obs_mask,
+                obs_val=obs_val_mask,
             )
             score = -rmse
 
@@ -271,6 +349,8 @@ def _train_single_fold(
     show_autoreg_progress: bool = False,
     n_jobs: Optional[int] = None,
     use_autoregressive_eval: bool = True,
+    obs_train: Optional[np.ndarray] = None,
+    obs_val: Optional[np.ndarray] = None,
 ):
     """
     Helper function to train and evaluate a single fold/validation set.
@@ -279,19 +359,29 @@ def _train_single_fold(
     --------
     float: RMSE score for this fold
     """
+    from configs.data import KEEP_PARTIAL_TARGETS
+
     y_train_df = pd.DataFrame(y_train, columns=targets)
     y_val_df = pd.DataFrame(y_val, columns=targets)
-    
+
     xgb_params = get_xgb_params(params, trainer_cfg=trainer_cfg)
     if n_jobs is not None:
         xgb_params['n_jobs'] = int(n_jobs)
     num_boost_round = xgb_params.pop('num_boost_round')
 
-    regular_model = XGBRegressor(
-        n_estimators=num_boost_round,
-        early_stopping_rounds=early_stopping_rounds,
-        **xgb_params
-    )
+    if KEEP_PARTIAL_TARGETS:
+        regular_model = PerTargetXGBRegressor(
+            targets=targets,
+            n_estimators=num_boost_round,
+            early_stopping_rounds=early_stopping_rounds,
+            **xgb_params,
+        )
+    else:
+        regular_model = XGBRegressor(
+            n_estimators=num_boost_round,
+            early_stopping_rounds=early_stopping_rounds,
+            **xgb_params,
+        )
     fit_t0 = time.perf_counter()
     regular_model.fit(
         X_train,
@@ -331,8 +421,12 @@ def _train_single_fold(
         ar_dt = time.perf_counter() - ar_t0
         logging.info("Fold %d standard validation done in %.2fs", fold_num, ar_dt)
     
-    # Calculate RMSE
-    rmse = np.sqrt(mean_squared_error(y_val, predictions))
+    # Calculate RMSE on observed elements only
+    if obs_val is not None:
+        mask = obs_val.astype(bool).flatten()
+        rmse = np.sqrt(mean_squared_error(y_val.flatten()[mask], predictions.flatten()[mask]))
+    else:
+        rmse = np.sqrt(mean_squared_error(y_val, predictions))
     logging.info(f"Fold {fold_num} RMSE: {rmse:.4f}")
     
     try:
@@ -365,6 +459,8 @@ def _search_worker(
     stage_num: int,
     score_key: str,
     result_queue,
+    obs_train: Optional[np.ndarray] = None,
+    obs_val: Optional[np.ndarray] = None,
 ) -> None:
     """Worker process: pinned to exactly one GPU via CUDA_VISIBLE_DEVICES."""
     with cuda_device(gpu_token):
@@ -388,6 +484,8 @@ def _search_worker(
                 show_autoreg_progress=trainer_cfg.search_show_autoreg_progress,
                 n_jobs=1,
                 use_autoregressive_eval=False,
+                obs_mask=obs_train,
+                obs_val_mask=obs_val,
             )
             result = params_copy.copy()
             result[score_key] = float(score)
@@ -430,18 +528,20 @@ def _collect_worker_results(processes: List[mp.Process], result_queue) -> List[D
 
 
 def hyperparameter_search(
-    X_train: pd.DataFrame, 
-    y_train: np.array, 
+    X_train: pd.DataFrame,
+    y_train: np.array,
     X_train_with_index: pd.DataFrame,
     train_groups: np.array,
-    targets: List[str], 
-    run_id: str, 
+    targets: List[str],
+    run_id: str,
     start_stage: int = 1,
     use_cv: bool = True,
     X_val: Optional[pd.DataFrame] = None,
     y_val: Optional[np.array] = None,
     X_val_with_index: Optional[pd.DataFrame] = None,
     val_groups: Optional[np.array] = None,
+    obs_train: Optional[np.ndarray] = None,
+    obs_val: Optional[np.ndarray] = None,
 ) -> Tuple[Dict, Dict]:
     """
     Perform staged hyperparameter search for XGBoost.
@@ -588,6 +688,8 @@ def hyperparameter_search(
                             show_autoreg_progress=trainer_cfg.search_show_autoreg_progress,
                             n_jobs=1,
                             use_autoregressive_eval=False,
+                            obs_mask=obs_train if use_cv else obs_train,
+                            obs_val_mask=None if use_cv else obs_val,
                         )
                         result = params_copy.copy()
                         result[score_key] = float(score)
@@ -631,6 +733,8 @@ def hyperparameter_search(
                             'stage_num': stage_num,
                             'score_key': score_key,
                             'result_queue': result_queue,
+                            'obs_train': obs_train if use_cv else obs_train,
+                            'obs_val': None if use_cv else obs_val,
                         },
                     )
                     p.start()
@@ -704,6 +808,8 @@ def train_and_save_model(
     ) -> None:
     logging.info("Training final model with best parameters...")
 
+    from configs.data import KEEP_PARTIAL_TARGETS
+
     with cuda_device(_first_visible_gpu_token()):
         try:
             y_train_df = pd.DataFrame(y_train, columns=targets)
@@ -711,10 +817,17 @@ def train_and_save_model(
             xgb_params = get_xgb_params(best_params, trainer_cfg=trainer_cfg)
             num_boost_round = xgb_params.pop('num_boost_round')
 
-            model = XGBRegressor(
-                n_estimators=num_boost_round,
-                **xgb_params
-            )
+            if KEEP_PARTIAL_TARGETS:
+                model = PerTargetXGBRegressor(
+                    targets=targets,
+                    n_estimators=num_boost_round,
+                    **xgb_params,
+                )
+            else:
+                model = XGBRegressor(
+                    n_estimators=num_boost_round,
+                    **xgb_params,
+                )
 
             model.fit(X_train, y_train_df, verbose=25)
 

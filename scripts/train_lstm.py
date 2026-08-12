@@ -34,12 +34,17 @@ def derive_splits(data, lag_required=True):
     """
     import pandas as pd
     from src.data.preprocess import (
+        set_region_categories,
         add_missingness_indicators,
         impute_with_train_medians,
         prepare_features_and_targets_sequence,
         split_data,
     )
     from configs.data import CATEGORICAL_COLUMNS, REGION_CATEGORIES
+
+    # Ensure REGION_CATEGORIES is populated (empty when loading from cache)
+    if not REGION_CATEGORIES and 'Region' in data.columns:
+        set_region_categories(data['Region'])
 
     prepared, features, targets = prepare_features_and_targets_sequence(
         data,

@@ -53,6 +53,15 @@ class TFTDatasetConfig:
             if f not in excluded and not _lag_re.match(f)
         ]
 
+        # Include __observed mask columns as known reals so the masked loss
+        # can access them from the batch.  They are boolean-like (0/1) and
+        # known at all time steps.
+        from configs.data import KEEP_PARTIAL_TARGETS
+        if KEEP_PARTIAL_TARGETS:
+            from src.data.preprocess import observed_mask_columns
+            obs_cols = observed_mask_columns(targets)
+            time_known_reals.extend(obs_cols)
+
         # Per-sample normalization from each sample's encoder window.
         # Avoids GroupNormalizer's silent fallback to global median stats
         # for unseen groups at test time (data is split by group).

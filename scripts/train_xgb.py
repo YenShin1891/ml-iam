@@ -17,7 +17,6 @@ def derive_splits(data):
     from src.data.preprocess import prepare_data, prepare_features_and_targets
 
     prepared, features, targets = prepare_features_and_targets(data, lag_required=True)
-    prepared = prepared.dropna(subset=targets)
     (
         X_train, y_train, X_train_index_columns,
         X_val, y_val, X_val_index_columns,
@@ -25,6 +24,7 @@ def derive_splits(data):
         test_data,
         x_scaler, y_scaler,
         train_groups, val_groups,
+        obs_train, obs_val, obs_test,
     ) = prepare_data(prepared, targets, features)
 
     return {
@@ -43,6 +43,9 @@ def derive_splits(data):
         "y_scaler": y_scaler,
         "train_groups": train_groups,
         "val_groups": val_groups,
+        "obs_train": obs_train,
+        "obs_val": obs_val,
+        "obs_test": obs_test,
     }
 
 
@@ -82,6 +85,7 @@ def search_xgb(store):
         X_train, y_train, X_train_with_index, train_groups,
         targets, store.run_id, start_stage=1, use_cv=False,
         X_val=X_val, y_val=y_val, X_val_with_index=X_val_with_index, val_groups=val_groups,
+        obs_train=splits.get("obs_train"), obs_val=splits.get("obs_val"),
     )
     store.save_best_params(best_params)
     store.save_features(splits["features"], splits["targets"])
@@ -145,7 +149,7 @@ def test_xgb(store):
     y_scaler = splits["y_scaler"]
 
     from src.trainers.evaluation import test_xgb_autoregressively, save_metrics
-    from src.data.preprocess import denormalize_by_population
+    from src.data.preprocess import denormalize_by_population, observed_mask_columns
     from configs.data import POPULATION_COLUMN
 
     preds_scaled = test_xgb_autoregressively(X_test_with_index, y_test_scaled, store.run_id)
@@ -158,9 +162,13 @@ def test_xgb(store):
     preds = denormalize_by_population(y_scaler.inverse_transform(preds_scaled), population)
     y_test = denormalize_by_population(test_data[targets].values, population)
 
+    # Extract observed mask from test_data if available
+    obs_cols = observed_mask_columns(targets)
+    obs_mask = test_data[obs_cols].values if all(c in test_data.columns for c in obs_cols) else None
+
     store.save_predictions(preds)
     store.save_test_data(test_data, y_test)
-    save_metrics(store.run_id, y_test, preds, test_data)
+    save_metrics(store.run_id, y_test, preds, test_data, observed_mask=obs_mask)
     return preds
 
 

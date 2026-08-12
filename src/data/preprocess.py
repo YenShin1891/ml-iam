@@ -20,6 +20,7 @@ from configs.data import (
     SCALE_AWARE_IMPUTATION,
     NORMALIZE_TARGETS_BY_POPULATION,
     POPULATION_COLUMN,
+    KEEP_PARTIAL_TARGETS,
 )
 
 def split_data(
@@ -54,6 +55,8 @@ def encode_categorical_columns(data, columns):
     for col in columns:
         if col in data.columns:
             if col == 'Region':
+                if not REGION_CATEGORIES:
+                    set_region_categories(data[col])
                 data[col] = (
                     pd.Categorical(data[col].astype(str), categories=REGION_CATEGORIES, ordered=True)
                     .codes
@@ -198,6 +201,9 @@ def impute_with_train_medians(
 
 
 def prepare_data(prepared, targets, features):
+    obs_cols = observed_mask_columns(targets)
+    has_obs = all(c in prepared.columns for c in obs_cols)
+
     train_data, val_data, test_data = split_data(prepared)
 
     X_train = train_data[features].copy()
@@ -210,10 +216,20 @@ def prepare_data(prepared, targets, features):
     X_test_index_columns = test_data[[col for col in INDEX_COLUMNS if col not in features]].copy()
     y_test = test_data[targets].values.copy()
 
+    # Extract observed masks (float32 arrays matching y shape)
+    if has_obs:
+        obs_train = train_data[obs_cols].values.copy()
+        obs_val = val_data[obs_cols].values.copy()
+        obs_test = test_data[obs_cols].values.copy()
+    else:
+        obs_train = np.ones_like(y_train, dtype=np.float32)
+        obs_val = np.ones_like(y_val, dtype=np.float32)
+        obs_test = np.ones_like(y_test, dtype=np.float32)
+
     X_train = encode_categorical_columns(X_train, CATEGORICAL_COLUMNS)
     X_val = encode_categorical_columns(X_val, CATEGORICAL_COLUMNS)
     X_test = encode_categorical_columns(X_test, CATEGORICAL_COLUMNS)
-    
+
     x_scaler = StandardScaler()
     X_train_scaled = x_scaler.fit_transform(X_train)
     X_val_scaled = x_scaler.transform(X_val)
@@ -222,27 +238,32 @@ def prepare_data(prepared, targets, features):
     X_train_scaled = pd.DataFrame(X_train_scaled, columns=X_train.columns, index=X_train.index)
     X_val_scaled = pd.DataFrame(X_val_scaled, columns=X_val.columns, index=X_val.index)
     X_test_scaled = pd.DataFrame(X_test_scaled, columns=X_test.columns, index=X_test.index)
-    
+
     y_scaler = StandardScaler()
-    y_train_scaled = y_scaler.fit_transform(y_train)
-    y_val_scaled = y_scaler.transform(y_val)
-    y_test_scaled = y_scaler.transform(y_test)
-    
+    # Fit scaler on observed values only; fill NaN with 0 for transform
+    y_train_filled = np.where(np.isnan(y_train), 0.0, y_train)
+    y_val_filled = np.where(np.isnan(y_val), 0.0, y_val)
+    y_test_filled = np.where(np.isnan(y_test), 0.0, y_test)
+    y_train_scaled = y_scaler.fit_transform(y_train_filled)
+    y_val_scaled = y_scaler.transform(y_val_filled)
+    y_test_scaled = y_scaler.transform(y_test_filled)
+
     X_test_with_index_scaled = pd.concat(
         [X_test_scaled.reset_index(drop=True), X_test_index_columns.reset_index(drop=True)],
         axis=1
     )
-    
+
     train_groups = np.asarray(train_data[INDEX_COLUMNS].astype(str).agg('_'.join, axis=1))
     val_groups = np.asarray(val_data[INDEX_COLUMNS].astype(str).agg('_'.join, axis=1))
 
     return (
-        X_train_scaled, y_train_scaled, X_train_index_columns, 
+        X_train_scaled, y_train_scaled, X_train_index_columns,
         X_val_scaled, y_val_scaled, X_val_index_columns,
         X_test_with_index_scaled, y_test_scaled,
         test_data,
         x_scaler, y_scaler,
-        train_groups, val_groups
+        train_groups, val_groups,
+        obs_train, obs_val, obs_test,
     )
 
 def load_and_process_data(version=None) -> pd.DataFrame:
@@ -326,7 +347,33 @@ def load_and_process_data(version=None) -> pd.DataFrame:
         index=pivot_index,
         columns='Variable', values='value'
     ).reset_index()
+
+    # Derive REGION_CATEGORIES from the actual data so embeddings always
+    # cover every region present, regardless of target-filtering changes.
+    if 'Region' in var_pivoted.columns:
+        set_region_categories(var_pivoted['Region'])
+
     return var_pivoted
+
+
+def set_region_categories(regions) -> None:
+    """Derive REGION_CATEGORIES from a data column and update module globals.
+
+    Mutates the existing list in-place so that ``from configs.data import
+    REGION_CATEGORIES`` bindings see the update.
+    """
+    from configs.data import REGION_CATEGORIES, REGION_CODE_TO_LABEL
+
+    cats = sorted(set(str(r) for r in regions))
+    REGION_CATEGORIES.clear()
+    REGION_CATEGORIES.extend(cats)
+    REGION_CODE_TO_LABEL.clear()
+    REGION_CODE_TO_LABEL.update({idx: r for idx, r in enumerate(cats)})
+
+
+def observed_mask_columns(output_variables: list) -> list:
+    """Return the list of ``{var}__observed`` column names for *output_variables*."""
+    return [f"{var}__observed" for var in output_variables]
 
 
 def interpolate_targets(
@@ -341,8 +388,17 @@ def interpolate_targets(
     features are computed from real (interpolated) values instead of NaN.
 
     Only fills targets that have at least one non-NaN value in the group.
+
+    Before interpolating, captures ``{var}__observed`` boolean columns so
+    downstream code can distinguish originally-observed from filled values.
     """
     data = data.sort_values(group_cols + ["Year"]).copy()
+
+    # Capture observation mask *before* any interpolation
+    for col in output_variables:
+        obs_col = f"{col}__observed"
+        if obs_col not in data.columns:
+            data[obs_col] = data[col].notna().astype("float32")
 
     before_nans = data[output_variables].isna().sum().sum()
 
@@ -456,6 +512,14 @@ def prepare_features_and_targets(data: pd.DataFrame, lag_required: bool = True) 
         data = interpolate_targets(data, INDEX_COLUMNS, [POPULATION_COLUMN])
         data = normalize_targets_by_population(data, OUTPUT_VARIABLES, POPULATION_COLUMN)
 
+    # Always capture observation mask before interpolation fills NaNs.
+    # interpolate_targets creates them internally, but if INTERPOLATE_TARGETS
+    # is False we still need them.
+    for col in OUTPUT_VARIABLES:
+        obs_col = f"{col}__observed"
+        if obs_col not in data.columns:
+            data[obs_col] = data[col].notna().astype("float32")
+
     if INTERPOLATE_TARGETS:
         data = interpolate_targets(data, INDEX_COLUMNS, OUTPUT_VARIABLES)
 
@@ -463,10 +527,26 @@ def prepare_features_and_targets(data: pd.DataFrame, lag_required: bool = True) 
     prepared['Year'] = prepared['Year'].astype(int)
 
     targets = OUTPUT_VARIABLES
-    features = [col for col in prepared.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
+    obs_cols = observed_mask_columns(OUTPUT_VARIABLES)
+    features = [
+        col for col in prepared.columns
+        if col not in NON_FEATURE_COLUMNS
+        and col not in targets
+        and not col.endswith("__observed")
+    ]
 
-    # Only drop rows with missing targets, not lag features
-    prepared = prepared.dropna(subset=targets)
+    if KEEP_PARTIAL_TARGETS:
+        # Keep rows where *at least one* target is observed (element-wise
+        # masking handles the rest).  Rows where *all* targets are missing
+        # carry zero gradient and waste memory, so drop them.
+        any_observed = prepared[obs_cols].any(axis=1)
+        n_dropped = int((~any_observed).sum())
+        if n_dropped:
+            logging.info("Dropped %d rows where all targets are unobserved", n_dropped)
+        prepared = prepared[any_observed].reset_index(drop=True)
+    else:
+        # Original behaviour: require every target to be present.
+        prepared = prepared.dropna(subset=targets).reset_index(drop=True)
 
     if not lag_required:
         missing_lag_rows = prepared[features].isna().any(axis=1).sum()
@@ -505,6 +585,12 @@ def prepare_features_and_targets_sequence(
         data = interpolate_targets(data, INDEX_COLUMNS, [POPULATION_COLUMN])
         data = normalize_targets_by_population(data, OUTPUT_VARIABLES, POPULATION_COLUMN)
 
+    # Always capture observation mask before interpolation fills NaNs.
+    for col in OUTPUT_VARIABLES:
+        obs_col = f"{col}__observed"
+        if obs_col not in data.columns:
+            data[obs_col] = data[col].notna().astype("float32")
+
     if INTERPOLATE_TARGETS:
         data = interpolate_targets(data, INDEX_COLUMNS, OUTPUT_VARIABLES)
 
@@ -512,9 +598,22 @@ def prepare_features_and_targets_sequence(
     prepared['Year'] = prepared['Year'].astype(int)
 
     targets = OUTPUT_VARIABLES
-    features = [col for col in prepared.columns if col not in NON_FEATURE_COLUMNS and col not in targets]
+    obs_cols = observed_mask_columns(OUTPUT_VARIABLES)
+    features = [
+        col for col in prepared.columns
+        if col not in NON_FEATURE_COLUMNS
+        and col not in targets
+        and not col.endswith("__observed")
+    ]
 
-    prepared = prepared.dropna(subset=targets)
+    if KEEP_PARTIAL_TARGETS:
+        any_observed = prepared[obs_cols].any(axis=1)
+        n_dropped = int((~any_observed).sum())
+        if n_dropped:
+            logging.info("Dropped %d rows where all targets are unobserved", n_dropped)
+        prepared = prepared[any_observed].reset_index(drop=True)
+    else:
+        prepared = prepared.dropna(subset=targets).reset_index(drop=True)
 
     if not lag_required:
         missing_lag_rows = prepared[features].isna().any(axis=1).sum()

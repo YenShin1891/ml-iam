@@ -104,6 +104,7 @@ class LSTMDataset(Dataset):
         lag_indices: Optional[Dict[int, List[int]]] = None,
     ):
         from configs.data import INDEX_COLUMNS
+        from src.data.preprocess import observed_mask_columns
         self.sequence_length = sequence_length
         self.target_offset = target_offset
         self.mask_value = mask_value
@@ -117,9 +118,18 @@ class LSTMDataset(Dataset):
         # Separate continuous features (to be scaled) from categorical (kept as int codes)
         continuous_features = [f for f in features if f not in self.categorical_features]
 
+        # Extract observed-target mask (per element)
+        obs_cols = observed_mask_columns(targets)
+        if all(c in data.columns for c in obs_cols):
+            self._obs_mask = data[obs_cols].values.astype(np.float32)
+        else:
+            self._obs_mask = np.ones((len(data), len(targets)), dtype=np.float32)
+
         # Extract continuous features and targets
         X_cont = data[continuous_features].copy() if continuous_features else pd.DataFrame(index=data.index)
         y = data[targets].values.copy()
+        # Fill NaN targets with 0 for scaling (mask handles loss weighting)
+        y = np.where(np.isnan(y), 0.0, y)
 
         # Handle NaN values in continuous features
         X_cont_filled = X_cont.fillna(mask_value).astype(np.float32)
@@ -163,6 +173,7 @@ class LSTMDataset(Dataset):
         self.X_sequences = []       # continuous features (scaled)
         self.cat_sequences = []     # categorical indices (unscaled)
         self.y_sequences = []
+        self.target_obs = []        # per-target observed mask
         self.masks = []
         self.group_info = []
 
@@ -197,12 +208,14 @@ class LSTMDataset(Dataset):
                 self.X_sequences.append(torch.FloatTensor(x_seq))
                 self.cat_sequences.append(torch.LongTensor(cat_seq))
                 self.y_sequences.append(torch.FloatTensor(y_seq))
+                self.target_obs.append(torch.FloatTensor(self._obs_mask[target_pos]))
                 self.masks.append(torch.FloatTensor(mask.values if hasattr(mask, 'values') else [mask]))
                 self.group_info.append(group_name)
 
         self.X_sequences = torch.stack(self.X_sequences)
         self.cat_sequences = torch.stack(self.cat_sequences)
         self.y_sequences = torch.stack(self.y_sequences)
+        self.target_obs = torch.stack(self.target_obs)
         self.masks = torch.stack(self.masks)
 
     def __len__(self):
@@ -213,6 +226,7 @@ class LSTMDataset(Dataset):
             'x': self.X_sequences[idx],
             'cat': self.cat_sequences[idx],
             'y': self.y_sequences[idx],
+            'target_obs': self.target_obs[idx],
             'mask': self.masks[idx],
             'group': self.group_info[idx]
         }
@@ -508,30 +522,48 @@ class LSTMModel(LightningModule):
 
         return predictions[-1]
 
+    @staticmethod
+    def _masked_mse(y_hat, y, target_obs):
+        """MSE masked to originally-observed target elements only."""
+        sq_err = (y_hat - y) ** 2
+        return (sq_err * target_obs).sum() / target_obs.sum().clamp(min=1)
+
     def training_step(self, batch, batch_idx):
         x, y, mask = batch['x'], batch['y'], batch['mask']
         cat = batch.get('cat', None)
+        target_obs = batch.get('target_obs', None)
 
         y_hat = self(x, mask, teacher_forcing=True, cat_indices=cat)
-        loss = F.mse_loss(y_hat, y)
+        if target_obs is not None:
+            loss = self._masked_mse(y_hat, y, target_obs)
+        else:
+            loss = F.mse_loss(y_hat, y)
         self.log('train_loss', loss, prog_bar=True, sync_dist=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
         x, y, mask = batch['x'], batch['y'], batch['mask']
         cat = batch.get('cat', None)
+        target_obs = batch.get('target_obs', None)
 
         y_hat = self(x, mask, teacher_forcing=False, cat_indices=cat)
-        loss = F.mse_loss(y_hat, y)
+        if target_obs is not None:
+            loss = self._masked_mse(y_hat, y, target_obs)
+        else:
+            loss = F.mse_loss(y_hat, y)
         self.log('val_loss', loss, prog_bar=True, sync_dist=True)
         return loss
 
     def test_step(self, batch, batch_idx):
         x, y, mask = batch['x'], batch['y'], batch['mask']
         cat = batch.get('cat', None)
+        target_obs = batch.get('target_obs', None)
 
         y_hat = self(x, mask, teacher_forcing=False, cat_indices=cat)
-        loss = F.mse_loss(y_hat, y)
+        if target_obs is not None:
+            loss = self._masked_mse(y_hat, y, target_obs)
+        else:
+            loss = F.mse_loss(y_hat, y)
         self.log('test_loss', loss, sync_dist=True)
         return y_hat
 
@@ -1477,8 +1509,15 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
 
     logging.info("Valid predictions: %d out of %d", len(valid_preds), len(y_test))
 
-    # Save metrics using only valid predictions and targets
-    save_metrics(run_id, valid_targets, valid_preds)
+    # Extract observed mask for metrics (element-wise)
+    from src.data.preprocess import observed_mask_columns
+    obs_cols = observed_mask_columns(targets)
+    if all(c in test_data.columns for c in obs_cols):
+        obs_mask = test_data[obs_cols].values[valid_mask]
+    else:
+        obs_mask = None
+
+    save_metrics(run_id, valid_targets, valid_preds, observed_mask=obs_mask)
 
     # Store horizon data for plotting (like TFT pattern)
     session_state["horizon_df"] = test_data

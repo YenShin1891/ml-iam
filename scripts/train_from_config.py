@@ -54,6 +54,7 @@ class RunConfig:
     cuda_visible_devices_by_phase: Dict[str, Optional[str]] = field(default_factory=dict)
     lag_required: Optional[bool] = None
     two_window: bool = False
+    keep_partial_targets: Optional[bool] = None
     note: Optional[str] = None
 
 
@@ -202,6 +203,10 @@ def _parse_config(obj: Dict[str, Any], *, config_path: Path) -> RunConfig:
 
     two_window = bool(obj.get("two_window", False))
 
+    keep_partial_targets = obj.get("keep_partial_targets")
+    if keep_partial_targets is not None and not isinstance(keep_partial_targets, bool):
+        raise ValueError("'keep_partial_targets' must be boolean when provided")
+
     note = obj.get("note")
     if note is not None and not isinstance(note, str):
         raise ValueError("'note' must be a string when provided")
@@ -215,6 +220,7 @@ def _parse_config(obj: Dict[str, Any], *, config_path: Path) -> RunConfig:
         cuda_visible_devices_by_phase=cuda_visible_devices_by_phase,
         lag_required=lag_required,
         two_window=two_window,
+        keep_partial_targets=keep_partial_targets,
         note=note,
     )
 
@@ -234,6 +240,9 @@ def _build_phase_argv(cfg: RunConfig, *, phase: str, run_id: str) -> List[str]:
 
     if cfg.model == "tft" and cfg.two_window:
         argv.append("--two-window")
+
+    if cfg.keep_partial_targets is not None:
+        argv.append("--keep-partial-targets" if cfg.keep_partial_targets else "--no-keep-partial-targets")
 
     if cfg.note:
         argv.extend(["--note", cfg.note])
