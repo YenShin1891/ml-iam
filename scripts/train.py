@@ -85,7 +85,7 @@ def _preprocess(model, store, dataset, lag_required):
         return preprocess_tft(store, dataset=dataset, lag_required=lag_required)
 
 
-def _search(model, store, lag_required=True):
+def _search(model, store, lag_required=True, target_normalizer_mode=None):
     if model == "xgb":
         from scripts.train_xgb import search_xgb
         return search_xgb(store)
@@ -94,10 +94,10 @@ def _search(model, store, lag_required=True):
         return search_lstm(store, lag_required=lag_required)
     elif model == "tft":
         from scripts.train_tft import search_tft
-        return search_tft(store, lag_required=lag_required)
+        return search_tft(store, lag_required=lag_required, target_normalizer_mode=target_normalizer_mode)
 
 
-def _train(model, store, lag_required=True):
+def _train(model, store, lag_required=True, target_normalizer_mode=None):
     if model == "xgb":
         from scripts.train_xgb import train_xgb
         return train_xgb(store)
@@ -106,7 +106,7 @@ def _train(model, store, lag_required=True):
         return train_lstm(store, lag_required=lag_required)
     elif model == "tft":
         from scripts.train_tft import train_tft
-        return train_tft(store, lag_required=lag_required)
+        return train_tft(store, lag_required=lag_required, target_normalizer_mode=target_normalizer_mode)
 
 
 def _test(model, store, lag_required=True, two_window=False):
@@ -179,6 +179,13 @@ def parse_arguments(argv=None):
     )
     parser.add_argument("--two-window", action="store_true", help="Two-window prediction (TFT only).")
     parser.add_argument(
+        "--target-normalizer-mode",
+        type=str,
+        choices=["encoder_floored", "global"],
+        default=None,
+        help="TFT target normalizer: 'encoder_floored' (per-sample with floor) or 'global' (single μ/σ per target).",
+    )
+    parser.add_argument(
         "--keep-partial-targets",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -231,8 +238,8 @@ def main(argv=None):
             logging.info("Run note: %s", args.note)
 
         _preprocess(model, store, args.dataset, lag_required)
-        _search(model, store, lag_required=lag_required)
-        _train(model, store, lag_required=lag_required)
+        _search(model, store, lag_required=lag_required, target_normalizer_mode=args.target_normalizer_mode)
+        _train(model, store, lag_required=lag_required, target_normalizer_mode=args.target_normalizer_mode)
         _test(model, store, lag_required=lag_required, two_window=args.two_window)
         _plot(model, store, lag_required=lag_required)
         return
@@ -255,9 +262,9 @@ def main(argv=None):
         _set_default_params(model, store)
         logging.info("Preprocessing complete.")
     elif phase == "search":
-        _search(model, store, lag_required=lag_required)
+        _search(model, store, lag_required=lag_required, target_normalizer_mode=args.target_normalizer_mode)
     elif phase == "train":
-        _train(model, store, lag_required=lag_required)
+        _train(model, store, lag_required=lag_required, target_normalizer_mode=args.target_normalizer_mode)
     elif phase == "test":
         _test(model, store, lag_required=lag_required, two_window=args.two_window)
     elif phase == "plot":

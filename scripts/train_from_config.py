@@ -55,6 +55,7 @@ class RunConfig:
     lag_required: Optional[bool] = None
     two_window: bool = False
     keep_partial_targets: Optional[bool] = None
+    target_normalizer_mode: Optional[str] = None  # TFT: "encoder_floored" or "global"
     note: Optional[str] = None
 
 
@@ -203,6 +204,12 @@ def _parse_config(obj: Dict[str, Any], *, config_path: Path) -> RunConfig:
 
     two_window = bool(obj.get("two_window", False))
 
+    target_normalizer_mode = obj.get("target_normalizer_mode")
+    if target_normalizer_mode is not None:
+        allowed = {"encoder_floored", "global"}
+        if target_normalizer_mode not in allowed:
+            raise ValueError(f"'target_normalizer_mode' must be one of {sorted(allowed)}")
+
     keep_partial_targets = obj.get("keep_partial_targets")
     if keep_partial_targets is not None and not isinstance(keep_partial_targets, bool):
         raise ValueError("'keep_partial_targets' must be boolean when provided")
@@ -221,6 +228,7 @@ def _parse_config(obj: Dict[str, Any], *, config_path: Path) -> RunConfig:
         lag_required=lag_required,
         two_window=two_window,
         keep_partial_targets=keep_partial_targets,
+        target_normalizer_mode=target_normalizer_mode,
         note=note,
     )
 
@@ -240,6 +248,9 @@ def _build_phase_argv(cfg: RunConfig, *, phase: str, run_id: str) -> List[str]:
 
     if cfg.model == "tft" and cfg.two_window:
         argv.append("--two-window")
+
+    if cfg.model == "tft" and cfg.target_normalizer_mode is not None:
+        argv.extend(["--target-normalizer-mode", cfg.target_normalizer_mode])
 
     if cfg.keep_partial_targets is not None:
         argv.append("--keep-partial-targets" if cfg.keep_partial_targets else "--no-keep-partial-targets")
@@ -285,6 +296,7 @@ def _write_run_metadata(
         "cuda_visible_devices_resolved_by_phase": dict(cuda_by_phase_resolved),
         "lag_required": cfg.lag_required,
         "two_window": cfg.two_window,
+        "target_normalizer_mode": cfg.target_normalizer_mode,
         "note": cfg.note,
         "phases": list(cfg.phases),
     }

@@ -1,7 +1,32 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple, Union
 
+import numpy as np
+import torch
+from pytorch_forecasting.data import EncoderNormalizer
+
 from configs.data import CATEGORICAL_COLUMNS, INDEX_COLUMNS, MAX_SERIES_LENGTH
+
+
+class FlooredEncoderNormalizer(EncoderNormalizer):
+    """EncoderNormalizer that clamps scale to a minimum floor.
+
+    Prevents degenerate normalization when the encoder window has near-zero
+    variance (e.g. Nuclear/Wind/Solar starting at 0, or constant early values),
+    which otherwise produces astronomical normalized targets and noisy gradients.
+    """
+
+    def __init__(self, min_scale: float = 1.0, **kwargs):
+        super().__init__(**kwargs)
+        self.min_scale = min_scale
+
+    def fit(self, y):
+        super().fit(y)
+        if isinstance(self.scale_, torch.Tensor):
+            self.scale_ = torch.clamp(self.scale_, min=self.min_scale)
+        else:
+            self.scale_ = max(self.scale_, self.min_scale)
+        return self
 
 
 @dataclass
@@ -23,6 +48,11 @@ class TFTDatasetConfig:
     allow_missing_timesteps: bool = False
     pretrained_categorical_encoders: Dict[str, Any] = field(default_factory=dict)
     target_offset: int = 0  # Set 1 for warm start: reserves encoder context for future predictions (set 0 for cold start)
+    # "encoder_floored" (default): per-sample encoder normalization with scale floor
+    # "global": single global μ/σ per target from training data (TorchNormalizer)
+    target_normalizer_mode: str = "encoder_floored"
+    target_scale_floors: Dict[str, float] = field(default_factory=dict)
+    scale_floor_fraction: float = 0.01  # fraction of global σ used as floor when no explicit floors given
     _effective_min_encoder_length: int = field(init=False, default=0)
     _effective_max_encoder_length: int = field(init=False, default=0)
 
@@ -33,7 +63,7 @@ class TFTDatasetConfig:
         mode: str,
     ) -> Dict[str, Any]:
         # Lazy import to avoid heavy deps at module import time
-        from pytorch_forecasting.data import EncoderNormalizer, MultiNormalizer
+        from pytorch_forecasting.data import MultiNormalizer
 
         if isinstance(targets, str):
             targets = [targets]
@@ -62,12 +92,23 @@ class TFTDatasetConfig:
             obs_cols = observed_mask_columns(targets)
             time_known_reals.extend(obs_cols)
 
-        # Per-sample normalization from each sample's encoder window.
-        # Avoids GroupNormalizer's silent fallback to global median stats
-        # for unseen groups at test time (data is split by group).
-        target_normalizer = MultiNormalizer([
-            EncoderNormalizer() for _ in targets
-        ])
+        if self.target_normalizer_mode == "global":
+            # Single global μ/σ per target, fitted once on the full training
+            # column at TimeSeriesDataSet init time.  Stable but loses
+            # per-sample level information.
+            from pytorch_forecasting.data.encoders import TorchNormalizer
+            target_normalizer = MultiNormalizer([
+                TorchNormalizer(method="standard") for _ in targets
+            ])
+        else:
+            # Per-sample normalization from each sample's encoder window,
+            # with a minimum scale floor to prevent degenerate normalization.
+            target_normalizer = MultiNormalizer([
+                FlooredEncoderNormalizer(
+                    min_scale=self.target_scale_floors.get(t, 1.0),
+                )
+                for t in targets
+            ])
 
         min_encoder_length, max_encoder_length = self.resolve_encoder_lengths()
 
