@@ -71,16 +71,10 @@ MAX_YEAR = 2100  # Upper inclusive cutoff for usable year columns
 DEFAULT_DATASET = 'processed_series_0401.csv'
 
 # Deterministic region category ordering used when pandas encodes with .cat.codes
-REGION_CATEGORIES = [
-    'AGO', 'ARG', 'AUS', 'BRA', 'CAN', 'CHL', 'CHN', 'COL', 'DZA', 'EGY', 'ETH', 'EU',
-    'IDN', 'IND', 'JPN', 'KEN', 'KOR', 'LBY', 'MAR', 'MDG', 'MEX', 'NGA', 'R10AFRICA',
-    'R10CHINA+', 'R10EUROPE', 'R10INDIA+', 'R10LATIN_AM', 'R10MIDDLE_EAST',
-    'R10NORTH_AM', 'R10PAC_OECD', 'R10REF_ECON', 'R10REST_ASIA', 'R10ROWO', 'R5ASIA',
-    'R5LAM', 'R5MAF', 'R5OECD90+EU', 'R5REF', 'R5ROWO', 'R6AFRICA', 'R6ASIA', 'R6LAM',
-    'R6MIDDLE_EAST', 'R6OECD90+EU', 'R6REF', 'R6ROWO', 'RUS', 'SAU', 'TUN', 'TUR',
-    'USA', 'VEN', 'World', 'ZAF'
-]
-REGION_CODE_TO_LABEL = {idx: region for idx, region in enumerate(REGION_CATEGORIES)}
+# Populated at runtime by load_and_process_data() from the actual dataset.
+# Sorted for deterministic embedding indices across runs.
+REGION_CATEGORIES: list = []
+REGION_CODE_TO_LABEL: dict = {}
 
 
 # ── Region scale classification ───────────────────────────────────────────
@@ -118,3 +112,10 @@ SCALE_AWARE_IMPUTATION = True
 # absolute units (see src.data.preprocess.denormalize_by_population).
 NORMALIZE_TARGETS_BY_POPULATION = False
 POPULATION_COLUMN = "Population"
+
+# When True, keep rows where at least one target is observed (partial coverage).
+# LSTM/TFT use masked loss; XGBoost trains per-target models dropping NaN
+# rows independently.  When False, drop any row with a missing target
+# (original behaviour) so all models see complete target vectors — XGBoost
+# uses native multi-output regression with cross-target tree splits.
+KEEP_PARTIAL_TARGETS = True

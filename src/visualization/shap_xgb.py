@@ -3,6 +3,7 @@ import os, logging, numpy as np, pandas as pd, shap, xgboost as xgb
 from typing import List, Optional, Dict
 from src.utils.utils import get_run_root
 from configs.data import NON_FEATURE_COLUMNS, OUTPUT_UNITS, CATEGORICAL_COLUMNS, REGION_CATEGORIES
+from src.data.preprocess import set_region_categories
 from configs.visualization import (
     DEFAULT_REGION,
     SHAP_FONT_SIZE,
@@ -81,6 +82,8 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=F
     cat_cols = [c for c in CATEGORICAL_COLUMNS if c in X_proc.columns]
     for c in cat_cols:
         if c == 'Region':
+            if not REGION_CATEGORIES:
+                set_region_categories(X_proc[c])
             X_proc[c] = (
                 pd.Categorical(X_proc[c].astype(str), categories=REGION_CATEGORIES, ordered=True)
                 .codes

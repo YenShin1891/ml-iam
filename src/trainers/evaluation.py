@@ -141,6 +141,15 @@ def autoregressive_predictions(model, group_indices, group_matrix, lag_indices_d
         isinstance(y_means_attr, (list, np.ndarray)) and isinstance(y_scales_attr, (list, np.ndarray)) and
         _safe_len(x_means_attr) == _safe_len(feature_columns)
     )
+    if not use_scalers:
+        if x_scaler is not None or y_scaler is not None:
+            logging.warning(
+                "Scalers provided but unusable (x_scaler.mean_ length %d != feature_columns length %d); "
+                "lag updates will insert y-scaled values into x-scaled columns",
+                _safe_len(x_means_attr), _safe_len(feature_columns),
+            )
+        else:
+            logging.debug("No scalers provided; lag updates will insert predictions as-is")
     if use_scalers:
         y_means = np.asarray(y_means_attr)[:num_targets]
         y_scales = np.asarray(y_scales_attr)[:num_targets]
@@ -150,8 +159,8 @@ def autoregressive_predictions(model, group_indices, group_matrix, lag_indices_d
         x_means_full = np.asarray(x_means_attr)
         x_scales_full = np.asarray(x_scales_attr)
         for lag, cols in lag_col_indices.items():
-            lag_x_means[lag] = np.array([(x_means_full[c] if c is not None else np.nan) for c in cols])
-            lag_x_scales[lag] = np.array([(x_scales_full[c] if c is not None else np.nan) for c in cols])
+            lag_x_means[lag] = np.array([(x_means_full[c] if c is not None else 0.0) for c in cols])
+            lag_x_scales[lag] = np.array([(x_scales_full[c] if c is not None else 1.0) for c in cols])
 
     # Roll forward autoregressively
     for t in range(start_pos + 1, len(group_indices)):
@@ -168,18 +177,11 @@ def autoregressive_predictions(model, group_indices, group_matrix, lag_indices_d
                     continue
                 y_val_scaled = preds_target[src_t, pred_idx]
                 if use_scalers:
-                    # y_scaled -> raw -> x_scaled(prev)
                     raw_val = y_val_scaled * y_scales[pred_idx] + y_means[pred_idx]
                     x_mean = lag_x_means[lag][pred_idx]
                     x_scale = lag_x_scales[lag][pred_idx]
-                    if np.isfinite(x_mean) and np.isfinite(x_scale) and x_scale != 0:
-                        x_val_scaled = (raw_val - x_mean) / x_scale
-                        X_test_curr[col_idx] = x_val_scaled
-                    else:
-                        # Fallback: insert y-scaled value if stats are invalid
-                        X_test_curr[col_idx] = y_val_scaled
+                    X_test_curr[col_idx] = (raw_val - x_mean) / x_scale
                 else:
-                    # No scalers: assume spaces match and insert as-is
                     X_test_curr[col_idx] = y_val_scaled
 
         # Predict for all targets at time t
@@ -226,9 +228,19 @@ def test_xgb_autoregressively(
     if model is None:
         if run_id is None:
             raise ValueError("Either provide a preloaded `model` or a valid `run_id` to load from disk.")
-        model = xgb.XGBRegressor()
         ckpt_path = os.path.join(get_run_root(run_id), "checkpoints", "final_best.json")
-        model.load_model(ckpt_path)
+        # Try per-target models first (final_best_0.json, ...), fall back to
+        # single multi-output model for backward compatibility.
+        from configs.data import OUTPUT_VARIABLES
+        stem, ext = os.path.splitext(ckpt_path)
+        if os.path.exists(f"{stem}_0{ext}"):
+            from src.trainers.xgb_trainer import PerTargetXGBRegressor
+            n_targets = y_test.shape[1] if y_test.ndim > 1 else 1
+            targets = OUTPUT_VARIABLES[:n_targets]
+            model = PerTargetXGBRegressor.load_model(ckpt_path, targets)
+        else:
+            model = xgb.XGBRegressor()
+            model.load_model(ckpt_path)
 
     # Get feature column names
     feature_columns = [col for col in X_test_with_index.columns if col not in NON_FEATURE_COLUMNS]
@@ -265,45 +277,60 @@ def test_xgb_autoregressively(
     return full_preds
 
 
-def save_metrics(run_id, y_true, y_pred, test_data=None):
-    """
-    Save performance metrics to a CSV file under the specified run directory.
+def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None):
+    """Save performance metrics to a CSV file under the specified run directory.
+
+    When *observed_mask* is provided (KEEP_PARTIAL_TARGETS=True), metrics are
+    computed on observed elements only.  Otherwise all elements are used.
+
     If test_data is provided, also compute metrics by region type.
     """
-    def compute_metrics(y_true_subset, y_pred_subset, subset_name="Overall"):
-        """Helper function to compute all metrics for a subset of data."""
-        mse = mean_squared_error(y_true_subset, y_pred_subset)
-        mae = np.mean(np.abs(y_true_subset - y_pred_subset))
-        rmse = np.sqrt(mse)
-        r2 = 1 - (np.sum((y_true_subset - y_pred_subset) ** 2) / np.sum((y_true_subset - np.mean(y_true_subset)) ** 2))
-        try:
-            y_true_flat = y_true_subset.flatten()
-            y_pred_flat = y_pred_subset.flatten()
-            if len(y_true_flat) == len(y_pred_flat) and len(y_true_flat) > 1:
-                pearson_corr = np.corrcoef(y_true_flat, y_pred_flat)[0, 1]
-            else:
+
+    def compute_metrics(y_true_subset, y_pred_subset, subset_name="Overall", obs=None):
+        results = []
+
+        def _metrics(yt, yp):
+            mse = mean_squared_error(yt, yp)
+            mae = float(np.mean(np.abs(yt - yp)))
+            rmse = float(np.sqrt(mse))
+            ss_res = float(np.sum((yt - yp) ** 2))
+            ss_tot = float(np.sum((yt - np.mean(yt)) ** 2))
+            r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+            try:
+                yt_f, yp_f = yt.flatten(), yp.flatten()
+                pearson_corr = float(np.corrcoef(yt_f, yp_f)[0, 1]) if len(yt_f) > 1 else np.nan
+            except Exception:
                 pearson_corr = np.nan
-        except Exception as e:
-            logging.warning("Failed to compute Pearson correlation for %s: %s", subset_name, e)
-            pearson_corr = np.nan
-        
-        return {
-            "Run ID": run_id,
-            "Region Type": subset_name,
-            "Mean Squared Error": mse,
-            "Pearson Correlation": pearson_corr,
-            "R2 Score": r2,
-            "MAE": mae,
-            "RMSE": rmse,
-            "Sample Size": len(y_true_subset)
-        }
+            return {
+                "Run ID": run_id,
+                "Region Type": subset_name,
+                "Mean Squared Error": mse,
+                "Pearson Correlation": pearson_corr,
+                "R2 Score": r2,
+                "MAE": mae,
+                "RMSE": rmse,
+                "Sample Size": len(yt),
+            }
+
+        yt_flat = y_true_subset.flatten()
+        yp_flat = y_pred_subset.flatten()
+
+        if obs is not None:
+            # Use only observed elements
+            mask = obs.astype(bool).flatten()
+            yt_flat = yt_flat[mask]
+            yp_flat = yp_flat[mask]
+
+        # Drop any remaining NaN/Inf
+        valid = np.isfinite(yt_flat) & np.isfinite(yp_flat)
+        if valid.any():
+            results.append(_metrics(yt_flat[valid], yp_flat[valid]))
+
+        return results
 
     # Compute overall metrics
-    overall_metrics = compute_metrics(y_true, y_pred, "Overall")
-    
-    # Store metrics in a list to collect all results
-    all_metrics = [overall_metrics]
-    
+    all_metrics = compute_metrics(y_true, y_pred, "Overall", obs=observed_mask)
+
     # If test_data is provided, compute metrics by region type
     if test_data is not None and 'Region' in test_data.columns:
         regions = test_data['Region'].unique()
@@ -312,8 +339,7 @@ def save_metrics(run_id, y_true, y_pred, test_data=None):
         R5 = [region for region in regions if region.startswith('R5')]
         World = [region for region in regions if region.startswith('World')]
         ISO = [region for region in regions if not (region.startswith('R10') or region.startswith('R6') or region.startswith('R5') or region.startswith('World'))]
-        
-        # Create region type mappings
+
         region_groups = {
             'R10': R10,
             'R6': R6,
@@ -321,54 +347,51 @@ def save_metrics(run_id, y_true, y_pred, test_data=None):
             'World': World,
             'ISO': ISO
         }
-        
-        # Compute metrics for each region type
+
         for region_type, region_list in region_groups.items():
             if len(region_list) > 0:
-                # Get positional indices for this region type
                 region_mask = test_data['Region'].isin(region_list)
                 region_positions = np.where(region_mask.values)[0]
 
-                # Extract corresponding predictions and true values
                 y_true_region = y_true[region_positions]
                 y_pred_region = y_pred[region_positions]
-                
+                obs_region = observed_mask[region_positions] if observed_mask is not None else None
+
                 if len(y_true_region) > 0:
-                    region_metrics = compute_metrics(y_true_region, y_pred_region, region_type)
-                    all_metrics.append(region_metrics)
-                    
-                    # Log region-specific metrics
+                    region_results = compute_metrics(y_true_region, y_pred_region, region_type, obs=obs_region)
+                    all_metrics.extend(region_results)
+
                     try:
+                        headline = region_results[0]
                         logging.info(
-                            "Run %s %s regions (%d samples) -> MSE=%.4f RMSE=%.4f MAE=%.4f R2=%.4f Pearson=%.4f",
-                            run_id, region_type, len(y_true_region), 
-                            float(region_metrics["Mean Squared Error"]), 
-                            float(region_metrics["RMSE"]), 
-                            float(region_metrics["MAE"]), 
-                            float(region_metrics["R2 Score"]), 
-                            float(region_metrics["Pearson Correlation"]) if not np.isnan(region_metrics["Pearson Correlation"]) else float('nan')
+                            "Run %s %s regions (%d samples) -> MSE=%.4f RMSE=%.4f MAE=%.4f R2=%.4f Pearson=%.4f [%s]",
+                            run_id, region_type, int(headline["Sample Size"]),
+                            float(headline["Mean Squared Error"]),
+                            float(headline["RMSE"]),
+                            float(headline["MAE"]),
+                            float(headline["R2 Score"]),
+                            float(headline["Pearson Correlation"]) if not np.isnan(headline["Pearson Correlation"]) else float('nan'),
+                            headline["Mask"],
                         )
                     except Exception:
                         pass
 
-    # Convert to DataFrame
     metrics = pd.DataFrame(all_metrics)
 
-    # Save metrics
     metrics_dir = os.path.join(get_run_root(run_id), "metrics")
     os.makedirs(metrics_dir, exist_ok=True)
     metrics_file = os.path.join(metrics_dir, "performance.csv")
     metrics.to_csv(metrics_file, index=False)
     logging.info("Metrics saved to %s.", metrics_file)
-    
-    # Log overall metrics
+
     try:
-        overall = all_metrics[0]
+        headline = all_metrics[0]
         logging.info(
-            "Run %s overall metrics -> MSE=%.4f RMSE=%.4f MAE=%.4f R2=%.4f Pearson=%.4f",
-            run_id, float(overall["Mean Squared Error"]), float(overall["RMSE"]), 
-            float(overall["MAE"]), float(overall["R2 Score"]), 
-            float(overall["Pearson Correlation"]) if not np.isnan(overall["Pearson Correlation"]) else float('nan')
+            "Run %s overall metrics [%s] -> MSE=%.4f RMSE=%.4f MAE=%.4f R2=%.4f Pearson=%.4f",
+            run_id, headline["Mask"],
+            float(headline["Mean Squared Error"]), float(headline["RMSE"]),
+            float(headline["MAE"]), float(headline["R2 Score"]),
+            float(headline["Pearson Correlation"]) if not np.isnan(headline["Pearson Correlation"]) else float('nan')
         )
     except Exception:
         pass

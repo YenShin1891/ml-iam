@@ -40,6 +40,14 @@ def derive_splits(data, lag_required=True):
         train_data, val_data, test_data, features
     )
 
+    # When keeping partial targets, fill NaN with 0 — the __observed mask
+    # handles loss weighting so filled values don't contribute to gradients.
+    # This avoids NaN propagation in EncoderNormalizer / TimeSeriesDataSet.
+    from configs.data import KEEP_PARTIAL_TARGETS
+    if KEEP_PARTIAL_TARGETS:
+        for df in (train_data, val_data, test_data):
+            df[targets] = df[targets].fillna(0.0)
+
     return {
         "features": features,
         "targets": targets,

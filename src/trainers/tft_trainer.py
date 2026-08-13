@@ -882,7 +882,13 @@ def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
         y_pred = denormalize_by_population(preds_flat, population)
         valid_mask = (~np.isnan(y_true).any(axis=1)) & (~np.isnan(y_pred).any(axis=1))
         if valid_mask.any():
-            save_metrics(run_id, y_true[valid_mask], y_pred[valid_mask])
+            from src.data.preprocess import observed_mask_columns
+            obs_cols = observed_mask_columns(targets)
+            if all(c in horizon_df.columns for c in obs_cols):
+                obs_mask = horizon_df[obs_cols].values[valid_mask]
+            else:
+                obs_mask = None
+            save_metrics(run_id, y_true[valid_mask], y_pred[valid_mask], observed_mask=obs_mask)
         else:
             logging.warning("No valid rows to compute metrics (all targets or predictions contain NaNs).")
 

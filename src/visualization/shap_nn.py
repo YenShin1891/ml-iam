@@ -149,10 +149,13 @@ def get_lstm_shap_values(run_id, X_test: pd.DataFrame, sequence_length=1):
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"LSTM model checkpoint not found: {model_path}")
     model = LSTMModel.load_from_checkpoint(model_path)
-    model.eval()
     from src.utils.run_store import RunStore
     store = RunStore(run_id)
     scaler_X = store.load_artifact("lstm_scaler_X.pkl")
+    if model.has_lag_features and store.has_artifact("lstm_scaler_y.pkl"):
+        scaler_y = store.load_artifact("lstm_scaler_y.pkl")
+        model.set_lag_scale_buffers(scaler_X, scaler_y)
+    model.eval()
     features, targets = store.load_features()
     categorical_features = []
     if store.has_train_meta():
@@ -163,6 +166,7 @@ def get_lstm_shap_values(run_id, X_test: pd.DataFrame, sequence_length=1):
 
     def preprocess_features(data, continuous_features, categorical_features, scaler_X, mask_value=-1.0):
         from configs.data import CATEGORICAL_COLUMNS, REGION_CATEGORIES
+        from src.data.preprocess import set_region_categories
         # Scale continuous features only
         X_cont = data[continuous_features].copy() if continuous_features else pd.DataFrame(index=data.index)
         X_cont_filled = X_cont.fillna(mask_value).astype(np.float32)
@@ -177,6 +181,8 @@ def get_lstm_shap_values(run_id, X_test: pd.DataFrame, sequence_length=1):
                 # Already encoded upstream (derive_splits)
                 cat_codes[col] = data[col].values.astype(np.int64)
             elif col == 'Region':
+                if not REGION_CATEGORIES:
+                    set_region_categories(data[col])
                 cat_codes[col] = (
                     pd.Categorical(data[col].astype(str), categories=REGION_CATEGORIES, ordered=True)
                     .codes.astype(np.int64)
@@ -644,7 +650,9 @@ def plot_tft_shap(
     config = TFTDatasetConfig()
     # Include all columns that TFT needs: features, targets, group_ids, categoricals, time_idx, and time-varying columns
     time_known = ["Year", "DeltaYears"]  # From TFT config
-    required_columns = set(features + targets + config.group_ids + CATEGORICAL_COLUMNS + [config.time_idx] + time_known)
+    from src.data.preprocess import observed_mask_columns
+    obs_cols = observed_mask_columns(targets)
+    required_columns = set(features + targets + config.group_ids + CATEGORICAL_COLUMNS + [config.time_idx] + time_known + obs_cols)
     # Optional region filter prior to scenario sampling (robust, on index frame)
     X_filtered, _, pre_rows, post_rows, matched, _mode = filter_index_frame_by_region(
         X_test_with_index,

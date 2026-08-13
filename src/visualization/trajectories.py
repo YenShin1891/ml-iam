@@ -92,7 +92,7 @@ def load_marker_scenario(targets: list) -> Optional[pd.DataFrame]:
         logging.exception("Failed to load marker scenario data.")
         return None
 
-def create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, target_index, targets, model_name, output_units):
+def create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, target_index, targets, model_name, output_units, observed_mask_col=None):
     unique_years = sorted(test_data_valid['Year'].unique()) if len(test_data_valid) else []
     cmap = cm.get_cmap('viridis')
     colors = cmap(np.linspace(0, 1, len(unique_years))) if unique_years else []
@@ -119,7 +119,14 @@ def create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, t
     configure_axes(ax, min_val, max_val, xlabel, ylabel)
     if unique_years:
         ax.legend(title='Year', loc='upper left', bbox_to_anchor=(1, 1), fontsize=LEGEND_FONTSIZE)
-    r2_val = compute_r2(y_test_valid, preds_valid)
+
+    # Compute R2 on observed elements only when mask is available
+    if observed_mask_col is not None:
+        obs = np.asarray(observed_mask_col).astype(bool)
+        r2_val = compute_r2(y_test_valid[obs], preds_valid[obs]) if obs.any() else float('nan')
+    else:
+        r2_val = compute_r2(y_test_valid, preds_valid)
+
     if not np.isnan(r2_val):
         ax.text(0.05, 0.95, f'R² = {r2_val:.3f}', transform=ax.transAxes, fontsize=R2_ANNOTATION_FONTSIZE,
                 verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
@@ -304,19 +311,26 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[s
     # this function, so no inverse scaling is applied here.
     y_plot = None if y_test is None else np.array(y_test, copy=True)
     preds_plot = None if preds is None else np.array(preds, copy=True)
+
+    # Extract per-target observed masks if available
+    from src.data.preprocess import observed_mask_columns
+    obs_col_names = observed_mask_columns(targets)
+    has_obs = all(c in test_data.columns for c in obs_col_names)
+
     rows, cols = PLOT_GRID_ROWS, PLOT_GRID_COLS
     fig, axes = plt.subplots(rows, cols, figsize=SCATTER_GRID_FIGSIZE)
     plt.rcParams.update({'font.size': PLOT_FONT_SIZE})
     for i, ax in enumerate(axes.flatten()):
         test_data_valid, y_test_valid, preds_valid = preprocess_data(test_data, y_plot, preds_plot, i)
-        create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, i, targets, model_name, OUTPUT_UNITS)
+        obs_col = test_data_valid[obs_col_names[i]].values if has_obs and i < len(obs_col_names) else None
+        create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, i, targets, model_name, OUTPUT_UNITS, observed_mask_col=obs_col)
         # Save individual scatter plot for each output in indiv_plots dir (single plot per figure)
         indiv_dir = os.path.join(get_run_root(run_id), "plots", "indiv_plots")
         os.makedirs(indiv_dir, exist_ok=True)
         indiv_filename = f"scatter_{i}_{targets[i] if i < len(targets) else 'unknown'}.png"
         indiv_path = os.path.join(indiv_dir, indiv_filename)
         fig_indiv, ax_indiv = plt.subplots(figsize=SCATTER_INDIVIDUAL_FIGSIZE)
-        create_single_scatter_plot(ax_indiv, test_data_valid, y_test_valid, preds_valid, i, targets, model_name, OUTPUT_UNITS)
+        create_single_scatter_plot(ax_indiv, test_data_valid, y_test_valid, preds_valid, i, targets, model_name, OUTPUT_UNITS, observed_mask_col=obs_col)
         fig_indiv.tight_layout()
         fig_indiv.savefig(indiv_path, bbox_inches='tight')
         # Save no-legend version

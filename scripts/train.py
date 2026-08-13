@@ -178,6 +178,12 @@ def parse_arguments(argv=None):
         help="Require complete lag features (LSTM/TFT).",
     )
     parser.add_argument("--two-window", action="store_true", help="Two-window prediction (TFT only).")
+    parser.add_argument(
+        "--keep-partial-targets",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Keep rows with partial target coverage (default from configs.data).",
+    )
     args = parser.parse_args(argv)
 
     if args.resume and not args.run_id:
@@ -199,6 +205,11 @@ def main(argv=None):
     from src.utils.run_store import RunStore
 
     lag_required = True if args.lag_required is None else args.lag_required
+
+    # Override KEEP_PARTIAL_TARGETS if specified on CLI
+    if args.keep_partial_targets is not None:
+        import configs.data as _data_cfg
+        _data_cfg.KEEP_PARTIAL_TARGETS = args.keep_partial_targets
 
     if args.resume is None:
         # Full pipeline: preprocess -> search -> train -> test -> plot
