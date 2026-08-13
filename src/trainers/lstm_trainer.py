@@ -500,13 +500,14 @@ class LSTMModel(LightningModule):
 
             v_t = u_t.unsqueeze(1)  # [batch, 1, input_size]
 
+            lstm_out, (hidden, cell) = self.lstm(v_t, (hidden, cell) if hidden is not None else None)
+            current_pred = self.dense(lstm_out[:, 0, :])
+
+            # For padded timesteps, use the previous prediction instead
             if mask is not None and not mask[:, t].all():
-                current_pred = past_preds[-1] if past_preds else torch.zeros(
-                    batch_size, self.output_size, device=u_t.device, dtype=u_t.dtype
-                )
-            else:
-                lstm_out, (hidden, cell) = self.lstm(v_t, (hidden, cell) if hidden is not None else None)
-                current_pred = self.dense(lstm_out[:, 0, :])
+                fallback = past_preds[-1] if past_preds else torch.zeros_like(current_pred)
+                active = mask[:, t].unsqueeze(-1)
+                current_pred = active * current_pred + (1 - active) * fallback
 
             predictions.append(current_pred)
             past_preds.append(current_pred.detach())

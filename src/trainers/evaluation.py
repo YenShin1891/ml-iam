@@ -289,13 +289,16 @@ def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None):
     def compute_metrics(y_true_subset, y_pred_subset, subset_name="Overall", obs=None):
         results = []
 
-        def _metrics(yt, yp):
+        def _r2(yt, yp):
+            ss_res = float(np.sum((yt - yp) ** 2))
+            ss_tot = float(np.sum((yt - np.mean(yt)) ** 2))
+            return 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+
+        def _metrics(yt, yp, per_target_r2):
             mse = mean_squared_error(yt, yp)
             mae = float(np.mean(np.abs(yt - yp)))
             rmse = float(np.sqrt(mse))
-            ss_res = float(np.sum((yt - yp) ** 2))
-            ss_tot = float(np.sum((yt - np.mean(yt)) ** 2))
-            r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+            r2_pooled = _r2(yt, yp)
             try:
                 yt_f, yp_f = yt.flatten(), yp.flatten()
                 pearson_corr = float(np.corrcoef(yt_f, yp_f)[0, 1]) if len(yt_f) > 1 else np.nan
@@ -306,25 +309,46 @@ def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None):
                 "Region Type": subset_name,
                 "Mean Squared Error": mse,
                 "Pearson Correlation": pearson_corr,
-                "R2 Score": r2,
+                "R2 Score (per-target avg)": per_target_r2,
+                "R2 Score (pooled)": r2_pooled,
                 "MAE": mae,
                 "RMSE": rmse,
                 "Sample Size": len(yt),
             }
 
-        yt_flat = y_true_subset.flatten()
-        yp_flat = y_pred_subset.flatten()
+        yt_2d = np.asarray(y_true_subset)
+        yp_2d = np.asarray(y_pred_subset)
+        if yt_2d.ndim == 1:
+            yt_2d = yt_2d.reshape(-1, 1)
+            yp_2d = yp_2d.reshape(-1, 1)
+        obs_2d = np.asarray(obs) if obs is not None else None
 
-        if obs is not None:
-            # Use only observed elements
-            mask = obs.astype(bool).flatten()
+        # Compute per-target R²
+        target_r2s = []
+        for col in range(yt_2d.shape[1]):
+            yt_col = yt_2d[:, col]
+            yp_col = yp_2d[:, col]
+            if obs_2d is not None:
+                col_mask = obs_2d[:, col].astype(bool)
+                yt_col = yt_col[col_mask]
+                yp_col = yp_col[col_mask]
+            valid = np.isfinite(yt_col) & np.isfinite(yp_col)
+            if valid.any():
+                target_r2s.append(_r2(yt_col[valid], yp_col[valid]))
+        per_target_r2 = float(np.mean(target_r2s)) if target_r2s else np.nan
+
+        # Flatten for pooled metrics
+        yt_flat = yt_2d.flatten()
+        yp_flat = yp_2d.flatten()
+
+        if obs_2d is not None:
+            mask = obs_2d.astype(bool).flatten()
             yt_flat = yt_flat[mask]
             yp_flat = yp_flat[mask]
 
-        # Drop any remaining NaN/Inf
         valid = np.isfinite(yt_flat) & np.isfinite(yp_flat)
         if valid.any():
-            results.append(_metrics(yt_flat[valid], yp_flat[valid]))
+            results.append(_metrics(yt_flat[valid], yp_flat[valid], per_target_r2))
 
         return results
 
@@ -364,14 +388,14 @@ def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None):
                     try:
                         headline = region_results[0]
                         logging.info(
-                            "Run %s %s regions (%d samples) -> MSE=%.4f RMSE=%.4f MAE=%.4f R2=%.4f Pearson=%.4f [%s]",
+                            "Run %s %s regions (%d samples) -> MSE=%.4f RMSE=%.4f MAE=%.4f R2_avg=%.4f R2_pooled=%.4f Pearson=%.4f",
                             run_id, region_type, int(headline["Sample Size"]),
                             float(headline["Mean Squared Error"]),
                             float(headline["RMSE"]),
                             float(headline["MAE"]),
-                            float(headline["R2 Score"]),
+                            float(headline["R2 Score (per-target avg)"]),
+                            float(headline["R2 Score (pooled)"]),
                             float(headline["Pearson Correlation"]) if not np.isnan(headline["Pearson Correlation"]) else float('nan'),
-                            headline["Mask"],
                         )
                     except Exception:
                         pass
@@ -387,10 +411,11 @@ def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None):
     try:
         headline = all_metrics[0]
         logging.info(
-            "Run %s overall metrics [%s] -> MSE=%.4f RMSE=%.4f MAE=%.4f R2=%.4f Pearson=%.4f",
-            run_id, headline["Mask"],
+            "Run %s overall metrics -> MSE=%.4f RMSE=%.4f MAE=%.4f R2_avg=%.4f R2_pooled=%.4f Pearson=%.4f",
+            run_id,
             float(headline["Mean Squared Error"]), float(headline["RMSE"]),
-            float(headline["MAE"]), float(headline["R2 Score"]),
+            float(headline["MAE"]), float(headline["R2 Score (per-target avg)"]),
+            float(headline["R2 Score (pooled)"]),
             float(headline["Pearson Correlation"]) if not np.isnan(headline["Pearson Correlation"]) else float('nan')
         )
     except Exception:
