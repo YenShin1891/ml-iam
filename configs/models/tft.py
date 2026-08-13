@@ -48,6 +48,9 @@ class TFTDatasetConfig:
     allow_missing_timesteps: bool = False
     pretrained_categorical_encoders: Dict[str, Any] = field(default_factory=dict)
     target_offset: int = 0  # Set 1 for warm start: reserves encoder context for future predictions (set 0 for cold start)
+    # "encoder_floored" (default): per-sample encoder normalization with scale floor
+    # "global": single global μ/σ per target from training data (TorchNormalizer)
+    target_normalizer_mode: str = "encoder_floored"
     target_scale_floors: Dict[str, float] = field(default_factory=dict)
     scale_floor_fraction: float = 0.01  # fraction of global σ used as floor when no explicit floors given
     _effective_min_encoder_length: int = field(init=False, default=0)
@@ -89,16 +92,23 @@ class TFTDatasetConfig:
             obs_cols = observed_mask_columns(targets)
             time_known_reals.extend(obs_cols)
 
-        # Per-sample normalization from each sample's encoder window, with a
-        # minimum scale floor to prevent degenerate normalization.  The floor
-        # bounds the worst-case normalized target magnitude and stabilises
-        # loss weighting across samples with different encoder variances.
-        target_normalizer = MultiNormalizer([
-            FlooredEncoderNormalizer(
-                min_scale=self.target_scale_floors.get(t, 1.0),
-            )
-            for t in targets
-        ])
+        if self.target_normalizer_mode == "global":
+            # Single global μ/σ per target, fitted once on the full training
+            # column at TimeSeriesDataSet init time.  Stable but loses
+            # per-sample level information.
+            from pytorch_forecasting.data.encoders import TorchNormalizer
+            target_normalizer = MultiNormalizer([
+                TorchNormalizer(method="standard") for _ in targets
+            ])
+        else:
+            # Per-sample normalization from each sample's encoder window,
+            # with a minimum scale floor to prevent degenerate normalization.
+            target_normalizer = MultiNormalizer([
+                FlooredEncoderNormalizer(
+                    min_scale=self.target_scale_floors.get(t, 1.0),
+                )
+                for t in targets
+            ])
 
         min_encoder_length, max_encoder_length = self.resolve_encoder_lengths()
 

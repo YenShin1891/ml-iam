@@ -7,7 +7,7 @@ All heavy imports are lazy to avoid pulling in unnecessary dependencies.
 import logging
 
 
-def derive_splits(data, lag_required=True):
+def derive_splits(data, lag_required=True, target_normalizer_mode=None):
     """From cached processed_data, derive all TFT splits. Takes seconds.
 
     Returns the ephemeral dict that phase functions and trainers expect.
@@ -58,6 +58,7 @@ def derive_splits(data, lag_required=True):
         "tft_min_encoder_length": dataset_cfg.effective_min_encoder_length,
         "tft_max_encoder_length": dataset_cfg.effective_max_encoder_length,
         "tft_time_idx_column": dataset_cfg.time_idx,
+        "tft_target_normalizer_mode": target_normalizer_mode,
         "lag_required": lag_required,
     }
 
@@ -71,11 +72,11 @@ def preprocess_tft(store, dataset=None, lag_required=True):
     return data
 
 
-def search_tft(store, lag_required=True):
+def search_tft(store, lag_required=True, target_normalizer_mode=None):
     """Run hyperparameter search and save best_params."""
     logging.info("Starting hyperparameter search for TFT...")
     data = store.load_processed_data()
-    splits = derive_splits(data, lag_required=lag_required)
+    splits = derive_splits(data, lag_required=lag_required, target_normalizer_mode=target_normalizer_mode)
 
     from src.trainers.tft_dataset import build_datasets
 
@@ -111,7 +112,7 @@ def _is_primary_rank():
     return all(rv in (None, "0") for rv in rank_vars)
 
 
-def train_tft(store, lag_required=True):
+def train_tft(store, lag_required=True, target_normalizer_mode=None):
     """Final training using best_params."""
     from src.trainers.tft_dataset import build_datasets
     from src.trainers.tft_trainer import train_final_tft as _train_final
@@ -122,7 +123,7 @@ def train_tft(store, lag_required=True):
         logging.info("Starting final TFT training...")
 
     data = store.load_processed_data()
-    splits = derive_splits(data, lag_required=lag_required)
+    splits = derive_splits(data, lag_required=lag_required, target_normalizer_mode=target_normalizer_mode)
 
     best_params = store.load_best_params()
 

@@ -17,6 +17,11 @@ lag_required: true
 # (affects test phase only)
 two_window: true
 
+# TFT target normalizer:
+#   "encoder_floored" (default) — per-sample μ/σ from encoder window, with scale floor
+#   "global" — single global μ/σ per target from all training data
+target_normalizer_mode: global
+
 # Omit 'search' to skip hyperparameter search and use defaults instead.
 phases: [preprocess, search, train, test, plot]
 

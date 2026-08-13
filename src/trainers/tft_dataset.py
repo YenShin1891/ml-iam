@@ -105,10 +105,15 @@ def create_train_dataset(session_state: Dict) -> Tuple[TimeSeriesDataSet, Any]:
     if target_offset is not None:
         config.target_offset = int(target_offset)
 
-    # Compute per-target scale floors from training data
-    config.target_scale_floors = compute_target_scale_floors(
-        train_data, targets, fraction=config.scale_floor_fraction,
-    )
+    normalizer_mode = session_state.get("tft_target_normalizer_mode")
+    if normalizer_mode is not None:
+        config.target_normalizer_mode = normalizer_mode
+
+    # Compute per-target scale floors from training data (used by encoder_floored mode)
+    if config.target_normalizer_mode == "encoder_floored":
+        config.target_scale_floors = compute_target_scale_floors(
+            train_data, targets, fraction=config.scale_floor_fraction,
+        )
 
     # Build union encoders (include group ids to stabilize mapping) then inject
     categorical_cols = _ordered_categorical_cols(features)
@@ -194,9 +199,13 @@ def create_dataset_with_custom_encoders(
 
     config = TFTDatasetConfig()
     config.pretrained_categorical_encoders = custom_encoders
-    config.target_scale_floors = compute_target_scale_floors(
-        train_data, targets, fraction=config.scale_floor_fraction,
-    )
+    normalizer_mode = session_state.get("tft_target_normalizer_mode")
+    if normalizer_mode is not None:
+        config.target_normalizer_mode = normalizer_mode
+    if config.target_normalizer_mode == "encoder_floored":
+        config.target_scale_floors = compute_target_scale_floors(
+            train_data, targets, fraction=config.scale_floor_fraction,
+        )
 
     params = config.build(features, targets, mode="train")
 
