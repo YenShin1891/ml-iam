@@ -69,15 +69,14 @@ class TFTDatasetConfig:
             targets = [targets]
         excluded = set(CATEGORICAL_COLUMNS)
 
-        # Lagged target columns (prev_X, prev2_X, …) are unknown at forecast
-        # time.  Everything else — scenario drivers, indicators, time columns
-        # — is known future by construction.
+        # Exclude explicit lag columns (prev_X, prev2_X, …) entirely.
+        # TFT's encoder attention already captures temporal dependencies
+        # from the historical window, making explicit lags redundant.
+        # Including them leaks ground-truth targets at evaluation time
+        # and correct AR injection is computationally infeasible.
         import re
         _lag_re = re.compile(r"^prev\d*_")
-        unknown_reals = [
-            f for f in features
-            if f not in excluded and _lag_re.match(f)
-        ]
+        unknown_reals = []
         time_known_reals = [
             f for f in features
             if f not in excluded and not _lag_re.match(f)
