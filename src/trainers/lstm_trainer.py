@@ -1375,8 +1375,19 @@ def train_final_lstm(
 
 
 def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
-    """Make predictions using trained LSTM model."""
+    """Make predictions using trained LSTM model.
+
+    When the model uses lag features (``has_lag_features=True``) and
+    ``target_offset == 0``, predictions are generated via a **group-level
+    autoregressive rollout** that mirrors the XGBoost evaluation path: for
+    each (Model, Scenario, Region) group the LSTM steps through time
+    carrying hidden state and injecting its own past predictions into the
+    lag-feature columns via ``_inject_lag_predictions``.
+
+    Otherwise the original batched ``Trainer.predict`` path is used.
+    """
     from src.trainers.evaluation import save_metrics
+    from configs.data import INDEX_COLUMNS
 
     # Get data from session state (stored as DataFrames like TFT)
     test_data = session_state["test_data"]
@@ -1424,73 +1435,130 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
         if col in test_data.columns and col not in test_data_enc.columns:
             test_data_enc[col] = test_data[col].values
 
-    all_features = features + categorical_features
-
-    # Create test dataset - autoregressive prediction during inference
-    lag_indices = model.lag_indices if model.has_lag_features else {}
-    test_dataset = LSTMDataset(
-        test_data_enc, all_features, targets,
-        sequence_length=sequence_length,
-        target_offset=target_offset,
-        scaler_X=scaler_X,
-        scaler_y=scaler_y,
-        fit_scalers=False,
-        categorical_features=categorical_features,
-        lag_indices=lag_indices,
-    )
-
-    # Create data loader
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=config.batch_size,
-        shuffle=False,
-        num_workers=1,
-        persistent_workers=False
-    )
-
-    # Create trainer for prediction
-    trainer = Trainer(
-        devices=1,  # Use single device for prediction to avoid distributed issues
-        accelerator="gpu" if torch.cuda.is_available() else "cpu",
-        enable_progress_bar=False,  # Disable progress bar to reduce log clutter
-        logger=False
-    )
-
-    # Make predictions
-    raw_predictions = trainer.predict(model, test_loader)
-    predictions_list = [p.cpu().numpy() for p in raw_predictions]
-    predictions_array = np.vstack(predictions_list)
-
-    # Post-process predictions (like TFT)
-    if predictions_array.ndim == 3 and predictions_array.shape[1] == 1:
-        predictions_array = predictions_array.squeeze(axis=1)
-
-    logging.info("Raw predictions shape: %s", predictions_array.shape)
-
-    # Inverse transform predictions
-    predictions_unscaled = scaler_y.inverse_transform(predictions_array)
-
-    # Align predictions with test data properly
-    # LSTM predictions correspond to sequences within groups, not direct row mapping
-    aligned_preds = np.full((len(test_data), len(targets)), np.nan)
-
-    # Process each group separately to handle sequence alignment
-    pred_idx = 0
-    from configs.data import INDEX_COLUMNS
     group_ids = INDEX_COLUMNS
 
-    for group_name, group_data in test_data.groupby(group_ids):
-        group_size = len(group_data)
-        group_indices = group_data.index
+    if model.has_lag_features and target_offset == 0:
+        # ── Autoregressive group-level rollout ──────────────────────────
+        # For each (Model, Scenario, Region) group we step through time
+        # sequentially, carrying LSTM hidden state and injecting past
+        # model predictions into the lag-feature columns at every step.
+        device = next(model.parameters()).device
 
-        num_sequences = max(0, group_size - (sequence_length + target_offset) + 1)
+        # Scale continuous features (same transform the Dataset would apply)
+        X_cont = test_data_enc[features].fillna(-1.0).astype(np.float32)
+        X_cont_scaled = scaler_X.transform(X_cont)
 
-        for i in range(num_sequences):
-            if pred_idx < len(predictions_unscaled):
-                target_row_idx = group_indices[i + sequence_length - 1 + target_offset]
-                data_row_idx = test_data.index.get_loc(target_row_idx)
-                aligned_preds[data_row_idx] = predictions_unscaled[pred_idx]
-                pred_idx += 1
+        # Categorical features as int codes (unscaled)
+        if categorical_features:
+            X_cat = test_data_enc[categorical_features].values.astype(np.int64)
+        else:
+            X_cat = np.empty((len(test_data_enc), 0), dtype=np.int64)
+
+        # Pre-allocate y-scaled prediction buffer; will inverse-transform once at the end
+        aligned_preds_scaled = np.full((len(test_data), len(targets)), np.nan)
+
+        with torch.no_grad():
+            for _group_name, group_data in test_data.groupby(group_ids):
+                group_indices = group_data.index
+                group_size = len(group_data)
+
+                # Locate each group row in the full dataframe
+                group_positions = [test_data.index.get_loc(idx) for idx in group_indices]
+                group_X = X_cont_scaled[group_positions]   # [T, n_features]
+                group_cat = X_cat[group_positions]          # [T, n_cat]
+
+                past_preds: List[torch.Tensor] = []
+
+                for t in range(group_size):
+                    # Continuous features for this timestep  [1, n_features]
+                    u_t = torch.tensor(
+                        group_X[t : t + 1], dtype=torch.float32, device=device
+                    )
+
+                    # Overwrite lag positions with past model predictions
+                    if past_preds:
+                        model._inject_lag_predictions(u_t, past_preds)
+
+                    # Categorical embeddings  [1, 1, n_cat] → [1, emb_size]
+                    cat_t = torch.tensor(
+                        group_cat[t : t + 1], dtype=torch.long, device=device
+                    ).unsqueeze(1)
+                    emb = model._embed_categoricals(cat_t)
+                    if emb is not None:
+                        v_t = torch.cat([u_t, emb[:, 0, :]], dim=-1)
+                    else:
+                        v_t = u_t
+
+                    # Single LSTM step  [1, 1, input_size]
+                    # Reset hidden state every step: the model was trained
+                    # at seq_len=1 where each sample starts with hidden=None.
+                    v_t = v_t.unsqueeze(1)
+                    lstm_out, (_h, _c) = model.lstm(v_t, None)
+                    current_pred = model.dense(lstm_out[:, 0, :])  # [1, n_targets]
+
+                    past_preds.append(current_pred.detach())
+                    aligned_preds_scaled[group_positions[t]] = (
+                        current_pred.cpu().numpy()[0]
+                    )
+
+        # Inverse-transform all y-scaled predictions at once
+        valid_scaled = ~np.isnan(aligned_preds_scaled).any(axis=1)
+        aligned_preds = np.full_like(aligned_preds_scaled, np.nan)
+        if valid_scaled.any():
+            aligned_preds[valid_scaled] = scaler_y.inverse_transform(
+                aligned_preds_scaled[valid_scaled]
+            )
+    else:
+        # ── Original batched prediction (no lag features / target_offset > 0) ──
+        all_features = features + categorical_features
+        lag_indices = model.lag_indices if model.has_lag_features else {}
+        test_dataset = LSTMDataset(
+            test_data_enc, all_features, targets,
+            sequence_length=sequence_length,
+            target_offset=target_offset,
+            scaler_X=scaler_X,
+            scaler_y=scaler_y,
+            fit_scalers=False,
+            categorical_features=categorical_features,
+            lag_indices=lag_indices,
+        )
+
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=config.batch_size,
+            shuffle=False,
+            num_workers=1,
+            persistent_workers=False
+        )
+
+        trainer = Trainer(
+            devices=1,
+            accelerator="gpu" if torch.cuda.is_available() else "cpu",
+            enable_progress_bar=False,
+            logger=False
+        )
+
+        raw_predictions = trainer.predict(model, test_loader)
+        predictions_list = [p.cpu().numpy() for p in raw_predictions]
+        predictions_array = np.vstack(predictions_list)
+
+        if predictions_array.ndim == 3 and predictions_array.shape[1] == 1:
+            predictions_array = predictions_array.squeeze(axis=1)
+
+        predictions_unscaled = scaler_y.inverse_transform(predictions_array)
+
+        aligned_preds = np.full((len(test_data), len(targets)), np.nan)
+        pred_idx = 0
+        for _group_name, group_data in test_data.groupby(group_ids):
+            group_size = len(group_data)
+            group_indices = group_data.index
+            num_sequences = max(0, group_size - (sequence_length + target_offset) + 1)
+            for i in range(num_sequences):
+                if pred_idx < len(predictions_unscaled):
+                    target_row_idx = group_indices[i + sequence_length - 1 + target_offset]
+                    data_row_idx = test_data.index.get_loc(target_row_idx)
+                    aligned_preds[data_row_idx] = predictions_unscaled[pred_idx]
+                    pred_idx += 1
 
     logging.info("LSTM prediction completed. Shape: %s", aligned_preds.shape)
 
