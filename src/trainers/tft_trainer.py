@@ -694,7 +694,7 @@ def train_final_tft(
         session_state["tft_time_idx_column"] = getattr(train_dataset, "time_idx", "Step")
 
 
-def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
+def predict_tft(session_state: Dict, run_id: str, *, skip_metrics: bool = False) -> np.ndarray:
     """Make predictions following the exact original tft_trajectory_plotting logic."""
     from src.trainers.evaluation import save_metrics
 
@@ -880,17 +880,16 @@ def predict_tft(session_state: Dict, run_id: str) -> np.ndarray:
 
         # Handle RMSE predictions (standard case)
         y_pred = denormalize_by_population(preds_flat, population)
-        valid_mask = (~np.isnan(y_true).any(axis=1)) & (~np.isnan(y_pred).any(axis=1))
-        if valid_mask.any():
+        # Save metrics unless caller will compute them on combined data (e.g.
+        # two-window prediction calls predict_tft for single-window fallback).
+        if not skip_metrics:
             from src.data.preprocess import observed_mask_columns
             obs_cols = observed_mask_columns(targets)
             if all(c in horizon_df.columns for c in obs_cols):
-                obs_mask = horizon_df[obs_cols].values[valid_mask]
+                obs_mask = horizon_df[obs_cols].values
             else:
                 obs_mask = None
-            save_metrics(run_id, y_true[valid_mask], y_pred[valid_mask], observed_mask=obs_mask)
-        else:
-            logging.warning("No valid rows to compute metrics (all targets or predictions contain NaNs).")
+            save_metrics(run_id, y_true, y_pred, observed_mask=obs_mask)
 
         removed_groups = None
         try:

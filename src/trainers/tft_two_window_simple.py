@@ -654,7 +654,7 @@ def predict_tft_two_window(session_state: Dict, run_id: str) -> np.ndarray:
 
         # Run standard single-window prediction on the full test set.
         # predict_tft writes horizon_df into session_state as a side effect.
-        sw_preds = predict_tft(session_state, run_id)
+        sw_preds = predict_tft(session_state, run_id, skip_metrics=True)
         sw_horizon = session_state["horizon_df"]
 
         # Filter to only the missing trajectories by matching on trajectory keys.
@@ -688,11 +688,24 @@ def predict_tft_two_window(session_state: Dict, run_id: str) -> np.ndarray:
     from src.data.preprocess import denormalize_by_population
     from configs.data import POPULATION_COLUMN
     session_state['horizon_df'] = final_horizon
-    session_state['horizon_y_true'] = denormalize_by_population(
+    y_true_combined = denormalize_by_population(
         final_horizon[targets].values, final_horizon[POPULATION_COLUMN].values
     )
+    session_state['horizon_y_true'] = y_true_combined
     session_state['early_predictions'] = early_window.preds
     session_state['late_predictions'] = late_window.preds
+
+    # Compute metrics on the full combined predictions (two-window + single-window
+    # fallback).  The predict_tft call above only evaluated the single-window
+    # subset, so those metrics are incomplete.
+    from src.trainers.evaluation import save_metrics
+    from src.data.preprocess import observed_mask_columns
+    obs_cols = observed_mask_columns(targets)
+    if all(c in final_horizon.columns for c in obs_cols):
+        obs_mask = final_horizon[obs_cols].values
+    else:
+        obs_mask = None
+    save_metrics(run_id, y_true_combined, final_preds, observed_mask=obs_mask)
 
     logging.info("Two-window prediction completed successfully!")
     return final_preds
