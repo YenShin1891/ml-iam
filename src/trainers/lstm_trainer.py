@@ -101,7 +101,6 @@ class LSTMDataset(Dataset):
         scaler_y: Optional[StandardScaler] = None,
         fit_scalers: bool = True,
         categorical_features: Optional[List[str]] = None,
-        lag_indices: Optional[Dict[int, List[int]]] = None,
     ):
         from configs.data import INDEX_COLUMNS
         from src.data.preprocess import observed_mask_columns
@@ -113,7 +112,6 @@ class LSTMDataset(Dataset):
         self.time_idx = time_idx
         self.group_ids = group_ids if group_ids is not None else INDEX_COLUMNS
         self.categorical_features = categorical_features or []
-        self.lag_indices = lag_indices or {}  # {lag_num: [feat_idx, ...]}
 
         # Separate continuous features (to be scaled) from categorical (kept as int codes)
         continuous_features = [f for f in features if f not in self.categorical_features]
@@ -255,7 +253,6 @@ class LSTMModel(LightningModule):
         num_model_families: int = 0,
         num_regions: int = 0,
         embedding_dim: int = 8,
-        lag_indices: Optional[Dict[int, List[int]]] = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -270,24 +267,6 @@ class LSTMModel(LightningModule):
         self.num_model_families = num_model_families
         self.num_regions = num_regions
         self.embedding_dim = embedding_dim
-
-        # Lag-feature indices: {lag_num: [feat_idx, ...]} — positions of
-        # prev_*  / prev{N}_* columns in the continuous feature vector.
-        # During autoregressive inference these positions are overwritten
-        # with the model's own predictions instead of ground-truth values.
-        self.lag_indices = lag_indices or {}
-        self.has_lag_features = bool(self.lag_indices)
-
-        # Register placeholder buffers so load_from_checkpoint can find them.
-        # Actual values are set by set_lag_scale_buffers() after construction.
-        if self.has_lag_features:
-            n = sum(len(v) for v in self.lag_indices.values())
-            self.register_buffer("_lag_x_indices", torch.zeros(n, dtype=torch.long))
-            self.register_buffer("_lag_y_indices", torch.zeros(n, dtype=torch.long))
-            self.register_buffer("_lag_nums", torch.zeros(n, dtype=torch.long))
-            self.register_buffer("_lag_scale", torch.zeros(n, dtype=torch.float32))
-            self.register_buffer("_lag_offset", torch.zeros(n, dtype=torch.float32))
-            self._max_lag = max(self.lag_indices.keys())
 
         # Categorical embeddings
         self.has_embeddings = num_model_families > 0 or num_regions > 0
@@ -326,54 +305,6 @@ class LSTMModel(LightningModule):
         self.scheduler_name = scheduler
         self.scheduler_params = scheduler_params or {}
 
-    def set_lag_scale_buffers(self, scaler_X: StandardScaler, scaler_y: StandardScaler):
-        """Precompute conversion factors to map y-scaled predictions to X-scaled lag space.
-
-        For each lag column at feature index ``i`` corresponding to target ``j``:
-          x_scaled[i] = pred_y_scaled[j] * scale[j] + offset[j]
-        where
-          scale  = y_std[j] / x_std[i]
-          offset = (y_mean[j] - x_mean[i]) / x_std[i]
-
-        Called once after model construction when lag_indices is non-empty.
-        """
-        if not self.lag_indices:
-            return
-
-        x_mean = scaler_X.mean_
-        x_std = scaler_X.scale_
-        y_mean = scaler_y.mean_
-        y_std = scaler_y.scale_
-
-        # Build (n_lag_positions, ) tensors in the order they'll be used.
-        # Also build a flat index list for efficient scatter.
-        all_x_indices: List[int] = []   # feature indices in x
-        all_y_indices: List[int] = []   # target indices in y (0..output_size-1)
-        all_lags: List[int] = []        # lag number for each entry
-
-        for lag_num in sorted(self.lag_indices.keys()):
-            feat_indices = self.lag_indices[lag_num]
-            for target_j, feat_i in enumerate(feat_indices):
-                all_x_indices.append(feat_i)
-                all_y_indices.append(target_j)
-                all_lags.append(lag_num)
-
-        scales = []
-        offsets = []
-        for feat_i, target_j in zip(all_x_indices, all_y_indices):
-            s = y_std[target_j] / x_std[feat_i]
-            o = (y_mean[target_j] - x_mean[feat_i]) / x_std[feat_i]
-            scales.append(s)
-            offsets.append(o)
-
-        self.register_buffer("_lag_x_indices", torch.tensor(all_x_indices, dtype=torch.long))
-        self.register_buffer("_lag_y_indices", torch.tensor(all_y_indices, dtype=torch.long))
-        self.register_buffer("_lag_nums", torch.tensor(all_lags, dtype=torch.long))
-        self.register_buffer("_lag_scale", torch.tensor(scales, dtype=torch.float32))
-        self.register_buffer("_lag_offset", torch.tensor(offsets, dtype=torch.float32))
-        # Max lag determines how many past predictions to keep
-        self._max_lag = max(self.lag_indices.keys())
-
     def _embed_categoricals(self, cat_indices):
         """Compute embedding vectors from categorical indices.
 
@@ -399,40 +330,12 @@ class LSTMModel(LightningModule):
             col += 1
         return torch.cat(parts, dim=-1)
 
-    def _inject_lag_predictions(self, u_t, past_preds):
-        """Overwrite lag-feature positions in ``u_t`` with model predictions.
-
-        Args:
-            u_t: [batch, exogenous_size] — will be modified **in-place**.
-            past_preds: list of past y-scaled predictions, most recent last.
-                        Length must be >= self._max_lag.
-        """
-        for k, (x_idx, y_idx, lag_num, scale, offset) in enumerate(zip(
-            self._lag_x_indices, self._lag_y_indices, self._lag_nums,
-            self._lag_scale, self._lag_offset,
-        )):
-            lag = lag_num.item()
-            if lag > len(past_preds):
-                continue  # not enough history yet — keep dataframe value
-            pred_y = past_preds[-lag][:, y_idx.item()]  # [batch]
-            u_t[:, x_idx.item()] = pred_y * scale + offset
-
-    def forward(self, exogenous_seq, mask=None, teacher_forcing=True, cat_indices=None):
-        """
-        Step-by-step LSTM unrolling with lag features in u_t.
-
-        During training (teacher_forcing=True) the lag columns in
-        exogenous_seq contain ground-truth shifted targets from the
-        dataframe — correct for supervised learning.
-
-        During inference (teacher_forcing=False) the lag columns are
-        overwritten with the model's own predictions (converted from
-        y-scaled to X-scaled space via precomputed affine coefficients).
+    def forward(self, exogenous_seq, mask=None, cat_indices=None, **_kwargs):
+        """Batched LSTM forward pass.
 
         Args:
             exogenous_seq: Continuous features [batch_size, seq_len, exogenous_size]
             mask: Optional mask for variable-length sequences
-            teacher_forcing: If True, use ground-truth lag values; if False, autoregressive
             cat_indices: Categorical indices [batch_size, seq_len, num_cat_features]
         """
         batch_size, seq_len, _ = exogenous_seq.size()
@@ -442,86 +345,24 @@ class LSTMModel(LightningModule):
         if emb is not None:
             exogenous_seq = torch.cat([exogenous_seq, emb], dim=-1)
 
-        if not self.has_lag_features:
-            # No lag features — simple batched forward (no step-by-step needed)
-            x = exogenous_seq
-            if mask is not None:
-                x = x * mask.unsqueeze(-1).expand_as(x)
+        x = exogenous_seq
+        if mask is not None:
+            x = x * mask.unsqueeze(-1).expand_as(x)
 
-            lstm_out, (hidden, cell) = self.lstm(x)
+        lstm_out, (hidden, cell) = self.lstm(x)
 
-            if mask is not None:
-                valid_lengths = mask.sum(dim=1).long() - 1
-                batch_indices = torch.arange(batch_size, device=x.device)
-                last_output = lstm_out[batch_indices, valid_lengths]
-            else:
-                last_output = lstm_out[:, -1, :]
+        if mask is not None:
+            valid_lengths = mask.sum(dim=1).long() - 1
+            batch_indices = torch.arange(batch_size, device=x.device)
+            last_output = lstm_out[batch_indices, valid_lengths]
+        else:
+            last_output = lstm_out[:, -1, :]
 
-            if getattr(self, "target_offset", 0) and self.target_offset > 0:
-                v_t = x[:, -1, :].unsqueeze(1)
-                lstm_out2, _ = self.lstm(v_t, (hidden, cell))
-                return self.dense(lstm_out2[:, 0, :])
-            return self.dense(last_output)
-
-        if teacher_forcing:
-            # Training path — lag values from the dataframe are correct.
-            # Can run the full sequence through the LSTM in one shot.
-            x = exogenous_seq
-            if mask is not None:
-                x = x * mask.unsqueeze(-1).expand_as(x)
-
-            lstm_out, (hidden, cell) = self.lstm(x)
-
-            if mask is not None:
-                valid_lengths = mask.sum(dim=1).long() - 1
-                batch_indices = torch.arange(batch_size, device=x.device)
-                last_output = lstm_out[batch_indices, valid_lengths]
-            else:
-                last_output = lstm_out[:, -1, :]
-
-            if getattr(self, "target_offset", 0) and self.target_offset > 0:
-                v_t = x[:, -1, :].unsqueeze(1)
-                lstm_out2, _ = self.lstm(v_t, (hidden, cell))
-                return self.dense(lstm_out2[:, 0, :])
-            return self.dense(last_output)
-
-        # --- Autoregressive inference: step-by-step with lag injection ---
-        hidden = None
-        cell = None
-        predictions = []
-        past_preds = []  # ring buffer of y-scaled predictions for lag injection
-
-        for t in range(seq_len):
-            u_t = exogenous_seq[:, t, :].clone()  # clone so we can modify
-
-            # Overwrite lag positions with model's own past predictions
-            if past_preds:
-                self._inject_lag_predictions(u_t, past_preds)
-
-            v_t = u_t.unsqueeze(1)  # [batch, 1, input_size]
-
-            lstm_out, (hidden, cell) = self.lstm(v_t, (hidden, cell) if hidden is not None else None)
-            current_pred = self.dense(lstm_out[:, 0, :])
-
-            # For padded timesteps, use the previous prediction instead
-            if mask is not None and not mask[:, t].all():
-                fallback = past_preds[-1] if past_preds else torch.zeros_like(current_pred)
-                active = mask[:, t].unsqueeze(-1)
-                current_pred = active * current_pred + (1 - active) * fallback
-
-            predictions.append(current_pred)
-            past_preds.append(current_pred.detach())
-
-        # Optional forecast step
         if getattr(self, "target_offset", 0) and self.target_offset > 0:
-            u_forecast = exogenous_seq[:, -1, :].clone()
-            if past_preds:
-                self._inject_lag_predictions(u_forecast, past_preds)
-            v_t = u_forecast.unsqueeze(1)
-            lstm_out2, _ = self.lstm(v_t, (hidden, cell) if hidden is not None else None)
+            v_t = x[:, -1, :].unsqueeze(1)
+            lstm_out2, _ = self.lstm(v_t, (hidden, cell))
             return self.dense(lstm_out2[:, 0, :])
-
-        return predictions[-1]
+        return self.dense(last_output)
 
     @staticmethod
     def _masked_mse(y_hat, y, target_obs):
@@ -534,7 +375,7 @@ class LSTMModel(LightningModule):
         cat = batch.get('cat', None)
         target_obs = batch.get('target_obs', None)
 
-        y_hat = self(x, mask, teacher_forcing=True, cat_indices=cat)
+        y_hat = self(x, mask, cat_indices=cat)
         if target_obs is not None:
             loss = self._masked_mse(y_hat, y, target_obs)
         else:
@@ -547,7 +388,7 @@ class LSTMModel(LightningModule):
         cat = batch.get('cat', None)
         target_obs = batch.get('target_obs', None)
 
-        y_hat = self(x, mask, teacher_forcing=False, cat_indices=cat)
+        y_hat = self(x, mask, cat_indices=cat)
         if target_obs is not None:
             loss = self._masked_mse(y_hat, y, target_obs)
         else:
@@ -560,7 +401,7 @@ class LSTMModel(LightningModule):
         cat = batch.get('cat', None)
         target_obs = batch.get('target_obs', None)
 
-        y_hat = self(x, mask, teacher_forcing=False, cat_indices=cat)
+        y_hat = self(x, mask, cat_indices=cat)
         if target_obs is not None:
             loss = self._masked_mse(y_hat, y, target_obs)
         else:
@@ -572,7 +413,7 @@ class LSTMModel(LightningModule):
         x, mask = batch['x'], batch['mask']
         cat = batch.get('cat', None)
 
-        return self(x, mask, teacher_forcing=False, cat_indices=cat)
+        return self(x, mask, cat_indices=cat)
 
     def configure_optimizers(self):
         if self.optimizer_name.lower() == "adam":
@@ -617,33 +458,6 @@ class LSTMModel(LightningModule):
         }
 
 
-def _find_lag_feature_indices(
-    features: List[str],
-    targets: List[str],
-) -> Dict[int, List[int]]:
-    """Map lag number -> list of feature indices for lagged-target columns.
-
-    Naming convention from ``add_lag_features``:
-      lag-1: ``prev_<target>``
-      lag-k: ``prev<k>_<target>``
-
-    Returns e.g. ``{1: [4, 5, ...], 2: [13, 14, ...]}``  (indices into
-    *features*).
-    """
-    import re
-    lag_map: Dict[int, List[int]] = {}
-    for idx, col in enumerate(features):
-        for t in targets:
-            if col == f"prev_{t}":
-                lag_map.setdefault(1, []).append(idx)
-                break
-            m = re.match(rf"prev(\d+)_{re.escape(t)}$", col)
-            if m:
-                lag_map.setdefault(int(m.group(1)), []).append(idx)
-                break
-    return lag_map
-
-
 def create_lstm_datasets(
     train_data: pd.DataFrame,
     val_data: pd.DataFrame,
@@ -674,16 +488,6 @@ def create_lstm_datasets(
     # Full feature list = encoded continuous + categorical
     all_features = encoded_features + categorical_features
 
-    # Identify lag-target feature indices within the *continuous* feature list.
-    # These indices correspond to positions in the scaled X tensor (categoricals
-    # are handled separately via embeddings and are not part of X_cont_scaled).
-    lag_indices = _find_lag_feature_indices(encoded_features, targets)
-    if lag_indices:
-        logging.info(
-            "LSTM lag-feature indices (in continuous features): %s",
-            {k: v for k, v in sorted(lag_indices.items())},
-        )
-
     train_dataset = LSTMDataset(
         train_data_enc, all_features, targets,
         sequence_length=sequence_length,
@@ -691,7 +495,6 @@ def create_lstm_datasets(
         mask_value=mask_value,
         fit_scalers=True,
         categorical_features=categorical_features,
-        lag_indices=lag_indices,
     )
 
     val_dataset = LSTMDataset(
@@ -703,7 +506,6 @@ def create_lstm_datasets(
         scaler_y=train_dataset.scaler_y,
         fit_scalers=False,
         categorical_features=categorical_features,
-        lag_indices=lag_indices,
     )
 
     return train_dataset, val_dataset, encoded_features
@@ -742,13 +544,11 @@ def create_lstm_model(
     config: LSTMTrainerConfig,
     num_model_families: int = 0,
     num_regions: int = 0,
-    lag_indices: Optional[Dict[int, List[int]]] = None,
 ) -> LSTMModel:
     """Create LSTM model with given configuration.
 
     Args:
         features: Continuous (encoded) feature names — categoricals are handled via embeddings.
-        lag_indices: {lag_num: [feat_idx, ...]} mapping for autoregressive lag injection.
     """
     # exogenous_size = number of continuous features in the data tensor
     exogenous_size = len(features)
@@ -772,7 +572,6 @@ def create_lstm_model(
         num_model_families=num_model_families,
         num_regions=num_regions,
         embedding_dim=config.embedding_dim,
-        lag_indices=lag_indices,
     )
 
 
@@ -967,9 +766,7 @@ def hyperparameter_search_lstm_parallel(
                 model = create_lstm_model(
                     model_features, output_size, config,
                     num_model_families=num_model_families, num_regions=num_regions,
-                    lag_indices=train_dataset.lag_indices,
                 )
-                model.set_lag_scale_buffers(train_dataset.scaler_X, train_dataset.scaler_y)
 
                 # Create trainer for single GPU
                 search_checkpoint = ModelCheckpoint(
@@ -1060,73 +857,7 @@ def hyperparameter_search_lstm_parallel(
                 )
                 logging.info(f"  seq_len={seq}: val_loss={score:.4f} | {params_str}")
 
-    logging.info(f"Best LSTM Params (teacher-forced): {best_params} with Val Loss: {best_score:.4f}")
-
-    # ── AR rollout reranking (same logic as sequential search) ────────
-    if "sequence_length" in search_results_df.columns:
-        finite_df = search_results_df[np.isfinite(search_results_df["val_loss"])].copy()
-        if not finite_df.empty and "trial_id" in finite_df.columns:
-            idx = finite_df.groupby("sequence_length")["val_loss"].idxmin()
-            candidates = finite_df.loc[idx]
-
-            continuous_raw = [f for f in features if f not in categorical_features]
-            _, (val_data_enc,), encoded_features, _ = _one_hot_encode_and_align_features(
-                train_data, [val_data], continuous_raw,
-            )
-            for col in categorical_features:
-                if col in val_data.columns:
-                    val_data_enc[col] = val_data[col].values
-
-            ar_results = []
-            for _, row in candidates.iterrows():
-                trial_id = int(row["trial_id"])
-                seq_len = int(row["sequence_length"])
-                trial_dir = os.path.join(get_run_root(run_id), "search", f"trial_{trial_id}")
-                ckpt_path = os.path.join(trial_dir, "best.ckpt")
-                if not os.path.exists(ckpt_path):
-                    logging.warning("Checkpoint not found for trial %d, skipping AR eval", trial_id)
-                    continue
-
-                trial_model = LSTMModel.load_from_checkpoint(ckpt_path)
-                trial_train_dataset = LSTMDataset(
-                    train_data, encoded_features + categorical_features, targets,
-                    sequence_length=seq_len,
-                    fit_scalers=True,
-                    categorical_features=categorical_features,
-                    lag_indices=trial_model.lag_indices if trial_model.has_lag_features else {},
-                )
-                trial_model.set_lag_scale_buffers(trial_train_dataset.scaler_X, trial_train_dataset.scaler_y)
-                trial_model.eval()
-
-                ar_mse = _ar_rollout_mse(
-                    trial_model, val_data, val_data_enc,
-                    encoded_features, targets,
-                    trial_train_dataset.scaler_X, trial_train_dataset.scaler_y,
-                    categorical_features,
-                )
-                ar_results.append((seq_len, trial_id, ar_mse, row))
-                logging.info(f"  AR rollout seq_len={seq_len}: MSE={ar_mse:.6f}")
-
-            if ar_results:
-                ar_results.sort(key=lambda x: x[2])
-                best_seq, best_trial, best_ar_mse, best_row = ar_results[0]
-                param_cols = [c for c in search_results_df.columns
-                              if c not in ("val_loss", "trial_id", "error")]
-                best_params = {k: best_row[k] for k in param_cols
-                               if k in best_row and not pd.isna(best_row[k])}
-                for k in list(best_params):
-                    v = best_params[k]
-                    if isinstance(v, (np.integer, np.floating, float, int)):
-                        # Convert float-valued integers (1.0 → 1) so they
-                        # work as e.g. range() arguments downstream.
-                        v_float = float(v)
-                        best_params[k] = int(v_float) if v_float == int(v_float) else v_float
-                logging.info(
-                    f"AR rollout winner: seq_len={best_seq} (trial {best_trial}) "
-                    f"AR_MSE={best_ar_mse:.6f} — overriding teacher-forced best"
-                )
-
-    logging.info(f"Final best LSTM Params: {best_params}")
+    logging.info(f"Best LSTM Params: {best_params} with Val Loss: {best_score:.4f}")
     return best_params
 
 
@@ -1224,9 +955,7 @@ def hyperparameter_search_lstm_sequential(
         model = create_lstm_model(
             model_features, output_size, config,
             num_model_families=num_model_families, num_regions=num_regions,
-            lag_indices=train_dataset.lag_indices,
         )
-        model.set_lag_scale_buffers(train_dataset.scaler_X, train_dataset.scaler_y)
 
         # Create trainer for search
         trial_dir = os.path.join(get_run_root(run_id), "search", f"trial_{i}")
@@ -1279,81 +1008,7 @@ def hyperparameter_search_lstm_sequential(
                 )
                 logging.info(f"  seq_len={seq}: val_loss={score:.4f} | {params_str}")
 
-    logging.info(f"Best LSTM Params (teacher-forced): {best_params} with Val Loss: {best_score:.4f}")
-
-    # ── AR rollout reranking ──────────────────────────────────────────────
-    # The teacher-forced val_loss favours seq_len=1 because ground-truth
-    # lags leak the answer.  Re-evaluate each best-per-seq_len candidate
-    # with the honest group-level autoregressive rollout on val_data and
-    # pick the true winner.
-    if "sequence_length" in search_results_df.columns:
-        finite_df = search_results_df[np.isfinite(search_results_df["val_loss"])].copy()
-        if not finite_df.empty and "trial_id" in finite_df.columns:
-            idx = finite_df.groupby("sequence_length")["val_loss"].idxmin()
-            candidates = finite_df.loc[idx]
-
-            # One-hot encode val_data once (shared across candidates)
-            continuous_raw = [f for f in features if f not in categorical_features]
-            _, (val_data_enc,), encoded_features, _ = _one_hot_encode_and_align_features(
-                train_data, [val_data], continuous_raw,
-            )
-            for col in categorical_features:
-                if col in val_data.columns:
-                    val_data_enc[col] = val_data[col].values
-
-            ar_results = []
-            for _, row in candidates.iterrows():
-                trial_id = int(row["trial_id"])
-                seq_len = int(row["sequence_length"])
-                trial_dir = os.path.join(get_run_root(run_id), "search", f"trial_{trial_id}")
-                ckpt_path = os.path.join(trial_dir, "best.ckpt")
-                if not os.path.exists(ckpt_path):
-                    logging.warning("Checkpoint not found for trial %d, skipping AR eval", trial_id)
-                    continue
-
-                trial_model = LSTMModel.load_from_checkpoint(ckpt_path)
-                # Fit scalers on train_data to match training conditions
-                trial_train_dataset = LSTMDataset(
-                    train_data, encoded_features + categorical_features, targets,
-                    sequence_length=seq_len,
-                    fit_scalers=True,
-                    categorical_features=categorical_features,
-                    lag_indices=trial_model.lag_indices if trial_model.has_lag_features else {},
-                )
-                trial_model.set_lag_scale_buffers(trial_train_dataset.scaler_X, trial_train_dataset.scaler_y)
-                trial_model.eval()
-
-                ar_mse = _ar_rollout_mse(
-                    trial_model, val_data, val_data_enc,
-                    encoded_features, targets,
-                    trial_train_dataset.scaler_X, trial_train_dataset.scaler_y,
-                    categorical_features,
-                )
-                ar_results.append((seq_len, trial_id, ar_mse, row))
-                logging.info(f"  AR rollout seq_len={seq_len}: MSE={ar_mse:.6f}")
-
-            if ar_results:
-                ar_results.sort(key=lambda x: x[2])
-                best_seq, best_trial, best_ar_mse, best_row = ar_results[0]
-                # Reconstruct params dict from the winning row
-                param_cols = [c for c in search_results_df.columns
-                              if c not in ("val_loss", "trial_id", "error")]
-                best_params = {k: best_row[k] for k in param_cols
-                               if k in best_row and not pd.isna(best_row[k])}
-                # Restore native Python types from numpy
-                for k in list(best_params):
-                    v = best_params[k]
-                    if isinstance(v, (np.integer, np.floating, float, int)):
-                        # Convert float-valued integers (1.0 → 1) so they
-                        # work as e.g. range() arguments downstream.
-                        v_float = float(v)
-                        best_params[k] = int(v_float) if v_float == int(v_float) else v_float
-                logging.info(
-                    f"AR rollout winner: seq_len={best_seq} (trial {best_trial}) "
-                    f"AR_MSE={best_ar_mse:.6f} — overriding teacher-forced best"
-                )
-
-    logging.info(f"Final best LSTM Params: {best_params}")
+    logging.info(f"Best LSTM Params: {best_params} with Val Loss: {best_score:.4f}")
     return best_params
 
 
@@ -1468,9 +1123,7 @@ def train_final_lstm(
         encoded_features, output_size, config,
         num_model_families=num_model_families,
         num_regions=num_regions,
-        lag_indices=train_dataset.lag_indices,
     )
-    model.set_lag_scale_buffers(train_dataset.scaler_X, train_dataset.scaler_y)
 
     # Create final trainer with early stopping and CSV logging
     final_dir = os.path.join(get_run_root(run_id), "final")
@@ -1521,154 +1174,8 @@ def train_final_lstm(
         session_state["lstm_target_offset"] = target_offset
 
 
-def _ar_rollout_predictions(
-    model: "LSTMModel",
-    data: pd.DataFrame,
-    data_enc: pd.DataFrame,
-    features: List[str],
-    targets: List[str],
-    scaler_X: StandardScaler,
-    scaler_y: StandardScaler,
-    categorical_features: Optional[List[str]] = None,
-) -> np.ndarray:
-    """Group-level autoregressive rollout returning inverse-transformed predictions.
-
-    For each (Model, Scenario, Region) group, steps through time injecting the
-    model's own past predictions into lag-feature columns at every timestep.
-    Hidden state is reset each step (matching seq_len=1 training).
-
-    Args:
-        data: Original dataframe (used for groupby and alignment).
-        data_enc: Encoded dataframe with one-hot features aligned to *features*.
-
-    Returns:
-        ``(len(data), len(targets))`` array of predictions in original scale.
-        Rows that could not be predicted are ``NaN``.
-    """
-    from configs.data import INDEX_COLUMNS
-    categorical_features = categorical_features or []
-
-    device = next(model.parameters()).device
-
-    X_cont = data_enc[features].fillna(-1.0).astype(np.float32)
-    X_cont_scaled = scaler_X.transform(X_cont)
-
-    if categorical_features:
-        X_cat = data_enc[categorical_features].values.astype(np.int64)
-    else:
-        X_cat = np.empty((len(data_enc), 0), dtype=np.int64)
-
-    preds_scaled = np.full((len(data), len(targets)), np.nan)
-
-    with torch.no_grad():
-        for _gname, gdata in data.groupby(INDEX_COLUMNS):
-            gidx = gdata.index
-            gpos = [data.index.get_loc(i) for i in gidx]
-            gX = X_cont_scaled[gpos]
-            gcat = X_cat[gpos]
-            past_preds: List[torch.Tensor] = []
-
-            for t in range(len(gpos)):
-                u_t = torch.tensor(gX[t:t+1], dtype=torch.float32, device=device)
-                if past_preds:
-                    model._inject_lag_predictions(u_t, past_preds)
-
-                cat_t = torch.tensor(gcat[t:t+1], dtype=torch.long, device=device).unsqueeze(1)
-                emb = model._embed_categoricals(cat_t)
-                if emb is not None:
-                    v_t = torch.cat([u_t, emb[:, 0, :]], dim=-1)
-                else:
-                    v_t = u_t
-
-                v_t = v_t.unsqueeze(1)
-                lstm_out, _ = model.lstm(v_t, None)
-                pred = model.dense(lstm_out[:, 0, :])
-
-                past_preds.append(pred.detach())
-                preds_scaled[gpos[t]] = pred.cpu().numpy()[0]
-
-    valid = ~np.isnan(preds_scaled).any(axis=1)
-    aligned_preds = np.full_like(preds_scaled, np.nan)
-    if valid.any():
-        aligned_preds[valid] = scaler_y.inverse_transform(preds_scaled[valid])
-    return aligned_preds
-
-
-def _ar_rollout_mse(
-    model: "LSTMModel",
-    data: pd.DataFrame,
-    data_enc: pd.DataFrame,
-    features: List[str],
-    targets: List[str],
-    scaler_X: StandardScaler,
-    scaler_y: StandardScaler,
-    categorical_features: Optional[List[str]] = None,
-) -> float:
-    """Run AR rollout and return MSE in y-scaled space."""
-    from configs.data import INDEX_COLUMNS
-    categorical_features = categorical_features or []
-
-    device = next(model.parameters()).device
-
-    X_cont = data_enc[features].fillna(-1.0).astype(np.float32)
-    X_cont_scaled = scaler_X.transform(X_cont)
-
-    if categorical_features:
-        X_cat = data_enc[categorical_features].values.astype(np.int64)
-    else:
-        X_cat = np.empty((len(data_enc), 0), dtype=np.int64)
-
-    y_scaled = scaler_y.transform(
-        np.where(np.isnan(data[targets].values), 0.0, data[targets].values)
-    )
-
-    preds_scaled = np.full((len(data), len(targets)), np.nan)
-
-    with torch.no_grad():
-        for _gname, gdata in data.groupby(INDEX_COLUMNS):
-            gidx = gdata.index
-            gpos = [data.index.get_loc(i) for i in gidx]
-            gX = X_cont_scaled[gpos]
-            gcat = X_cat[gpos]
-            past_preds: List[torch.Tensor] = []
-
-            for t in range(len(gpos)):
-                u_t = torch.tensor(gX[t:t+1], dtype=torch.float32, device=device)
-                if past_preds:
-                    model._inject_lag_predictions(u_t, past_preds)
-
-                cat_t = torch.tensor(gcat[t:t+1], dtype=torch.long, device=device).unsqueeze(1)
-                emb = model._embed_categoricals(cat_t)
-                if emb is not None:
-                    v_t = torch.cat([u_t, emb[:, 0, :]], dim=-1)
-                else:
-                    v_t = u_t
-
-                v_t = v_t.unsqueeze(1)
-                lstm_out, _ = model.lstm(v_t, None)
-                pred = model.dense(lstm_out[:, 0, :])
-
-                past_preds.append(pred.detach())
-                preds_scaled[gpos[t]] = pred.cpu().numpy()[0]
-
-    valid = ~np.isnan(preds_scaled).any(axis=1)
-    if not valid.any():
-        return float("inf")
-    return float(np.mean((preds_scaled[valid] - y_scaled[valid]) ** 2))
-
-
 def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
-    """Make predictions using trained LSTM model.
-
-    When the model uses lag features (``has_lag_features=True``) and
-    ``target_offset == 0``, predictions are generated via a **group-level
-    autoregressive rollout** that mirrors the XGBoost evaluation path: for
-    each (Model, Scenario, Region) group the LSTM steps through time
-    carrying hidden state and injecting its own past predictions into the
-    lag-feature columns via ``_inject_lag_predictions``.
-
-    Otherwise the original batched ``Trainer.predict`` path is used.
-    """
+    """Make predictions using trained LSTM model via batched Trainer.predict."""
     from src.trainers.evaluation import save_metrics
     from configs.data import INDEX_COLUMNS
 
@@ -1698,7 +1205,6 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
 
     # Load model
     model = LSTMModel.load_from_checkpoint(final_ckpt_path)
-    model.set_lag_scale_buffers(scaler_X, scaler_y)
     model.eval()
 
     # Ensure test_data has the same encoded feature columns as during training
@@ -1720,66 +1226,53 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
 
     group_ids = INDEX_COLUMNS
 
-    if model.has_lag_features and target_offset == 0:
-        # ── Autoregressive group-level rollout ──────────────────────────
-        # Reuse the shared helper that steps through each (Model, Scenario,
-        # Region) group, injecting the model's own predictions into lag
-        # columns at every timestep.
-        aligned_preds = _ar_rollout_predictions(
-            model, test_data, test_data_enc, features, targets,
-            scaler_X, scaler_y, categorical_features,
-        )
-    else:
-        # ── Original batched prediction (no lag features / target_offset > 0) ──
-        all_features = features + categorical_features
-        lag_indices = model.lag_indices if model.has_lag_features else {}
-        test_dataset = LSTMDataset(
-            test_data_enc, all_features, targets,
-            sequence_length=sequence_length,
-            target_offset=target_offset,
-            scaler_X=scaler_X,
-            scaler_y=scaler_y,
-            fit_scalers=False,
-            categorical_features=categorical_features,
-            lag_indices=lag_indices,
-        )
+    all_features = features + categorical_features
+    test_dataset = LSTMDataset(
+        test_data_enc, all_features, targets,
+        sequence_length=sequence_length,
+        target_offset=target_offset,
+        scaler_X=scaler_X,
+        scaler_y=scaler_y,
+        fit_scalers=False,
+        categorical_features=categorical_features,
+    )
 
-        test_loader = DataLoader(
-            test_dataset,
-            batch_size=config.batch_size,
-            shuffle=False,
-            num_workers=1,
-            persistent_workers=False
-        )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=config.batch_size,
+        shuffle=False,
+        num_workers=1,
+        persistent_workers=False
+    )
 
-        trainer = Trainer(
-            devices=1,
-            accelerator="gpu" if torch.cuda.is_available() else "cpu",
-            enable_progress_bar=False,
-            logger=False
-        )
+    trainer = Trainer(
+        devices=1,
+        accelerator="gpu" if torch.cuda.is_available() else "cpu",
+        enable_progress_bar=False,
+        logger=False
+    )
 
-        raw_predictions = trainer.predict(model, test_loader)
-        predictions_list = [p.cpu().numpy() for p in raw_predictions]
-        predictions_array = np.vstack(predictions_list)
+    raw_predictions = trainer.predict(model, test_loader)
+    predictions_list = [p.cpu().numpy() for p in raw_predictions]
+    predictions_array = np.vstack(predictions_list)
 
-        if predictions_array.ndim == 3 and predictions_array.shape[1] == 1:
-            predictions_array = predictions_array.squeeze(axis=1)
+    if predictions_array.ndim == 3 and predictions_array.shape[1] == 1:
+        predictions_array = predictions_array.squeeze(axis=1)
 
-        predictions_unscaled = scaler_y.inverse_transform(predictions_array)
+    predictions_unscaled = scaler_y.inverse_transform(predictions_array)
 
-        aligned_preds = np.full((len(test_data), len(targets)), np.nan)
-        pred_idx = 0
-        for _group_name, group_data in test_data.groupby(group_ids):
-            group_size = len(group_data)
-            group_indices = group_data.index
-            num_sequences = max(0, group_size - (sequence_length + target_offset) + 1)
-            for i in range(num_sequences):
-                if pred_idx < len(predictions_unscaled):
-                    target_row_idx = group_indices[i + sequence_length - 1 + target_offset]
-                    data_row_idx = test_data.index.get_loc(target_row_idx)
-                    aligned_preds[data_row_idx] = predictions_unscaled[pred_idx]
-                    pred_idx += 1
+    aligned_preds = np.full((len(test_data), len(targets)), np.nan)
+    pred_idx = 0
+    for _group_name, group_data in test_data.groupby(group_ids):
+        group_size = len(group_data)
+        group_indices = group_data.index
+        num_sequences = max(0, group_size - (sequence_length + target_offset) + 1)
+        for i in range(num_sequences):
+            if pred_idx < len(predictions_unscaled):
+                target_row_idx = group_indices[i + sequence_length - 1 + target_offset]
+                data_row_idx = test_data.index.get_loc(target_row_idx)
+                aligned_preds[data_row_idx] = predictions_unscaled[pred_idx]
+                pred_idx += 1
 
     logging.info("LSTM prediction completed. Shape: %s", aligned_preds.shape)
 

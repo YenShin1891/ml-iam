@@ -27,7 +27,7 @@ def _default_best_params_from_config() -> dict:
     }
 
 
-def derive_splits(data, lag_required=True):
+def derive_splits(data):
     """From cached processed_data, derive all LSTM splits. Takes seconds.
 
     Returns the ephemeral dict that phase functions and trainers expect.
@@ -46,25 +46,8 @@ def derive_splits(data, lag_required=True):
     if not REGION_CATEGORIES and 'Region' in data.columns:
         set_region_categories(data['Region'])
 
-    prepared, features, targets = prepare_features_and_targets_sequence(
-        data,
-        lag_required=lag_required,
-        min_context_length=0,
-    )
+    prepared, features, targets = prepare_features_and_targets_sequence(data)
     prepared, features = add_missingness_indicators(prepared, features)
-
-    # When lag_required=False, drop explicit lag columns entirely so the
-    # model never sees them — mirrors TFT behaviour and ensures a fair
-    # comparison without autoregressive lag injection.
-    if not lag_required:
-        import re
-        _lag_re = re.compile(r"^prev\d*_")
-        lag_cols = [f for f in features if _lag_re.match(f)]
-        if lag_cols:
-            import logging
-            logging.info("lag_required=False: dropping %d lag columns: %s", len(lag_cols), lag_cols)
-            prepared = prepared.drop(columns=lag_cols)
-            features = [f for f in features if f not in set(lag_cols)]
 
     # Encode categoricals as integer codes
     num_model_families = None
@@ -108,7 +91,7 @@ def derive_splits(data, lag_required=True):
     }
 
 
-def preprocess_lstm(store, dataset=None, lag_required=True):
+def preprocess_lstm(store, dataset=None):
     """Run the expensive melt+pivot and cache as parquet."""
     from src.data.preprocess import load_and_process_data
 
@@ -117,11 +100,11 @@ def preprocess_lstm(store, dataset=None, lag_required=True):
     return data
 
 
-def search_lstm(store, lag_required=True):
+def search_lstm(store):
     """Run hyperparameter search and save best_params."""
     logging.info("Starting hyperparameter search for LSTM...")
     data = store.load_processed_data()
-    splits = derive_splits(data, lag_required=lag_required)
+    splits = derive_splits(data)
 
     from src.trainers.lstm_trainer import hyperparameter_search_lstm
 
@@ -149,7 +132,7 @@ def _is_primary_rank():
     return all(rv in (None, "0") for rv in rank_vars)
 
 
-def train_lstm(store, lag_required=True):
+def train_lstm(store):
     """Final training using best_params.
 
     Under DDP, non-primary ranks still need derive_splits() (LSTM has no
@@ -161,7 +144,7 @@ def train_lstm(store, lag_required=True):
 
     logging.info("Starting final LSTM training...")
     data = store.load_processed_data()
-    splits = derive_splits(data, lag_required=lag_required)
+    splits = derive_splits(data)
 
     best_params = store.load_best_params()
 
@@ -242,13 +225,13 @@ def _build_predict_state(store, splits):
     return session_state
 
 
-def test_lstm(store, lag_required=True):
+def test_lstm(store):
     """Make predictions using trained LSTM model."""
     from src.trainers.lstm_trainer import predict_lstm as _predict_lstm
 
     logging.info("Testing LSTM model...")
     data = store.load_processed_data()
-    splits = derive_splits(data, lag_required=lag_required)
+    splits = derive_splits(data)
     session_state = _build_predict_state(store, splits)
 
     preds = _predict_lstm(session_state, store.run_id)
@@ -269,13 +252,13 @@ def test_lstm(store, lag_required=True):
     return preds
 
 
-def plot_lstm(store, lag_required=True):
+def plot_lstm(store):
     """Plot LSTM predictions and SHAP plots."""
     from src.visualization import plot_scatter, plot_lstm_shap
 
     logging.info("Plotting LSTM predictions...")
     data = store.load_processed_data()
-    splits = derive_splits(data, lag_required=lag_required)
+    splits = derive_splits(data)
     pred_bundle = store.load_predictions()
     preds = pred_bundle["preds"]
     targets = splits["targets"]

@@ -6,12 +6,9 @@ model: lstm
 dataset: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-interp-targets-scale-impute-2026-04-13
 
 cuda_visible_devices:
-  default: "4,5,6,7"
-  search: "4,5,6,7"
-  train: "4,5,6,7"
-
-# LSTM-specific: whether to require full lag history
-lag_required: true
+  default: "0,1,2,3,4,5,6,7"
+  search: "0,1,2,3,4,5,6,7"
+  train: "0,1,2,3,4,5,6,7"
 
 # Omit 'search' to skip hyperparameter search and use defaults instead.
 phases: [preprocess, train, test, plot]
