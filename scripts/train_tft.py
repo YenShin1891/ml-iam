@@ -7,7 +7,7 @@ All heavy imports are lazy to avoid pulling in unnecessary dependencies.
 import logging
 
 
-def derive_splits(data, lag_required=True, target_normalizer_mode=None):
+def derive_splits(data, lag_required=False, target_normalizer_mode=None):
     """From cached processed_data, derive all TFT splits. Takes seconds.
 
     Returns the ephemeral dict that phase functions and trainers expect.
@@ -63,7 +63,7 @@ def derive_splits(data, lag_required=True, target_normalizer_mode=None):
     }
 
 
-def preprocess_tft(store, dataset=None, lag_required=True):
+def preprocess_tft(store, dataset=None, lag_required=False):
     """Run the expensive melt+pivot and cache as parquet."""
     from src.data.preprocess import load_and_process_data
 
@@ -72,7 +72,7 @@ def preprocess_tft(store, dataset=None, lag_required=True):
     return data
 
 
-def search_tft(store, lag_required=True, target_normalizer_mode=None):
+def search_tft(store, lag_required=False, target_normalizer_mode=None):
     """Run hyperparameter search and save best_params."""
     logging.info("Starting hyperparameter search for TFT...")
     data = store.load_processed_data()
@@ -112,7 +112,7 @@ def _is_primary_rank():
     return all(rv in (None, "0") for rv in rank_vars)
 
 
-def train_tft(store, lag_required=True, target_normalizer_mode=None):
+def train_tft(store, lag_required=False, target_normalizer_mode=None):
     """Final training using best_params."""
     from src.trainers.tft_dataset import build_datasets
     from src.trainers.tft_trainer import train_final_tft as _train_final
@@ -146,7 +146,7 @@ def train_tft(store, lag_required=True, target_normalizer_mode=None):
     return best_params
 
 
-def test_tft(store, lag_required=True, use_two_window=False):
+def test_tft(store, lag_required=False, use_two_window=False):
     """Make predictions using trained TFT model."""
     data = store.load_processed_data()
     splits = derive_splits(data, lag_required=lag_required)
@@ -177,7 +177,7 @@ def test_tft(store, lag_required=True, use_two_window=False):
     return preds
 
 
-def plot_tft(store, lag_required=True):
+def plot_tft(store, lag_required=False):
     """Plot TFT predictions and SHAP analysis."""
     from src.visualization import plot_scatter, plot_tft_shap
 

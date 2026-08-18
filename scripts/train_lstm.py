@@ -53,6 +53,19 @@ def derive_splits(data, lag_required=True):
     )
     prepared, features = add_missingness_indicators(prepared, features)
 
+    # When lag_required=False, drop explicit lag columns entirely so the
+    # model never sees them — mirrors TFT behaviour and ensures a fair
+    # comparison without autoregressive lag injection.
+    if not lag_required:
+        import re
+        _lag_re = re.compile(r"^prev\d*_")
+        lag_cols = [f for f in features if _lag_re.match(f)]
+        if lag_cols:
+            import logging
+            logging.info("lag_required=False: dropping %d lag columns: %s", len(lag_cols), lag_cols)
+            prepared = prepared.drop(columns=lag_cols)
+            features = [f for f in features if f not in set(lag_cols)]
+
     # Encode categoricals as integer codes
     num_model_families = None
     num_regions = None
