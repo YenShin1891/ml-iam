@@ -52,7 +52,6 @@ class RunConfig:
     dataset: Optional[str] = None
     cuda_visible_devices: Optional[str] = None
     cuda_visible_devices_by_phase: Dict[str, Optional[str]] = field(default_factory=dict)
-    lag_required: Optional[bool] = None
     two_window: bool = False
     keep_partial_targets: Optional[bool] = None
     target_normalizer_mode: Optional[str] = None  # TFT: "encoder_floored" or "global"
@@ -198,10 +197,6 @@ def _parse_config(obj: Dict[str, Any], *, config_path: Path) -> RunConfig:
     else:
         cuda_visible_devices = _normalize_cuda_visible_devices(cuda_raw)
 
-    lag_required = obj.get("lag_required")
-    if lag_required is not None and not isinstance(lag_required, bool):
-        raise ValueError("'lag_required' must be boolean when provided")
-
     two_window = bool(obj.get("two_window", False))
 
     target_normalizer_mode = obj.get("target_normalizer_mode")
@@ -225,7 +220,6 @@ def _parse_config(obj: Dict[str, Any], *, config_path: Path) -> RunConfig:
         dataset=dataset,
         cuda_visible_devices=cuda_visible_devices,
         cuda_visible_devices_by_phase=cuda_visible_devices_by_phase,
-        lag_required=lag_required,
         two_window=two_window,
         keep_partial_targets=keep_partial_targets,
         target_normalizer_mode=target_normalizer_mode,
@@ -242,9 +236,6 @@ def _build_phase_argv(cfg: RunConfig, *, phase: str, run_id: str) -> List[str]:
 
     if cfg.dataset:
         argv.extend(["--dataset", cfg.dataset])
-
-    if cfg.model in {"lstm", "tft"} and cfg.lag_required is not None:
-        argv.append("--lag-required" if cfg.lag_required else "--no-lag-required")
 
     if cfg.model == "tft" and cfg.two_window:
         argv.append("--two-window")
@@ -294,7 +285,6 @@ def _write_run_metadata(
         "cuda_visible_devices": cfg.cuda_visible_devices,
         "cuda_visible_devices_by_phase": dict(cfg.cuda_visible_devices_by_phase),
         "cuda_visible_devices_resolved_by_phase": dict(cuda_by_phase_resolved),
-        "lag_required": cfg.lag_required,
         "two_window": cfg.two_window,
         "target_normalizer_mode": cfg.target_normalizer_mode,
         "note": cfg.note,
@@ -330,9 +320,6 @@ def _validate_model_constraints(cfg: RunConfig) -> None:
         raise ValueError(
             f"run_id '{cfg.run_id}' does not match model '{cfg.model}'. Expected prefix '{cfg.model}_'."
         )
-
-    if cfg.model == "xgb" and cfg.lag_required is False:
-        raise ValueError("xgb always requires lag features; set lag_required: true or omit it")
 
     # When using resume (single phase) without run_id, it cannot work.
     if len(cfg.phases) == 1 and cfg.phases[0] in _ALLOWED_PHASES and cfg.run_id is None and cfg.phases[0] != "search":

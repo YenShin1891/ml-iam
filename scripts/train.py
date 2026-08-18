@@ -73,64 +73,64 @@ def _is_primary_rank() -> bool:
 # Model-specific dispatch helpers (lazy imports)
 # ---------------------------------------------------------------------------
 
-def _preprocess(model, store, dataset, lag_required):
+def _preprocess(model, store, dataset):
     if model == "xgb":
         from scripts.train_xgb import preprocess_xgb
         return preprocess_xgb(store, dataset=dataset)
     elif model == "lstm":
         from scripts.train_lstm import preprocess_lstm
-        return preprocess_lstm(store, dataset=dataset, lag_required=lag_required)
+        return preprocess_lstm(store, dataset=dataset)
     elif model == "tft":
         from scripts.train_tft import preprocess_tft
-        return preprocess_tft(store, dataset=dataset, lag_required=lag_required)
+        return preprocess_tft(store, dataset=dataset)
 
 
-def _search(model, store, lag_required=True, target_normalizer_mode=None):
+def _search(model, store, target_normalizer_mode=None):
     if model == "xgb":
         from scripts.train_xgb import search_xgb
         return search_xgb(store)
     elif model == "lstm":
         from scripts.train_lstm import search_lstm
-        return search_lstm(store, lag_required=lag_required)
+        return search_lstm(store)
     elif model == "tft":
         from scripts.train_tft import search_tft
-        return search_tft(store, lag_required=lag_required, target_normalizer_mode=target_normalizer_mode)
+        return search_tft(store, target_normalizer_mode=target_normalizer_mode)
 
 
-def _train(model, store, lag_required=True, target_normalizer_mode=None):
+def _train(model, store, target_normalizer_mode=None):
     if model == "xgb":
         from scripts.train_xgb import train_xgb
         return train_xgb(store)
     elif model == "lstm":
         from scripts.train_lstm import train_lstm
-        return train_lstm(store, lag_required=lag_required)
+        return train_lstm(store)
     elif model == "tft":
         from scripts.train_tft import train_tft
-        return train_tft(store, lag_required=lag_required, target_normalizer_mode=target_normalizer_mode)
+        return train_tft(store, target_normalizer_mode=target_normalizer_mode)
 
 
-def _test(model, store, lag_required=True, two_window=False):
+def _test(model, store, two_window=False):
     if model == "xgb":
         from scripts.train_xgb import test_xgb
         return test_xgb(store)
     elif model == "lstm":
         from scripts.train_lstm import test_lstm
-        return test_lstm(store, lag_required=lag_required)
+        return test_lstm(store)
     elif model == "tft":
         from scripts.train_tft import test_tft
-        return test_tft(store, lag_required=lag_required, use_two_window=two_window)
+        return test_tft(store, use_two_window=two_window)
 
 
-def _plot(model, store, lag_required=True):
+def _plot(model, store):
     if model == "xgb":
         from scripts.train_xgb import plot_xgb
         return plot_xgb(store)
     elif model == "lstm":
         from scripts.train_lstm import plot_lstm
-        return plot_lstm(store, lag_required=lag_required)
+        return plot_lstm(store)
     elif model == "tft":
         from scripts.train_tft import plot_tft
-        return plot_tft(store, lag_required=lag_required)
+        return plot_tft(store)
 
 
 def _set_default_params(model, store):
@@ -171,12 +171,6 @@ def parse_arguments(argv=None):
     parser.add_argument("--resume", type=str, choices=_ALLOWED_PHASES, help="Resume from a specific phase.")
     parser.add_argument("--note", type=str, help="Note describing the run.")
     parser.add_argument("--dataset", type=str, help="Dataset version subdirectory.")
-    parser.add_argument(
-        "--lag-required",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Require complete lag features (LSTM/TFT).",
-    )
     parser.add_argument("--two-window", action="store_true", help="Two-window prediction (TFT only).")
     parser.add_argument(
         "--target-normalizer-mode",
@@ -211,8 +205,6 @@ def main(argv=None):
     from src.utils.utils import setup_logging, get_next_run_id
     from src.utils.run_store import RunStore
 
-    lag_required = True if args.lag_required is None else args.lag_required
-
     # Override KEEP_PARTIAL_TARGETS if specified on CLI
     if args.keep_partial_targets is not None:
         import configs.data as _data_cfg
@@ -237,11 +229,11 @@ def main(argv=None):
         if args.note:
             logging.info("Run note: %s", args.note)
 
-        _preprocess(model, store, args.dataset, lag_required)
-        _search(model, store, lag_required=lag_required, target_normalizer_mode=args.target_normalizer_mode)
-        _train(model, store, lag_required=lag_required, target_normalizer_mode=args.target_normalizer_mode)
-        _test(model, store, lag_required=lag_required, two_window=args.two_window)
-        _plot(model, store, lag_required=lag_required)
+        _preprocess(model, store, args.dataset)
+        _search(model, store, target_normalizer_mode=args.target_normalizer_mode)
+        _train(model, store, target_normalizer_mode=args.target_normalizer_mode)
+        _test(model, store, two_window=args.two_window)
+        _plot(model, store)
         return
 
     # Resume mode: single phase
@@ -258,21 +250,21 @@ def main(argv=None):
     # Dispatch
     phase = args.resume
     if phase == "preprocess":
-        _preprocess(model, store, args.dataset, lag_required)
+        _preprocess(model, store, args.dataset)
         _set_default_params(model, store)
         logging.info("Preprocessing complete.")
     elif phase == "search":
-        _search(model, store, lag_required=lag_required, target_normalizer_mode=args.target_normalizer_mode)
+        _search(model, store, target_normalizer_mode=args.target_normalizer_mode)
     elif phase == "train":
-        _train(model, store, lag_required=lag_required, target_normalizer_mode=args.target_normalizer_mode)
+        _train(model, store, target_normalizer_mode=args.target_normalizer_mode)
     elif phase == "test":
-        _test(model, store, lag_required=lag_required, two_window=args.two_window)
+        _test(model, store, two_window=args.two_window)
     elif phase == "plot":
         # TFT auto-runs test if predictions are missing
         if model == "tft" and not store.has_predictions():
             logging.info("Predictions not found; rerunning test step before plotting.")
-            _test(model, store, lag_required=lag_required, two_window=args.two_window)
-        _plot(model, store, lag_required=lag_required)
+            _test(model, store, two_window=args.two_window)
+        _plot(model, store)
 
 
 if __name__ == "__main__":

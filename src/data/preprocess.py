@@ -561,25 +561,16 @@ def prepare_features_and_targets(data: pd.DataFrame, lag_required: bool = True) 
 
 def prepare_features_and_targets_sequence(
     data: pd.DataFrame,
-    lag_required: bool = True,
-    min_context_length: int = 0,
+    **_kwargs,
 ) -> tuple:
     """
     Prepare features and targets for sequence models (TFT, LSTM, etc.).
 
-    Args:
-        data: Input data DataFrame
-        lag_required: When True, drop rows without a full history of lag features.
-        min_context_length: Minimum historical context required when lag features are required.
-
-    This function adds explicit lagged target features for sequence models
-    to mirror tree-based preprocessing. It also adds Step and DeltaYears for
-    time series indexing.
+    Sequence models rely on their temporal architecture (encoder attention,
+    LSTM hidden state) to capture history — explicit lag features are not
+    used.  This function builds Step and DeltaYears for time-series indexing.
     """
-    logging.info(
-        "Preparing features and targets for sequence models (lag_required=%s)...",
-        lag_required,
-    )
+    logging.info("Preparing features and targets for sequence models...")
 
     if NORMALIZE_TARGETS_BY_POPULATION:
         data = interpolate_targets(data, INDEX_COLUMNS, [POPULATION_COLUMN])
@@ -594,7 +585,7 @@ def prepare_features_and_targets_sequence(
     if INTERPOLATE_TARGETS:
         data = interpolate_targets(data, INDEX_COLUMNS, OUTPUT_VARIABLES)
 
-    prepared = add_lag_features(data, INDEX_COLUMNS, OUTPUT_VARIABLES, lag_required=lag_required)
+    prepared = data.copy()
     prepared['Year'] = prepared['Year'].astype(int)
 
     targets = OUTPUT_VARIABLES
@@ -615,14 +606,6 @@ def prepare_features_and_targets_sequence(
     else:
         prepared = prepared.dropna(subset=targets).reset_index(drop=True)
 
-    if not lag_required:
-        missing_lag_rows = prepared[features].isna().any(axis=1).sum()
-        if missing_lag_rows:
-            logging.info(
-                "Lag requirement disabled: retained %d rows with missing lag features",
-                missing_lag_rows,
-            )
-
     # Make 'Step' and 'DeltaYears' after dropping NaNs
     # Step must align with group_ids used by sequence models
     group_cols = INDEX_COLUMNS
@@ -634,39 +617,13 @@ def prepare_features_and_targets_sequence(
         prepared.groupby(group_cols)['Year'].diff().fillna(0).astype(int)
     )
 
-    # Filter out early steps when a minimum context is required
-    if lag_required and min_context_length > 0:
-        original_len = len(prepared)
-        prepared = prepared[prepared['Step'] >= min_context_length].copy()
-        filtered_len = len(prepared)
-        logging.info(
-            "Lag requirement enforced: filtered out %d early steps, kept %d rows with Step >= %d",
-            original_len - filtered_len,
-            filtered_len,
-            min_context_length,
-        )
-
     return prepared, features, targets
 
 
-def prepare_features_and_targets_tft(
-    data: pd.DataFrame,
-    lag_required: bool = True,
-    min_context_length: int = 0,
-) -> tuple:
-    """
-    Legacy function for TFT. Now calls prepare_features_and_targets_sequence.
-    Kept for backward compatibility.
-    """
-    logging.info(
-        "Preparing features and targets for TFT (using sequence preprocessing, lag_required=%s)...",
-        lag_required,
-    )
-    return prepare_features_and_targets_sequence(
-        data,
-        lag_required=lag_required,
-        min_context_length=min_context_length,
-    )
+def prepare_features_and_targets_tft(data: pd.DataFrame, **_kwargs) -> tuple:
+    """Legacy wrapper for TFT. Delegates to prepare_features_and_targets_sequence."""
+    logging.info("Preparing features and targets for TFT (using sequence preprocessing)...")
+    return prepare_features_and_targets_sequence(data)
 
 
 def remove_rows_with_missing_outputs(X, y, X2=None):

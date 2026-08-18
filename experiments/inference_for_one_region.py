@@ -123,8 +123,6 @@ def load_artifacts(run_id: str):
         model = LSTMModel.load_from_checkpoint(os.path.join(run_root, "final", "best.ckpt"))
         scaler_X = store.load_artifact("lstm_scaler_X.pkl")
         scaler_y = store.load_artifact("lstm_scaler_y.pkl")
-        if model.has_lag_features:
-            model.set_lag_scale_buffers(scaler_X, scaler_y)
         model.eval()
 
         meta = {}
