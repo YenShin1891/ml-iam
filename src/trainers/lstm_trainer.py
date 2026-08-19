@@ -1023,23 +1023,6 @@ def _is_primary_rank() -> bool:
     return all(rv in (None, "0") for rv in rank_vars)
 
 
-def _split_by_groups(
-    df: pd.DataFrame,
-    group_cols: List[str],
-    monitor_frac: float = 0.1,
-    seed: int = 0,
-) -> tuple:
-    """Split a DataFrame by group IDs into train and monitor portions.
-
-    Returns (train_df, monitor_df) where monitor_df contains ~monitor_frac
-    of the unique groups (all their rows) and train_df contains the rest.
-    """
-    groups = df[group_cols].drop_duplicates()
-    monitor_groups = groups.sample(frac=monitor_frac, random_state=seed)
-    monitor_keys = set(map(tuple, monitor_groups.itertuples(index=False, name=None)))
-    is_monitor = df[group_cols].apply(lambda r: tuple(r) in monitor_keys, axis=1)
-    return df[~is_monitor].reset_index(drop=True), df[is_monitor].reset_index(drop=True)
-
 
 def train_final_lstm(
     train_data: pd.DataFrame,
@@ -1053,16 +1036,15 @@ def train_final_lstm(
     num_model_families: int = 0,
     num_regions: int = 0,
 ) -> None:
-    """Train final LSTM model on combined train+val data with early stopping.
+    """Train final LSTM model using the same train/val split as the search.
 
-    Combines train and val data to maximise training signal, then holds out
-    ~10% of groups as a monitoring-only validation set for early stopping.
+    Uses train_data for training and val_data for early stopping, matching
+    the exact data regime the hyperparameter search used to select best_params.
     Per-epoch metrics are logged via CSVLogger.
 
     Under DDP, only rank 0 logs metrics and saves artifacts to session_state.
     All ranks build the dataset and model (cheap) so trainer.fit() can proceed.
     """
-    from configs.data import INDEX_COLUMNS
 
     primary = _is_primary_rank()
     categorical_features = categorical_features or []
@@ -1075,29 +1057,25 @@ def train_final_lstm(
     }
 
     if features is None:
-        from configs.data import NON_FEATURE_COLUMNS
+        from configs.data import NON_FEATURE_COLUMNS, INDEX_COLUMNS
         exclude_columns = NON_FEATURE_COLUMNS + INDEX_COLUMNS + ['Step']
         features = [col for col in train_data.columns if col not in targets and col not in exclude_columns]
-
-    # Combine train+val, then re-split: ~90% for training, ~10% for monitoring
-    combined_data = pd.concat([train_data, val_data], ignore_index=True)
-    combined_train, monitor_data = _split_by_groups(combined_data, INDEX_COLUMNS)
 
     sequence_length = int(best_params.get("sequence_length", LSTMTrainerConfig().sequence_length))
     target_offset = int(best_params.get("target_offset", LSTMTrainerConfig().target_offset))
 
-    # Create datasets: scalers fit on combined_train, applied to monitor
-    train_dataset, monitor_dataset, encoded_features = create_lstm_datasets(
-        combined_train, monitor_data, features, targets,
+    # Use the same train/val split as the search phase: scalers fit on train_data
+    train_dataset, val_dataset, encoded_features = create_lstm_datasets(
+        train_data, val_data, features, targets,
         sequence_length=sequence_length,
         target_offset=target_offset,
         categorical_features=categorical_features,
     )
-    non_numeric_cols = _infer_non_numeric_feature_columns(combined_train, [f for f in features if f not in categorical_features])
+    non_numeric_cols = _infer_non_numeric_feature_columns(train_data, [f for f in features if f not in categorical_features])
 
     batch_size = best_params.get("batch_size", 32)
     train_loader, val_loader = create_lstm_dataloaders(
-        train_dataset, monitor_dataset, batch_size=batch_size,
+        train_dataset, val_dataset, batch_size=batch_size,
     )
 
     # Create final model
@@ -1135,9 +1113,9 @@ def train_final_lstm(
 
     if primary:
         logging.info(
-            "LSTM final training: combined=%d (train=%d monitor=%d), "
+            "LSTM final training: train=%d val=%d, "
             "up to %d epochs with early stopping (patience=%d)",
-            len(combined_data), len(train_dataset), len(monitor_dataset),
+            len(train_dataset), len(val_dataset),
             config.max_epochs, config.final_patience,
         )
 

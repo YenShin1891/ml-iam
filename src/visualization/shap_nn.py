@@ -227,9 +227,15 @@ def get_lstm_shap_values(run_id, X_test: pd.DataFrame, sequence_length=1):
             device = x.device
             mask = _torch.ones(batch_size, self.seq_len, dtype=_torch.float32, device=device)
             # Use the fixed categorical indices (broadcast if needed)
-            cat = self.fixed_cat[:batch_size] if self.fixed_cat.shape[0] >= batch_size else self.fixed_cat.expand(batch_size, -1, -1)
+            if self.fixed_cat.shape[0] >= batch_size:
+                cat = self.fixed_cat[:batch_size]
+            else:
+                # SHAP may pass batches larger than the dataset (background + test);
+                # repeat rows to fill the batch since cat indices are the same per sample.
+                repeats = (batch_size + self.fixed_cat.shape[0] - 1) // self.fixed_cat.shape[0]
+                cat = self.fixed_cat.repeat(repeats, 1, 1)[:batch_size]
             cat = cat.to(device)
-            return self.lstm_model(x, mask=mask, teacher_forcing=False, cat_indices=cat)
+            return self.lstm_model(x, mask=mask, cat_indices=cat)
     wrapper = LSTMWrapperForSHAP(model, sequence_length, background_cat)
     wrapper.eval()
     device = next(model.parameters()).device
