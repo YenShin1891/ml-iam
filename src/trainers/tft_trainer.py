@@ -528,24 +528,6 @@ def _is_primary_rank() -> bool:
     return all(rv in (None, "0") for rv in rank_vars)
 
 
-def _split_by_groups(
-    df: pd.DataFrame,
-    group_cols: List[str],
-    monitor_frac: float = 0.1,
-    seed: int = 0,
-) -> tuple:
-    """Split a DataFrame by group IDs into train and monitor portions.
-
-    Returns (train_df, monitor_df) where monitor_df contains ~monitor_frac
-    of the unique groups (all their rows) and train_df contains the rest.
-    """
-    groups = df[group_cols].drop_duplicates()
-    monitor_groups = groups.sample(frac=monitor_frac, random_state=seed)
-    monitor_keys = set(map(tuple, monitor_groups.itertuples(index=False, name=None)))
-    is_monitor = df[group_cols].apply(lambda r: tuple(r) in monitor_keys, axis=1)
-    return df[~is_monitor].reset_index(drop=True), df[is_monitor].reset_index(drop=True)
-
-
 def train_final_tft(
     train_dataset,
     val_dataset,
@@ -554,18 +536,16 @@ def train_final_tft(
     best_params: Dict,
     session_state: Optional[Dict] = None,
 ) -> None:
-    """Train final TFT on combined train+val data with early stopping.
+    """Train final TFT using the same train/val split as the search.
 
-    Combines train and val data to maximise training signal, then holds out
-    ~10% of groups as a monitoring-only validation set for early stopping.
+    Uses train_dataset for training and val_dataset for early stopping,
+    matching the exact data regime the hyperparameter search used.
     Per-epoch metrics are logged via CSVLogger.
 
     All DDP ranks must execute the same code path so they all reach
     trainer.fit() together.  Only rank 0 writes logs, summaries, and
     the dataset template.
     """
-    from configs.data import INDEX_COLUMNS
-    from pytorch_forecasting import TimeSeriesDataSet
 
     trainer_cfg = TFTTrainerConfig()
     final_dir = os.path.join(get_run_root(run_id), "final")
@@ -578,26 +558,10 @@ def train_final_tft(
     # Pop search best_epoch — informational only, early stopping decides when to stop
     search_best_epoch = best_params.pop("best_epoch", None)
 
-    # Get original DataFrames from session_state
-    train_df = session_state.get("train_data") if session_state else None
-    val_df = session_state.get("val_data") if session_state else None
-    if not isinstance(train_df, pd.DataFrame) or not isinstance(val_df, pd.DataFrame):
-        raise RuntimeError(
-            "train_final_tft requires session_state with train_data and val_data DataFrames"
-        )
-
-    # Combine train+val, then re-split: ~90% for training, ~10% for monitoring
-    combined_df = pd.concat([train_df, val_df], ignore_index=True)
-    combined_train_df, monitor_df = _split_by_groups(combined_df, INDEX_COLUMNS)
-
-    # Create TimeSeriesDataSets from the splits using the original dataset as template
-    combined_train_dataset = TimeSeriesDataSet.from_dataset(train_dataset, combined_train_df)
-    monitor_dataset = TimeSeriesDataSet.from_dataset(train_dataset, monitor_df)
-
     if primary:
         logging.info(
-            "TFT final training dataset sizes -> combined=%d (train=%d monitor=%d)",
-            len(combined_df), len(combined_train_dataset), len(monitor_dataset),
+            "TFT final training dataset sizes -> train=%d val=%d",
+            len(train_dataset), len(val_dataset),
         )
         logging.info(
             "TFT final training for up to %d epochs with early stopping "
@@ -607,20 +571,20 @@ def train_final_tft(
             search_best_epoch,
         )
 
-        # Save combined training dataset template (used later for prediction)
-        save_dataset_template(combined_train_dataset, run_id)
+        # Save training dataset template (used later for prediction)
+        save_dataset_template(train_dataset, run_id)
 
     n_targets = len(targets)
-    tft_final = create_tft_model(combined_train_dataset, best_params, n_targets)
+    tft_final = create_tft_model(train_dataset, best_params, n_targets)
 
     num_workers = get_default_num_workers()
-    train_loader = combined_train_dataset.to_dataloader(
+    train_loader = train_dataset.to_dataloader(
         train=True,
         batch_size=trainer_cfg.batch_size,
         num_workers=num_workers,
         persistent_workers=True,
     )
-    val_loader = monitor_dataset.to_dataloader(
+    val_loader = val_dataset.to_dataloader(
         train=False,
         batch_size=trainer_cfg.batch_size,
         num_workers=num_workers,
@@ -671,9 +635,8 @@ def train_final_tft(
 
         summary = {
             "best_params": best_params,
-            "combined_rows": len(combined_df),
-            "train_set_rows": len(combined_train_dataset),
-            "monitor_set_rows": len(monitor_dataset),
+            "train_set_rows": len(train_dataset),
+            "val_set_rows": len(val_dataset),
             "final_max_epochs": trainer_cfg.final_max_epochs,
             "final_patience": trainer_cfg.final_patience,
             "stopped_epoch": stopped_epoch,
