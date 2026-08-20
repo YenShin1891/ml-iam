@@ -667,7 +667,7 @@ def _infer_tft(artifacts, synthetic, features, targets):
     # Drop rows with Model names not in the training vocabulary — TFT's
     # NaNLabelEncoder rejects unknown categories, and patching it after the
     # fact breaks the code ↔ index alignment during inverse_transform.
-    model_enc = template._categorical_encoders.get("__group_id__Model")
+    model_enc = template.categorical_encoders.get("__group_id__Model")
     if model_enc is not None and hasattr(model_enc, "classes_"):
         known_models = set(model_enc.classes_.keys())
         unknown_mask = ~data["Model"].isin(known_models)

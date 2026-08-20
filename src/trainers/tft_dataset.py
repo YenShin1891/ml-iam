@@ -2,6 +2,7 @@
 
 import logging
 import os
+from dataclasses import dataclass, field
 from typing import Dict, Tuple, List, Any
 
 import pandas as pd
@@ -126,12 +127,113 @@ def create_train_dataset(session_state: Dict) -> Tuple[TimeSeriesDataSet, Any]:
     return train_dataset, config
 
 
+# Bumped when the on-disk layout changes; older files still load.
+_TEMPLATE_FORMAT = 2
+
+
+@dataclass
+class DatasetTemplate:
+    """The fitted configuration of a training TimeSeriesDataSet.
+
+    ``TimeSeriesDataSet.from_dataset`` is only ``from_parameters(
+    dataset.get_parameters(), data)``, so the parameters — which carry the
+    fitted encoders, scalers and target normalizer — are all a later phase
+    needs.  Persisting them instead of the dataset object leaves the training
+    DataFrame out of the run directory and makes the file far less brittle
+    across pytorch_forecasting versions.
+
+    *derived* holds the few attributes pytorch_forecasting computes during
+    ``__init__`` (adding ``relative_time_idx``, target scales and so on), which
+    cannot be recovered from the constructor arguments alone.
+    """
+
+    parameters: Dict[str, Any]
+    derived: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dataset(cls, dataset: TimeSeriesDataSet) -> "DatasetTemplate":
+        return cls(
+            parameters=dataset.get_parameters(),
+            derived={
+                "reals": list(dataset.reals),
+                "categoricals": list(dataset.categoricals),
+                "flat_categoricals": list(dataset.flat_categoricals),
+                "target_names": list(dataset.target_names),
+            },
+        )
+
+    # Attributes callers read off the training dataset.
+    @property
+    def time_idx(self) -> str:
+        return self.parameters["time_idx"]
+
+    @property
+    def group_ids(self) -> List[str]:
+        return list(self.parameters["group_ids"])
+
+    @property
+    def target(self):
+        return self.parameters["target"]
+
+    @property
+    def max_encoder_length(self) -> int:
+        return self.parameters["max_encoder_length"]
+
+    @property
+    def min_encoder_length(self) -> int:
+        return self.parameters["min_encoder_length"]
+
+    @property
+    def max_prediction_length(self) -> int:
+        return self.parameters["max_prediction_length"]
+
+    @property
+    def min_prediction_length(self) -> int:
+        return self.parameters["min_prediction_length"]
+
+    @property
+    def categorical_encoders(self) -> Dict[str, Any]:
+        """The fitted NaNLabelEncoders, keyed as pytorch_forecasting keys them."""
+        return self.parameters.get("categorical_encoders") or {}
+
+    @property
+    def reals(self) -> List[str]:
+        return list(self.derived.get("reals", []))
+
+    @property
+    def categoricals(self) -> List[str]:
+        return list(self.derived.get("categoricals", []))
+
+    @property
+    def flat_categoricals(self) -> List[str]:
+        return list(self.derived.get("flat_categoricals", []))
+
+    @property
+    def target_names(self) -> List[str]:
+        return list(self.derived.get("target_names", []))
+
+    def build(self, data: pd.DataFrame, mode: str = "eval") -> TimeSeriesDataSet:
+        """Rebuild a dataset over *data* with this template's configuration."""
+        return TimeSeriesDataSet.from_parameters(
+            self.parameters,
+            data,
+            stop_randomization=(mode in {"eval", "test", "predict"}),
+            predict=(mode == "predict"),
+        )
+
+
 def from_train_template(
-    train_dataset: TimeSeriesDataSet, 
-    data: pd.DataFrame, 
-    mode: str = "eval"
+    train_dataset,
+    data: pd.DataFrame,
+    mode: str = "eval",
 ) -> TimeSeriesDataSet:
-    """Create dataset from training template."""
+    """Create a dataset from a training template.
+
+    Accepts a live ``TimeSeriesDataSet`` or a loaded :class:`DatasetTemplate`.
+    """
+    if isinstance(train_dataset, DatasetTemplate):
+        return train_dataset.build(data, mode=mode)
+
     return TimeSeriesDataSet.from_dataset(
         train_dataset,
         data,
@@ -140,32 +242,56 @@ def from_train_template(
     )
 
 
+def _dataset_template_path(run_id: str) -> str:
+    return os.path.join(get_run_root(run_id), "final", "dataset_template.pt")
+
+
 def save_dataset_template(dataset: TimeSeriesDataSet, run_id: str) -> str:
-    """Save dataset template for later use."""
-    final_dir = os.path.join(get_run_root(run_id), "final")
-    os.makedirs(final_dir, exist_ok=True)
-    dataset_tpl_path = os.path.join(final_dir, "dataset_template.pt")
-    
+    """Save the training dataset's configuration for later phases."""
+    dataset_tpl_path = _dataset_template_path(run_id)
+    os.makedirs(os.path.dirname(dataset_tpl_path), exist_ok=True)
+
+    template = DatasetTemplate.from_dataset(dataset)
+    payload = {
+        "format": _TEMPLATE_FORMAT,
+        "parameters": template.parameters,
+        "derived": template.derived,
+    }
     try:
-        torch.save(dataset, dataset_tpl_path)
-        logging.info("Saved TFT dataset template to %s", dataset_tpl_path)
+        torch.save(payload, dataset_tpl_path)
+        logging.info(
+            "Saved TFT dataset template to %s (%.1f KiB)",
+            dataset_tpl_path, os.path.getsize(dataset_tpl_path) / 1024,
+        )
         return dataset_tpl_path
     except Exception as e:
         raise RuntimeError(f"Failed to save dataset template to {dataset_tpl_path}: {e}")
 
 
-def load_dataset_template(run_id: str) -> TimeSeriesDataSet:
-    """Load saved dataset template."""
-    final_dir = os.path.join(get_run_root(run_id), "final")
-    dataset_tpl_path = os.path.join(final_dir, "dataset_template.pt")
-    
+def load_dataset_template(run_id: str) -> DatasetTemplate:
+    """Load a run's dataset template, in either the current or legacy layout."""
+    dataset_tpl_path = _dataset_template_path(run_id)
+
     if not os.path.exists(dataset_tpl_path):
         raise FileNotFoundError(
             f"Dataset template not found at {dataset_tpl_path}. Run train_final_tft to generate it."
         )
-    
-    template = torch.load(dataset_tpl_path, map_location="cpu", weights_only=False)
-    return template
+
+    loaded = torch.load(dataset_tpl_path, map_location="cpu", weights_only=False)
+
+    if isinstance(loaded, dict) and "parameters" in loaded:
+        return DatasetTemplate(
+            parameters=loaded["parameters"], derived=loaded.get("derived", {})
+        )
+
+    if isinstance(loaded, TimeSeriesDataSet):
+        # Runs trained before the template stopped pickling the whole dataset.
+        logging.info("Read legacy pickled dataset template from %s", dataset_tpl_path)
+        return DatasetTemplate.from_dataset(loaded)
+
+    raise RuntimeError(
+        f"Unrecognised dataset template at {dataset_tpl_path}: got {type(loaded)}"
+    )
 
 
 def create_combined_dataset(
