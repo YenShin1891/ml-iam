@@ -2,8 +2,8 @@
 import os, logging, numpy as np, pandas as pd, shap, xgboost as xgb
 from typing import List, Optional, Dict
 from src.utils.utils import get_run_root
-from configs.data import NON_FEATURE_COLUMNS, OUTPUT_UNITS, CATEGORICAL_COLUMNS, REGION_CATEGORIES
-from src.data.preprocess import set_region_categories
+from configs.data import NON_FEATURE_COLUMNS, OUTPUT_UNITS, CATEGORICAL_COLUMNS
+from src.data.preprocess import encode_categorical_columns
 from configs.visualization import (
     DEFAULT_REGION,
     SHAP_FONT_SIZE,
@@ -72,24 +72,23 @@ def transform_outputs_to_former_inputs(run_id: str, shap_values: np.ndarray, tar
         json.dump(feature_renaming, json_file, indent=4)
     return input_only
 
-def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, model_prefix="", xlim_range: Optional[tuple] = None):
+def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, model_prefix="", xlim_range: Optional[tuple] = None, categories: Optional[Dict[str, list]] = None):
     n_display = SHAP_MAX_DISPLAY_EXCLUDE_TOP if exclude_top else SHAP_MAX_DISPLAY
     import matplotlib.pyplot as plt
     plt.rcParams.update({'font.size': SHAP_FONT_SIZE})
     num_targets = len(targets)
     fig, axes = make_grid(num_targets, base_figsize=SHAP_GRID_FIGSIZE)
     X_proc = X_test.copy()
-    cat_cols = [c for c in CATEGORICAL_COLUMNS if c in X_proc.columns]
-    for c in cat_cols:
-        if c == 'Region':
-            if not REGION_CATEGORIES:
-                set_region_categories(X_proc[c])
-            X_proc[c] = (
-                pd.Categorical(X_proc[c].astype(str), categories=REGION_CATEGORIES, ordered=True)
-                .codes
-            )
-        else:
-            X_proc[c] = X_proc[c].astype('category').cat.codes
+    # Feature values only drive the beeswarm colour axis.  They normally arrive
+    # already encoded and scaled, in which case re-encoding them against the
+    # label vocabulary would map every row to -1; only touch columns that are
+    # still labels.
+    label_cols = [
+        c for c in CATEGORICAL_COLUMNS
+        if c in X_proc.columns and not pd.api.types.is_numeric_dtype(X_proc[c])
+    ]
+    if label_cols:
+        X_proc = encode_categorical_columns(X_proc, label_cols, categories)
     X_values = X_proc.values.astype(np.float64)
 
     # Create directory for individual plots
@@ -173,6 +172,7 @@ def plot_xgb_shap(
     xlim_range: Optional[tuple] = None,
     region: Optional[str] = DEFAULT_REGION,
     index_region: Optional[pd.Series] = None,
+    categories: Optional[Dict[str, list]] = None,
 ):
     logging.info("Creating SHAP plots...")
     ckpt_path = os.path.join(get_run_root(run_id), "checkpoints", "final_best.json")
@@ -225,8 +225,8 @@ def plot_xgb_shap(
     get_shap_values(run_id, X_test)
     shap_values = np.load(os.path.join(get_run_root(run_id), "plots", "shap_values.npy"), allow_pickle=True)
     shap_values = transform_outputs_to_former_inputs(run_id, shap_values, targets, features)
-    draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, xlim_range=xlim_range)
-    draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=True, xlim_range=xlim_range)
+    draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, xlim_range=xlim_range, categories=categories)
+    draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=True, xlim_range=xlim_range, categories=categories)
 
 # Backward-compatible alias
 def plot_shap(run_id, X_test_with_index, features, targets, xlim_range: Optional[tuple] = None, region: Optional[str] = DEFAULT_REGION, index_region: Optional[pd.Series] = None):

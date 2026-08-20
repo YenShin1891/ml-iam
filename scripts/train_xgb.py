@@ -25,6 +25,7 @@ def derive_splits(data):
         x_scaler, y_scaler,
         train_groups, val_groups,
         obs_train, obs_val, obs_test,
+        categories,
     ) = prepare_data(prepared, targets, features)
 
     return {
@@ -46,6 +47,7 @@ def derive_splits(data):
         "obs_train": obs_train,
         "obs_val": obs_val,
         "obs_test": obs_test,
+        "categories": categories,
     }
 
 
@@ -132,6 +134,12 @@ def train_xgb(store):
     store.save_artifact("y_scaler.pkl", splits["y_scaler"])
     store.save_features(splits["features"], splits["targets"])
 
+    # Persist the category vocabularies so SHAP/inference encode with the same
+    # codes the model was trained on.
+    meta = store.load_train_meta() if store.has_train_meta() else {}
+    meta["xgb_categories"] = {k: list(v) for k, v in splits["categories"].items()}
+    store.save_train_meta(meta)
+
     logging.info("Final XGBoost training complete.")
     return best_params
 
@@ -191,4 +199,7 @@ def plot_xgb(store):
 
     plot_scatter(store.run_id, test_data, y_test, preds, targets, model_name="XGBoost")
     index_region = test_data['Region'] if isinstance(test_data, pd.DataFrame) and 'Region' in test_data.columns else None
-    plot_xgb_shap(store.run_id, X_test_with_index, features, targets, index_region=index_region)
+    plot_xgb_shap(
+        store.run_id, X_test_with_index, features, targets,
+        index_region=index_region, categories=splits["categories"],
+    )

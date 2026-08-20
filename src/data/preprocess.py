@@ -52,19 +52,63 @@ def split_data(
 
 
 
-def encode_categorical_columns(data, columns):
+def build_categorical_vocabularies(data, columns=None) -> dict:
+    """Build one stable category vocabulary per categorical column.
+
+    Call this on the *full* frame before splitting, then pass the result to
+    :func:`encode_categorical_columns` for each split.  Encoding each split
+    against its own vocabulary assigns different integer codes to the same
+    label whenever a split is missing a category.
+    """
+    if columns is None:
+        columns = CATEGORICAL_COLUMNS
+
+    vocabularies = {}
     for col in columns:
-        if col in data.columns:
-            if col == 'Region':
-                if not REGION_CATEGORIES:
-                    set_region_categories(data[col])
-                data[col] = (
-                    pd.Categorical(data[col].astype(str), categories=REGION_CATEGORIES, ordered=True)
-                    .codes
-                    .astype('float32')
-                )
-            else:
-                data[col] = data[col].astype('category').cat.codes
+        if col not in data.columns:
+            continue
+        if col == 'Region':
+            if not REGION_CATEGORIES:
+                set_region_categories(data[col])
+            vocabularies[col] = list(REGION_CATEGORIES)
+        else:
+            vocabularies[col] = sorted(set(data[col].astype(str)))
+    return vocabularies
+
+
+def encode_categorical_columns(data, columns, vocabularies=None):
+    """Encode categorical columns to integer codes.
+
+    *vocabularies* maps column name to an ordered category list (see
+    :func:`build_categorical_vocabularies`).  Columns without an entry fall
+    back to per-frame ``.cat.codes``, which is only safe when the frame holds
+    the whole dataset.
+    """
+    vocabularies = vocabularies or {}
+    for col in columns:
+        if col not in data.columns:
+            continue
+
+        categories = vocabularies.get(col)
+        if categories is None and col == 'Region':
+            if not REGION_CATEGORIES:
+                set_region_categories(data[col])
+            categories = REGION_CATEGORIES
+
+        if categories is None:
+            data[col] = data[col].astype('category').cat.codes
+            continue
+
+        codes = pd.Categorical(
+            data[col].astype(str), categories=list(categories), ordered=True
+        ).codes
+        n_unknown = int((codes == -1).sum())
+        if n_unknown:
+            logging.warning(
+                "Column '%s': %d value(s) outside the training vocabulary encoded as -1",
+                col, n_unknown,
+            )
+        data[col] = codes.astype('float32') if col == 'Region' else codes
     return data
 
 
@@ -257,6 +301,10 @@ def prepare_data(prepared, targets, features):
     obs_cols = observed_mask_columns(targets)
     has_obs = all(c in prepared.columns for c in obs_cols)
 
+    # One vocabulary for the whole dataset: encoding each split separately
+    # would give the same label different codes in train and test.
+    categories = build_categorical_vocabularies(prepared, CATEGORICAL_COLUMNS)
+
     train_data, val_data, test_data = split_data(prepared)
 
     X_train = train_data[features].copy()
@@ -279,9 +327,9 @@ def prepare_data(prepared, targets, features):
         obs_val = np.ones_like(y_val, dtype=np.float32)
         obs_test = np.ones_like(y_test, dtype=np.float32)
 
-    X_train = encode_categorical_columns(X_train, CATEGORICAL_COLUMNS)
-    X_val = encode_categorical_columns(X_val, CATEGORICAL_COLUMNS)
-    X_test = encode_categorical_columns(X_test, CATEGORICAL_COLUMNS)
+    X_train = encode_categorical_columns(X_train, CATEGORICAL_COLUMNS, categories)
+    X_val = encode_categorical_columns(X_val, CATEGORICAL_COLUMNS, categories)
+    X_test = encode_categorical_columns(X_test, CATEGORICAL_COLUMNS, categories)
 
     x_scaler = StandardScaler()
     X_train_scaled = x_scaler.fit_transform(X_train)
@@ -322,6 +370,7 @@ def prepare_data(prepared, targets, features):
         x_scaler, y_scaler,
         train_groups, val_groups,
         obs_train, obs_val, obs_test,
+        categories,
     )
 
 def load_and_process_data(version=None) -> pd.DataFrame:
