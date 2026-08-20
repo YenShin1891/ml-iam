@@ -24,28 +24,114 @@ from configs.data import (
     IMPUTE_IRREGULAR_INTERVALS,
 )
 
+SPLIT_NAMES = ("train", "val", "test")
+
+
+def observed_group_keys(data: pd.DataFrame) -> pd.DataFrame:
+    """The (Model, Scenario, Region) groups that carry any target observation.
+
+    This is the canonical group set for splitting.  Every prepare_features_*
+    function drops rows whose targets are all unobserved, so it is the set the
+    models actually see, and unlike a model's prepared frame it does not depend
+    on that model's own row filtering (lag history, resampling, and so on).
+    """
+    obs_cols = [c for c in observed_mask_columns(OUTPUT_VARIABLES) if c in data.columns]
+    targets = [c for c in OUTPUT_VARIABLES if c in data.columns]
+
+    if obs_cols:  # written before interpolation, so it marks real observations
+        keep = data[obs_cols].to_numpy(dtype=bool).any(axis=1)
+    elif targets:
+        keep = data[targets].notna().to_numpy().any(axis=1)
+    else:
+        keep = np.ones(len(data), dtype=bool)
+
+    return (
+        data.loc[keep, INDEX_COLUMNS]
+        .drop_duplicates()
+        .sort_values(INDEX_COLUMNS)
+        .reset_index(drop=True)
+    )
+
+
+def assign_group_splits(
+    data: pd.DataFrame,
+    test_size: float = 0.1,
+    val_size: float = 0.1,
+    seed: int = SPLIT_SEED,
+) -> pd.DataFrame:
+    """Assign every (Model, Scenario, Region) group to one split.
+
+    Derive this once per dataset, not per model.  Each model filters rows
+    differently, and shuffling a different group list produces a different
+    partition — not a subset of one — so deriving it per model would let a
+    group test for one model while training another.  The group set comes from
+    :func:`observed_group_keys` so it does not depend on any model's filtering.
+
+    Returns a frame of INDEX_COLUMNS plus a 'split' column.
+    """
+    keys = observed_group_keys(data)
+    n_groups = len(keys)
+    n_test = int(n_groups * test_size)
+    n_val = int(n_groups * val_size)
+    n_train = n_groups - n_test - n_val
+
+    # permutation() is shuffle() over arange, i.e. the same Fisher-Yates draws
+    # the previous implementation applied to its list of groups.
+    order = np.random.RandomState(seed).permutation(n_groups)
+    split = np.empty(n_groups, dtype=object)
+    split[order[:n_train]] = "train"
+    split[order[n_train:n_train + n_val]] = "val"
+    split[order[n_train + n_val:]] = "test"
+
+    keys["split"] = split
+    logging.info(
+        "Split assignment over %d groups: %s",
+        n_groups,
+        ", ".join(f"{name}={int((split == name).sum())}" for name in SPLIT_NAMES),
+    )
+    return keys
+
+
 def split_data(
     prepared: pd.DataFrame,
     test_size: float = 0.1,
     val_size: float = 0.1,
+    assignment: Optional[pd.DataFrame] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    groups = list(prepared.groupby(INDEX_COLUMNS))
-    n_groups = len(groups)
-    n_test_groups = int(n_groups * test_size)
-    n_val_groups = int(n_groups * val_size)
-    n_train_groups = n_groups - n_test_groups - n_val_groups
-    
-    rng = np.random.RandomState(SPLIT_SEED)
-    rng.shuffle(groups)
+    """Partition *prepared* by group into train/val/test.
 
-    train_groups = groups[:n_train_groups]
-    val_groups = groups[n_train_groups:n_train_groups + n_val_groups]
-    test_groups = groups[n_train_groups + n_val_groups:]
+    *assignment* is the shared per-group assignment (see assign_group_splits);
+    pass the run's, so every model is scored on the same test groups.  Without
+    one, the assignment is derived from *prepared* alone.
+    """
+    if assignment is None:
+        assignment = assign_group_splits(prepared, test_size, val_size)
 
-    train_data = pd.concat([group[1] for group in train_groups]).reset_index(drop=True)
-    val_data = pd.concat([group[1] for group in val_groups]).reset_index(drop=True)
-    test_data = pd.concat([group[1] for group in test_groups]).reset_index(drop=True)
-    
+    labels = prepared[INDEX_COLUMNS].merge(  # left merge preserves row order
+        assignment[list(INDEX_COLUMNS) + ["split"]], on=list(INDEX_COLUMNS), how="left"
+    )["split"]
+
+    unassigned = int(labels.isna().sum())
+    if unassigned:
+        missing = (
+            prepared.loc[labels.isna().values, INDEX_COLUMNS].drop_duplicates().shape[0]
+        )
+        logging.warning(
+            "%d rows in %d group(s) are absent from the split assignment; "
+            "treating them as train so they cannot leak into test.",
+            unassigned, missing,
+        )
+        labels = labels.fillna("train")
+
+    frames = tuple(
+        prepared[(labels == name).to_numpy()].reset_index(drop=True)
+        for name in SPLIT_NAMES
+    )
+    train_data, val_data, test_data = frames
+    for name, frame in zip(SPLIT_NAMES, frames):
+        if frame.empty:
+            logging.warning("Split '%s' is empty after model-specific filtering", name)
+
     logging.info(f"Train: {len(train_data)} rows, Val: {len(val_data)} rows, Test: {len(test_data)} rows")
 
     return train_data, val_data, test_data
@@ -330,7 +416,7 @@ def _fit_target_scaler(y_train, y_val, y_test, targets):
     return y_scaler, y_train_scaled, y_scaler.transform(y_val), y_scaler.transform(y_test)
 
 
-def prepare_data(prepared, targets, features, categories=None):
+def prepare_data(prepared, targets, features, categories=None, split_assignment=None):
     obs_cols = observed_mask_columns(targets)
     has_obs = all(c in prepared.columns for c in obs_cols)
 
@@ -342,7 +428,7 @@ def prepare_data(prepared, targets, features, categories=None):
     if categories is None:
         categories = build_categorical_vocabularies(prepared, CATEGORICAL_COLUMNS)
 
-    train_data, val_data, test_data = split_data(prepared)
+    train_data, val_data, test_data = split_data(prepared, assignment=split_assignment)
 
     X_train = train_data[features].copy()
     X_train_index_columns = train_data[[col for col in INDEX_COLUMNS if col not in features]].copy()

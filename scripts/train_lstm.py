@@ -48,6 +48,7 @@ def derive_splits(data, store=None):
         store.categories_for(data) if store is not None
         else build_categorical_vocabularies(data)
     )
+    split_assignment = store.splits_for(data) if store is not None else None
 
     prepared, features, targets = prepare_features_and_targets_sequence(data)
     prepared, features = add_missingness_indicators(prepared, features)
@@ -66,7 +67,7 @@ def derive_splits(data, store=None):
     categorical_features = [c for c in CATEGORICAL_COLUMNS if c in features]
     continuous_features = [f for f in features if f not in categorical_features]
 
-    train_data, val_data, test_data = split_data(prepared)
+    train_data, val_data, test_data = split_data(prepared, assignment=split_assignment)
     # Only impute continuous features (categoricals are already int codes, no NaN)
     train_data, val_data, test_data = impute_with_train_medians(
         train_data, val_data, test_data, continuous_features
@@ -94,6 +95,7 @@ def preprocess_lstm(store, dataset=None):
     data = load_and_process_data(version=dataset)
     store.save_processed_data(data)
     store.categories_for(data)
+    store.splits_for(data)
     return data
 
 

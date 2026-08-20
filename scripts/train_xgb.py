@@ -26,6 +26,7 @@ def derive_splits(data, store=None):
         store.categories_for(data) if store is not None
         else build_categorical_vocabularies(data)
     )
+    split_assignment = store.splits_for(data) if store is not None else None
     prepared, features, targets = prepare_features_and_targets(data, lag_required=True)
     (
         X_train, y_train, X_train_index_columns,
@@ -36,7 +37,10 @@ def derive_splits(data, store=None):
         train_groups, val_groups,
         obs_train, obs_val, obs_test,
         categories,
-    ) = prepare_data(prepared, targets, features, categories=categories)
+    ) = prepare_data(
+        prepared, targets, features,
+        categories=categories, split_assignment=split_assignment,
+    )
 
     return {
         "features": features,
@@ -68,6 +72,7 @@ def preprocess_xgb(store, dataset=None):
     data = load_and_process_data(version=dataset)
     store.save_processed_data(data)
     store.categories_for(data)
+    store.splits_for(data)
     return data
 
 

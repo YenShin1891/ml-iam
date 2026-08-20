@@ -26,8 +26,10 @@ def derive_splits(data, store=None, target_normalizer_mode=None):
     dataset_cfg = TFTDatasetConfig()
     context_length = max(0, dataset_cfg.target_offset)
 
+    split_assignment = None
     if store is not None:
         store.categories_for(data)
+        split_assignment = store.splits_for(data)
 
     prepared, features, targets = prepare_features_and_targets_tft(data)
     dataset_cfg.resolve_encoder_lengths()
@@ -37,7 +39,7 @@ def derive_splits(data, store=None, target_normalizer_mode=None):
             context_length,
         )
     prepared, features = add_missingness_indicators(prepared, features)
-    train_data, val_data, test_data = split_data(prepared)
+    train_data, val_data, test_data = split_data(prepared, assignment=split_assignment)
     train_data, val_data, test_data = impute_with_train_medians(
         train_data, val_data, test_data, features
     )
@@ -71,6 +73,7 @@ def preprocess_tft(store, dataset=None):
     data = load_and_process_data(version=dataset)
     store.save_processed_data(data)
     store.categories_for(data)
+    store.splits_for(data)
     return data
 
 

@@ -173,6 +173,85 @@ class RunStore:
         return legacy or None
 
     # ------------------------------------------------------------------
+    # Train/val/test assignment (parquet — one row per group)
+    # ------------------------------------------------------------------
+
+    def save_splits(self, assignment: pd.DataFrame) -> None:
+        path = self._artifacts_dir() / "splits.parquet"
+        assignment.to_parquet(path, index=False)
+        counts = assignment["split"].value_counts().to_dict()
+        logging.info("Saved split assignment (%d groups: %s) to %s", len(assignment), counts, path)
+
+    def load_splits(self) -> pd.DataFrame:
+        path = self._artifacts_dir() / "splits.parquet"
+        if not path.exists():
+            raise FileNotFoundError(f"No splits.parquet found at {path}.")
+        return pd.read_parquet(path)
+
+    def has_splits(self) -> bool:
+        return (self._artifacts_dir() / "splits.parquet").exists()
+
+    def splits_for(self, data: pd.DataFrame) -> pd.DataFrame:
+        """This run's group -> split assignment, computing it on first use.
+
+        Shared by every model in the run so their test sets are identical, and
+        persisted so a later phase cannot re-derive a different one.
+        """
+        from src.data.preprocess import assign_group_splits
+
+        if self.has_splits():
+            return self.load_splits()
+
+        assignment = self._legacy_splits(data)
+        if assignment is None:
+            assignment = assign_group_splits(data)
+        self.save_splits(assignment)
+        return assignment
+
+    def _legacy_splits(self, data: pd.DataFrame) -> Optional[pd.DataFrame]:
+        """Recover a pre-existing run's split from the test rows it saved.
+
+        Runs made before splits.parquet derived their split from each model's
+        own filtered frame.  Recomputing it here could move a group the run
+        trained on into test and quietly inflate its metrics, so pin the test
+        groups to the ones the run actually evaluated.  Train and val among the
+        remaining groups are reassigned, which is harmless: neither is scored.
+        """
+        from configs.data import INDEX_COLUMNS
+        from src.data.preprocess import assign_group_splits
+
+        if self.has_splits() or not self.has_test_data():
+            return None
+
+        try:
+            test_data, _ = self.load_test_data()
+        except Exception as e:  # noqa: BLE001
+            logging.warning("Could not read saved test data to recover the split: %s", e)
+            return None
+
+        if not all(col in test_data.columns for col in INDEX_COLUMNS):
+            return None
+
+        keys = data[INDEX_COLUMNS].drop_duplicates()
+        test_keys = test_data[INDEX_COLUMNS].drop_duplicates()
+        is_test = (
+            keys.merge(test_keys.assign(_test=True), on=list(INDEX_COLUMNS), how="left")["_test"]
+            .notna()
+            .to_numpy()
+        )
+
+        remaining = assign_group_splits(keys[~is_test], test_size=0.0, val_size=0.1)
+        assignment = pd.concat(
+            [keys[is_test].assign(split="test"), remaining], ignore_index=True
+        )
+        logging.warning(
+            "Run %s predates splits.parquet: recovered its %d test groups from the "
+            "saved test data and reassigned train/val over the rest.",
+            self.run_id, int(is_test.sum()),
+        )
+        return assignment.sort_values(list(INDEX_COLUMNS)).reset_index(drop=True)
+
+    # ------------------------------------------------------------------
     # Train metadata (JSON — LSTM encoded features, sequence_length, etc.)
     # ------------------------------------------------------------------
 
