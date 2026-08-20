@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -287,6 +288,7 @@ def _write_run_metadata(
         "cuda_visible_devices_resolved_by_phase": dict(cuda_by_phase_resolved),
         "two_window": cfg.two_window,
         "target_normalizer_mode": cfg.target_normalizer_mode,
+        "keep_partial_targets": cfg.keep_partial_targets,
         "note": cfg.note,
         "phases": list(cfg.phases),
     }

@@ -148,6 +148,54 @@ def _set_default_params(model, store):
         store.save_best_params(TFTDefaultParams().to_dict())
 
 
+_RESUMABLE_SETTINGS = ("keep_partial_targets", "target_normalizer_mode", "two_window", "dataset")
+
+
+def _load_resolved_config(run_id: str) -> dict:
+    """Read meta/run_config.resolved.json, written by train_from_config.py."""
+    import json
+
+    from src.utils.utils import get_run_root
+
+    path = Path(get_run_root(run_id)) / "meta" / "run_config.resolved.json"
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:  # noqa: BLE001
+        logging.warning("Could not read %s: %s", path, e)
+        return {}
+
+
+def _apply_run_settings(args) -> None:
+    """Fill unspecified settings from the run's own recorded config.
+
+    Each phase runs in a fresh process, so a phase resumed by hand
+    ("--resume test --run_id tft_91") would otherwise silently fall back to
+    whatever configs/data.py currently says and evaluate the run under
+    different settings than it was trained with.
+    """
+    resolved = _load_resolved_config(args.run_id)
+    if not resolved:
+        return
+
+    for name in _RESUMABLE_SETTINGS:
+        recorded = resolved.get(name)
+        current = getattr(args, name, None)
+        if recorded is None:
+            continue
+        if current is None or current is False:
+            if current != recorded:
+                logging.info("Using %s=%r recorded for run %s", name, recorded, args.run_id)
+                setattr(args, name, recorded)
+        elif current != recorded:
+            logging.warning(
+                "%s=%r on the command line overrides %r recorded for run %s",
+                name, current, recorded, args.run_id,
+            )
+
+
 def _assert_resume_run_exists(run_id: str) -> None:
     """Fail fast if resume is requested for a non-existent run directory."""
     from src.utils.utils import get_run_root
@@ -205,7 +253,10 @@ def main(argv=None):
     from src.utils.utils import setup_logging, get_next_run_id
     from src.utils.run_store import RunStore
 
-    # Override KEEP_PARTIAL_TARGETS if specified on CLI
+    if args.run_id:
+        _apply_run_settings(args)
+
+    # Override KEEP_PARTIAL_TARGETS if specified on CLI or recorded for the run
     if args.keep_partial_targets is not None:
         import configs.data as _data_cfg
         _data_cfg.KEEP_PARTIAL_TARGETS = args.keep_partial_targets
