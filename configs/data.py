@@ -119,3 +119,10 @@ POPULATION_COLUMN = "Population"
 # (original behaviour) so all models see complete target vectors — XGBoost
 # uses native multi-output regression with cross-target tree splits.
 KEEP_PARTIAL_TARGETS = True
+
+# When True, resample groups that have only 10- or 20-year intervals onto a
+# uniform 5-year grid by inserting intermediate rows with interpolated values.
+# Inserted rows get __observed = 0 so they are masked in loss and metrics,
+# just like other unobserved targets.  This is an alternative to relying on
+# DeltaYears to encode irregular spacing.
+IMPUTE_IRREGULAR_INTERVALS = True

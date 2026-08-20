@@ -21,6 +21,7 @@ from configs.data import (
     NORMALIZE_TARGETS_BY_POPULATION,
     POPULATION_COLUMN,
     KEEP_PARTIAL_TARGETS,
+    IMPUTE_IRREGULAR_INTERVALS,
 )
 
 def split_data(
@@ -424,6 +425,69 @@ def interpolate_targets(
     return data
 
 
+def resample_to_uniform_intervals(
+    data: pd.DataFrame,
+    group_cols: list,
+    output_variables: list,
+    interval: int = 5,
+) -> pd.DataFrame:
+    """Resample groups with >interval-year spacing onto a uniform grid.
+
+    For each (Model, Scenario, Region) group whose minimum year-to-year
+    difference exceeds *interval*, intermediate rows are inserted at every
+    *interval* years.  Numeric columns (targets and features) are linearly
+    interpolated; observation masks (``{var}__observed``) are set to 0 for
+    the inserted rows so they are masked in loss and metrics.
+    """
+    obs_cols = observed_mask_columns(output_variables)
+    groups: list = []
+    n_resampled = 0
+
+    for _key, grp in data.groupby(group_cols, sort=False):
+        grp = grp.sort_values("Year")
+        years = grp["Year"].values
+        diffs = np.diff(years)
+
+        if len(diffs) == 0 or diffs.min() <= interval:
+            groups.append(grp)
+            continue
+
+        n_resampled += 1
+        full_years = np.arange(years.min(), years.max() + 1, interval)
+
+        grp_indexed = grp.set_index("Year")
+        grp_reindexed = grp_indexed.reindex(full_years)
+
+        # Metadata / categorical columns are constant within group — fill.
+        fill_cols = set(group_cols) | {
+            c for c in NON_FEATURE_COLUMNS if c != "Year"
+        } | set(CATEGORICAL_COLUMNS)
+        for col in fill_cols:
+            if col in grp_reindexed.columns:
+                grp_reindexed[col] = grp_reindexed[col].ffill().bfill()
+
+        # Observation masks: new rows are unobserved.
+        for col in obs_cols:
+            if col in grp_reindexed.columns:
+                grp_reindexed[col] = grp_reindexed[col].fillna(0.0)
+
+        # Interpolate numeric columns (exclude __observed masks).
+        numeric_cols = grp_reindexed.select_dtypes(include=[np.number]).columns
+        interp_cols = [c for c in numeric_cols if not c.endswith("__observed")]
+        grp_reindexed[interp_cols] = grp_reindexed[interp_cols].interpolate(
+            method="index"
+        )
+
+        grp_reindexed = grp_reindexed.reset_index(names="Year")
+        groups.append(grp_reindexed)
+
+    result = pd.concat(groups, ignore_index=True)
+    logging.info(
+        "Resampled %d groups to uniform %d-year intervals", n_resampled, interval
+    )
+    return result
+
+
 def normalize_targets_by_population(
     data: pd.DataFrame,
     targets: list,
@@ -584,6 +648,9 @@ def prepare_features_and_targets_sequence(
 
     if INTERPOLATE_TARGETS:
         data = interpolate_targets(data, INDEX_COLUMNS, OUTPUT_VARIABLES)
+
+    if IMPUTE_IRREGULAR_INTERVALS:
+        data = resample_to_uniform_intervals(data, INDEX_COLUMNS, OUTPUT_VARIABLES)
 
     prepared = data.copy()
     prepared['Year'] = prepared['Year'].astype(int)
