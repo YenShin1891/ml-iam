@@ -24,6 +24,11 @@ DEFAULT_REGION: str = "R10"
 # when creating SHAP plots. This keeps SHAP computation tractable.
 SHAP_MAX_SCENARIO_GROUPS: int = 300
 
+# Number of background samples GradientExplainer draws per explained row for
+# the neural-network models. Higher is more accurate and proportionally slower;
+# cost is n_rows * this * n_targets forward/backward passes.
+SHAP_GRADIENT_NSAMPLES: int = 100
+
 
 # -----------------------------
 # SHAP plot rendering defaults
