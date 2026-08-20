@@ -377,26 +377,56 @@ def display_selected_plot():
             img = load_plot_image(plot_info['plot_path'])
             st.image(img, caption="Temporal trajectories", use_container_width=True)
 
+def _code_maps(store):
+    """code -> label maps for this run, from the vocabularies it saved.
+
+    The vocabularies have to come from the run: this process never runs
+    preprocessing, so the configs.data globals are empty here and mapping
+    through them turns every region into NaN.
+    """
+    maps = {}
+    if store.has_categories():
+        for column, labels in store.load_categories().items():
+            maps[column] = {i: label for i, label in enumerate(labels)}
+
+    # Runs made before categories.json existed.
+    if 'Model_Family' not in maps and store.has_train_meta():
+        legacy = store.load_train_meta().get('lstm_model_family_categories')
+        if legacy:
+            maps['Model_Family'] = {i: label for i, label in enumerate(legacy)}
+    if 'Region' not in maps and REGION_CODE_TO_LABEL:
+        maps['Region'] = dict(REGION_CODE_TO_LABEL)
+
+    return maps
+
+
 def _decode_categorical_columns(store, session_state):
     """Decode integer-encoded Region/Model_Family columns back to string labels."""
-    # Build mappings
-    region_map = REGION_CODE_TO_LABEL
-    model_family_map = None
-    if store.has_train_meta():
-        meta = store.load_train_meta()
-        categories = meta.get('lstm_model_family_categories')
-        if categories:
-            model_family_map = {i: name for i, name in enumerate(categories)}
+    maps = _code_maps(store)
+    if not maps:
+        logging.warning(
+            "Run %s has no saved category vocabularies; integer-coded columns "
+            "cannot be decoded. Re-run the preprocess phase to write them.",
+            store.run_id,
+        )
+        return
 
     # Decode in all DataFrames that the dashboard uses for filtering
     for attr in ('test_data', 'horizon_df'):
         df = getattr(session_state, attr, None)
         if df is None:
             continue
-        if 'Region' in df.columns and pd.api.types.is_numeric_dtype(df['Region']):
-            df['Region'] = df['Region'].map(region_map)
-        if 'Model_Family' in df.columns and pd.api.types.is_numeric_dtype(df['Model_Family']) and model_family_map:
-            df['Model_Family'] = df['Model_Family'].map(model_family_map)
+        for column, code_map in maps.items():
+            if column not in df.columns or not pd.api.types.is_numeric_dtype(df[column]):
+                continue
+            decoded = df[column].map(code_map)
+            unmapped = int(decoded.isna().sum() - df[column].isna().sum())
+            if unmapped > 0:
+                logging.warning(
+                    "%s: %d/%d %s codes fell outside the saved vocabulary",
+                    attr, unmapped, len(df), column,
+                )
+            df[column] = decoded
 
 
 def setup_session_and_logging(run_id):

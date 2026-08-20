@@ -50,7 +50,6 @@ from configs.data import (
     NON_FEATURE_COLUMNS,
     N_LAG_FEATURES,
     OUTPUT_VARIABLES,
-    REGION_CATEGORIES,
     POPULATION_COLUMN,
 )
 from src.data.preprocess import denormalize_by_population
@@ -104,6 +103,13 @@ def load_artifacts(run_id: str):
     with open(os.path.join(run_root, "artifacts", "features.json")) as f:
         feat_meta = json.load(f)
 
+    if not store.has_categories():
+        raise RuntimeError(
+            f"Run {run_id} has no artifacts/categories.json, so the integer codes it "
+            "was trained with cannot be reproduced. Re-run its preprocess phase."
+        )
+    categories = store.load_categories()
+
     if model_type == "xgb":
         from src.trainers.xgb_trainer import load_final_xgb_model
 
@@ -114,6 +120,7 @@ def load_artifacts(run_id: str):
             "y_scaler": store.load_artifact("y_scaler.pkl"),
             "features": feat_meta["features"],
             "targets": feat_meta["targets"],
+            "categories": categories,
         }
 
     if model_type == "lstm":
@@ -140,7 +147,8 @@ def load_artifacts(run_id: str):
             "targets": feat_meta["targets"],
             "non_numeric_features": meta.get("lstm_non_numeric_features", []),
             "categorical_features": meta.get("lstm_categorical_features", []),
-            "model_family_categories": meta.get("lstm_model_family_categories"),
+            "model_family_categories": categories.get("Model_Family"),
+            "categories": categories,
             "sequence_length": meta.get("lstm_sequence_length", config.sequence_length),
             "target_offset": meta.get("lstm_target_offset", config.target_offset),
             "config": config,
@@ -163,28 +171,45 @@ def load_artifacts(run_id: str):
     raise ValueError(f"Unsupported model type: {model_type}")
 
 
-def encode_categorical_columns(data: pd.DataFrame, model_family_categories=None) -> pd.DataFrame:
-    """Encode categoricals the same way as preprocess.py.
+def encode_categorical_columns(data: pd.DataFrame, categories: dict) -> pd.DataFrame:
+    """Encode categoricals with the vocabularies the run was trained on.
 
-    Args:
-        model_family_categories: Fixed category list from training. When provided,
-            ensures Model_Family codes match the training vocabulary.
+    *categories* comes from the run's categories.json.  Deriving codes here
+    instead would number them from whatever this one region happens to
+    contain, which has nothing to do with what the model learned.
     """
     data = data.copy()
-    if "Region" in data.columns:
-        data["Region"] = (
-            pd.Categorical(data["Region"].astype(str), categories=REGION_CATEGORIES, ordered=True)
-            .codes.astype("int64")
-        )
-    if "Model_Family" in data.columns:
-        if model_family_categories is not None:
-            data["Model_Family"] = (
-                pd.Categorical(data["Model_Family"].astype(str), categories=model_family_categories)
-                .codes.astype("int64")
+    for column in ("Region", "Model_Family"):
+        if column not in data.columns:
+            continue
+        labels = categories.get(column)
+        if not labels:
+            raise ValueError(
+                f"Run has no saved vocabulary for '{column}', so its codes cannot be "
+                "reproduced. Re-run the preprocess phase to write artifacts/categories.json."
             )
-        else:
-            data["Model_Family"] = data["Model_Family"].astype("category").cat.codes.astype("int64")
+        codes = pd.Categorical(
+            data[column].astype(str), categories=list(labels), ordered=True
+        ).codes.astype("int64")
+        unknown = sorted(set(data.loc[codes == -1, column].astype(str)))
+        if unknown:
+            raise ValueError(
+                f"{column} value(s) {unknown} were not in the training vocabulary; "
+                "the model has no code for them."
+            )
+        data[column] = codes
     return data
+
+
+def _decode_categorical_columns(frame: pd.DataFrame, categories: dict) -> pd.DataFrame:
+    """Inverse of encode_categorical_columns, for output and plots."""
+    for column in ("Region", "Model_Family"):
+        labels = categories.get(column)
+        if not labels or column not in frame.columns:
+            continue
+        if pd.api.types.is_integer_dtype(frame[column]):
+            frame[column] = frame[column].map(dict(enumerate(labels)))
+    return frame
 
 
 # ── Step 1: Region summary ────────────────────────────────────────────────
@@ -449,10 +474,10 @@ def add_lag_features(data: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
-def prepare_for_xgb(data: pd.DataFrame, features: list, targets: list, x_scaler):
+def prepare_for_xgb(data: pd.DataFrame, features: list, targets: list, x_scaler, categories: dict):
     """Encode, scale, and format data for XGB inference."""
     X = data[features].copy()
-    X = encode_categorical_columns(X)
+    X = encode_categorical_columns(X, categories)
 
     X_scaled = pd.DataFrame(x_scaler.transform(X), columns=X.columns, index=X.index)
 
@@ -486,7 +511,7 @@ def run_inference(model_type: str, artifacts: dict, synthetic: pd.DataFrame,
 
 def _infer_xgb(artifacts, synthetic, features, targets):
     X_test, y_test, test_data = prepare_for_xgb(
-        synthetic, features, targets, artifacts["x_scaler"],
+        synthetic, features, targets, artifacts["x_scaler"], artifacts["categories"],
     )
     n_groups = X_test.groupby(INDEX_COLUMNS).ngroups
     logger.info("Running XGB autoregressive inference on %d groups...", n_groups)
@@ -516,7 +541,7 @@ def _infer_lstm(artifacts, synthetic, features, targets):
     data, features_with_missing = add_missingness_indicators(data, features)
 
     # Encode categoricals (use training vocab so codes match embeddings)
-    data = encode_categorical_columns(data, model_family_categories=artifacts.get("model_family_categories"))
+    data = encode_categorical_columns(data, artifacts["categories"])
 
     # Impute NaN with scaler mean (≈ train median) so scaled values are ~0 (neutral).
     # During training, NaN was imputed with train medians before fitting scaler_X.
@@ -839,12 +864,6 @@ def main():
     cache = store.load_processed_data()
     logger.info("Loaded processed data: %d rows", len(cache))
 
-    if model_type == "lstm" and not artifacts.get("model_family_categories"):
-        raise RuntimeError(
-            f"Run {run_id} was trained before Model_Family category vocab was saved. "
-            "Retrain to persist lstm_model_family_categories in train_meta."
-        )
-
     # ── Step 1: Print region summary ──
     print_region_summary(cache, region, model_families=args.model_family)
 
@@ -941,16 +960,10 @@ def main():
     results, preds_original = run_inference(model_type, artifacts, synthetic, features, targets)
 
     # Decode integer-encoded categoricals back to string labels for output/plots
-    mf_cats = artifacts.get("model_family_categories")
-    if mf_cats and pd.api.types.is_integer_dtype(results["Model_Family"]):
-        code_to_name = {i: name for i, name in enumerate(mf_cats)}
-        results["Model_Family"] = results["Model_Family"].map(code_to_name)
-    if mf_cats and not ground_truth.empty and pd.api.types.is_integer_dtype(ground_truth["Model_Family"]):
-        ground_truth["Model_Family"] = ground_truth["Model_Family"].map(code_to_name)
-    if pd.api.types.is_integer_dtype(results["Region"]):
-        results["Region"] = results["Region"].map({i: r for i, r in enumerate(REGION_CATEGORIES)})
-    if not ground_truth.empty and pd.api.types.is_integer_dtype(ground_truth["Region"]):
-        ground_truth["Region"] = ground_truth["Region"].map({i: r for i, r in enumerate(REGION_CATEGORIES)})
+    categories = artifacts["categories"]
+    results = _decode_categorical_columns(results, categories)
+    if not ground_truth.empty:
+        ground_truth = _decode_categorical_columns(ground_truth, categories)
 
     # Save predictions
     results_path = os.path.join(output_dir, "predictions.csv")
