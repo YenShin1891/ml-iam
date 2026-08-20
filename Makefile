@@ -3,7 +3,7 @@
 SHELL := /bin/bash
 .ONESHELL:
 
-.PHONY: process-data train train-bg stop status dashboard
+.PHONY: process-data train train-bg stop status dashboard unit-test
 
 # Allow overrides via environment variables (resolved at recipe time under conda)
 RAW_DIR ?=
@@ -109,6 +109,17 @@ status:
 		fi; \
 	done; \
 	if [ "$$found" = 0 ]; then echo "  (none)"; fi
+
+
+# ----------------------
+# Unit tests
+# ----------------------
+
+# Fast, data-free regression tests (no GPU, no dataset required)
+unit-test:
+	source "$(CONDA_SH)"
+	conda activate "$(CONDA_ENV)"
+	python -m pytest tests -q
 
 
 # ----------------------
