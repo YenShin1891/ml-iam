@@ -67,13 +67,46 @@ def build_categorical_vocabularies(data, columns=None) -> dict:
     for col in columns:
         if col not in data.columns:
             continue
-        if col == 'Region':
-            if not REGION_CATEGORIES:
-                set_region_categories(data[col])
-            vocabularies[col] = list(REGION_CATEGORIES)
-        else:
-            vocabularies[col] = sorted(set(data[col].astype(str)))
+        vocabularies[col] = sorted(set(data[col].astype(str)))
+
+    if 'Region' in vocabularies and not REGION_CATEGORIES:
+        # Keep the legacy module global in step for code that still reads it.
+        set_region_categories(data['Region'])
     return vocabularies
+
+
+def resolve_categorical_vocabularies(data, persisted=None, columns=None) -> dict:
+    """Reconcile the vocabularies a run was encoded with against *data*.
+
+    *persisted* is what the run saved earlier (see RunStore.categories_for).
+    Saved categories keep their positions so codes never shift; labels that
+    only appear in *data* are appended, which is the only safe direction — an
+    already-trained model has no embedding row for them, but shifting existing
+    codes would silently remap every region.
+    """
+    derived = build_categorical_vocabularies(data, columns)
+    if not persisted:
+        return derived
+
+    resolved = {}
+    for col, values in derived.items():
+        saved = list(persisted.get(col) or [])
+        if not saved:
+            resolved[col] = values
+            continue
+        unseen = [v for v in values if v not in set(saved)]
+        if unseen:
+            logging.warning(
+                "Column '%s': %d label(s) absent from the run's saved vocabulary, "
+                "appended after the known ones: %s",
+                col, len(unseen), unseen[:5],
+            )
+        resolved[col] = saved + unseen
+
+    # Keep any column the current data no longer has, so old codes still decode.
+    for col, values in persisted.items():
+        resolved.setdefault(col, list(values))
+    return resolved
 
 
 def encode_categorical_columns(data, columns, vocabularies=None):
@@ -297,13 +330,17 @@ def _fit_target_scaler(y_train, y_val, y_test, targets):
     return y_scaler, y_train_scaled, y_scaler.transform(y_val), y_scaler.transform(y_test)
 
 
-def prepare_data(prepared, targets, features):
+def prepare_data(prepared, targets, features, categories=None):
     obs_cols = observed_mask_columns(targets)
     has_obs = all(c in prepared.columns for c in obs_cols)
 
-    # One vocabulary for the whole dataset: encoding each split separately
-    # would give the same label different codes in train and test.
-    categories = build_categorical_vocabularies(prepared, CATEGORICAL_COLUMNS)
+    # One vocabulary for every split: encoding each separately would give the
+    # same label different codes in train and test.  *categories* should come
+    # from the run (RunStore.categories_for) so the codes also match the other
+    # models and survive into the dashboard; deriving them from `prepared`
+    # alone only sees the rows that survived lag filtering.
+    if categories is None:
+        categories = build_categorical_vocabularies(prepared, CATEGORICAL_COLUMNS)
 
     train_data, val_data, test_data = split_data(prepared)
 

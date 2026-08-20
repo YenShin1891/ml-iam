@@ -7,10 +7,13 @@ All heavy imports are lazy to avoid pulling in unnecessary dependencies.
 import logging
 
 
-def derive_splits(data, target_normalizer_mode=None):
+def derive_splits(data, store=None, target_normalizer_mode=None):
     """From cached processed_data, derive all TFT splits. Takes seconds.
 
     Returns the ephemeral dict that phase functions and trainers expect.
+    *store* supplies the run's category vocabularies; TFT encodes categoricals
+    with its own NaNLabelEncoders, so these are recorded for the dashboard and
+    inference rather than used for encoding here.
     """
     from configs.models.tft import TFTDatasetConfig
     from src.data.preprocess import (
@@ -22,6 +25,9 @@ def derive_splits(data, target_normalizer_mode=None):
 
     dataset_cfg = TFTDatasetConfig()
     context_length = max(0, dataset_cfg.target_offset)
+
+    if store is not None:
+        store.categories_for(data)
 
     prepared, features, targets = prepare_features_and_targets_tft(data)
     dataset_cfg.resolve_encoder_lengths()
@@ -64,6 +70,7 @@ def preprocess_tft(store, dataset=None):
 
     data = load_and_process_data(version=dataset)
     store.save_processed_data(data)
+    store.categories_for(data)
     return data
 
 
@@ -71,7 +78,7 @@ def search_tft(store, target_normalizer_mode=None):
     """Run hyperparameter search and save best_params."""
     logging.info("Starting hyperparameter search for TFT...")
     data = store.load_processed_data()
-    splits = derive_splits(data, target_normalizer_mode=target_normalizer_mode)
+    splits = derive_splits(data, store, target_normalizer_mode=target_normalizer_mode)
 
     from src.trainers.tft_dataset import build_datasets
 
@@ -118,7 +125,7 @@ def train_tft(store, target_normalizer_mode=None):
         logging.info("Starting final TFT training...")
 
     data = store.load_processed_data()
-    splits = derive_splits(data, target_normalizer_mode=target_normalizer_mode)
+    splits = derive_splits(data, store, target_normalizer_mode=target_normalizer_mode)
 
     best_params = store.load_best_params()
 
@@ -144,7 +151,7 @@ def train_tft(store, target_normalizer_mode=None):
 def test_tft(store, use_two_window=False):
     """Make predictions using trained TFT model."""
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
     session_state = dict(splits)
 
     if use_two_window:
@@ -178,7 +185,7 @@ def plot_tft(store):
 
     logging.info("Plotting TFT predictions...")
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
     pred_bundle = store.load_predictions()
     preds = pred_bundle["preds"]
     targets = splits["targets"]

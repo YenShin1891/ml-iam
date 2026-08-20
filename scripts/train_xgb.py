@@ -7,15 +7,25 @@ All heavy imports are lazy to avoid pulling in unnecessary dependencies.
 import logging
 
 
-def derive_splits(data):
+def derive_splits(data, store=None):
     """From cached processed_data, derive all XGB splits. Takes seconds.
 
     Returns the ephemeral dict that phase functions and trainers expect.
+    *store* supplies the run's category vocabularies so codes stay identical
+    across phases and models.
     """
     import numpy as np
     import pandas as pd
-    from src.data.preprocess import prepare_data, prepare_features_and_targets
+    from src.data.preprocess import (
+        build_categorical_vocabularies,
+        prepare_data,
+        prepare_features_and_targets,
+    )
 
+    categories = (
+        store.categories_for(data) if store is not None
+        else build_categorical_vocabularies(data)
+    )
     prepared, features, targets = prepare_features_and_targets(data, lag_required=True)
     (
         X_train, y_train, X_train_index_columns,
@@ -26,7 +36,7 @@ def derive_splits(data):
         train_groups, val_groups,
         obs_train, obs_val, obs_test,
         categories,
-    ) = prepare_data(prepared, targets, features)
+    ) = prepare_data(prepared, targets, features, categories=categories)
 
     return {
         "features": features,
@@ -57,6 +67,7 @@ def preprocess_xgb(store, dataset=None):
 
     data = load_and_process_data(version=dataset)
     store.save_processed_data(data)
+    store.categories_for(data)
     return data
 
 
@@ -66,7 +77,7 @@ def search_xgb(store):
 
     logging.info("Starting hyperparameter search for XGBoost...")
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
 
     from src.trainers.xgb_trainer import hyperparameter_search
 
@@ -103,7 +114,7 @@ def train_xgb(store):
 
     logging.info("Starting final XGBoost training...")
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
 
     best_params = store.load_best_params()
 
@@ -134,12 +145,6 @@ def train_xgb(store):
     store.save_artifact("y_scaler.pkl", splits["y_scaler"])
     store.save_features(splits["features"], splits["targets"])
 
-    # Persist the category vocabularies so SHAP/inference encode with the same
-    # codes the model was trained on.
-    meta = store.load_train_meta() if store.has_train_meta() else {}
-    meta["xgb_categories"] = {k: list(v) for k, v in splits["categories"].items()}
-    store.save_train_meta(meta)
-
     logging.info("Final XGBoost training complete.")
     return best_params
 
@@ -148,7 +153,7 @@ def test_xgb(store):
     """Test XGBoost model autoregressively."""
     logging.info("Testing the model...")
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
 
     X_test_with_index = splits["X_test_with_index"]
     y_test_scaled = splits["y_test"]
@@ -186,7 +191,7 @@ def plot_xgb(store):
     from src.visualization import plot_scatter, plot_xgb_shap
 
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
     pred_bundle = store.load_predictions()
     preds = pred_bundle["preds"]
 

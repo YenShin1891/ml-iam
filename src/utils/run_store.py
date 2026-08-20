@@ -106,6 +106,73 @@ class RunStore:
         return data["features"], data["targets"]
 
     # ------------------------------------------------------------------
+    # Category vocabularies (JSON — the integer codes the models were fit with)
+    # ------------------------------------------------------------------
+
+    def save_categories(self, categories: Dict[str, List[str]]) -> None:
+        path = self._artifacts_dir() / "categories.json"
+        payload = {col: list(values) for col, values in categories.items()}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        logging.info(
+            "Saved category vocabularies to %s (%s)",
+            path,
+            ", ".join(f"{col}={len(v)}" for col, v in payload.items()) or "empty",
+        )
+
+    def load_categories(self) -> Dict[str, List[str]]:
+        path = self._artifacts_dir() / "categories.json"
+        if not path.exists():
+            raise FileNotFoundError(f"No categories.json found at {path}.")
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def has_categories(self) -> bool:
+        return (self._artifacts_dir() / "categories.json").exists()
+
+    def categories_for(self, data: pd.DataFrame) -> Dict[str, List[str]]:
+        """The vocabularies this run encodes with, saving them on first use.
+
+        Codes have to stay identical across phases, models and processes: the
+        dashboard and the inference script decode with them long after training.
+        Runs made before categories.json existed derive it from their cached
+        data on the next phase.
+        """
+        from src.data.preprocess import resolve_categorical_vocabularies
+
+        persisted = (
+            self.load_categories() if self.has_categories()
+            else self._legacy_categories()
+        )
+        categories = resolve_categorical_vocabularies(data, persisted)
+        if categories != persisted:
+            self.save_categories(categories)
+        return categories
+
+    def _legacy_categories(self) -> Optional[Dict[str, List[str]]]:
+        """Vocabularies from runs that predate categories.json.
+
+        A trained model's embedding rows are indexed by the codes it saw, so a
+        resumed phase has to keep using them rather than renumber from the
+        current data.
+        """
+        if not self.has_train_meta():
+            return None
+
+        meta = self.load_train_meta()
+        legacy = dict(meta.get("xgb_categories") or {})
+        model_families = meta.get("lstm_model_family_categories")
+        if model_families:
+            legacy.setdefault("Model_Family", list(model_families))
+
+        if legacy:
+            logging.info(
+                "Seeding category vocabularies for run %s from train_meta: %s",
+                self.run_id, ", ".join(sorted(legacy)),
+            )
+        return legacy or None
+
+    # ------------------------------------------------------------------
     # Train metadata (JSON — LSTM encoded features, sequence_length, etc.)
     # ------------------------------------------------------------------
 

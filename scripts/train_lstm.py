@@ -27,45 +27,40 @@ def _default_best_params_from_config() -> dict:
     }
 
 
-def derive_splits(data):
+def derive_splits(data, store=None):
     """From cached processed_data, derive all LSTM splits. Takes seconds.
 
     Returns the ephemeral dict that phase functions and trainers expect.
+    *store* supplies the run's category vocabularies so codes stay identical
+    across phases and models.
     """
-    import pandas as pd
     from src.data.preprocess import (
-        set_region_categories,
+        build_categorical_vocabularies,
         add_missingness_indicators,
+        encode_categorical_columns,
         impute_with_train_medians,
         prepare_features_and_targets_sequence,
         split_data,
     )
-    from configs.data import CATEGORICAL_COLUMNS, REGION_CATEGORIES
+    from configs.data import CATEGORICAL_COLUMNS
 
-    # Ensure REGION_CATEGORIES is populated (empty when loading from cache)
-    if not REGION_CATEGORIES and 'Region' in data.columns:
-        set_region_categories(data['Region'])
+    categories = (
+        store.categories_for(data) if store is not None
+        else build_categorical_vocabularies(data)
+    )
 
     prepared, features, targets = prepare_features_and_targets_sequence(data)
     prepared, features = add_missingness_indicators(prepared, features)
 
-    # Encode categoricals as integer codes
-    num_model_families = None
-    num_regions = None
-    model_family_categories = None
+    # Encode categoricals as integer codes against the run's vocabulary; the
+    # embedding sizes must cover every code, not just the ones present here.
+    prepared = encode_categorical_columns(prepared, CATEGORICAL_COLUMNS, categories)
     for col in CATEGORICAL_COLUMNS:
-        if col not in prepared.columns:
-            continue
-        if col == "Region":
-            cat = pd.Categorical(prepared[col].astype(str), categories=REGION_CATEGORIES, ordered=True)
-            prepared[col] = cat.codes.astype("int64")
-            num_regions = len(REGION_CATEGORIES)
-        else:
-            cat = prepared[col].astype("category")
-            prepared[col] = cat.cat.codes.astype("int64")
-            if col == "Model_Family":
-                num_model_families = len(cat.cat.categories)
-                model_family_categories = list(cat.cat.categories)
+        if col in prepared.columns:
+            prepared[col] = prepared[col].astype("int64")
+    num_regions = len(categories.get("Region", [])) or None
+    model_family_categories = categories.get("Model_Family")
+    num_model_families = len(model_family_categories) if model_family_categories else None
 
     # Separate categorical features from continuous features
     categorical_features = [c for c in CATEGORICAL_COLUMNS if c in features]
@@ -84,6 +79,7 @@ def derive_splits(data):
         "num_model_families": num_model_families,
         "num_regions": num_regions,
         "model_family_categories": model_family_categories,
+        "categories": categories,
         "targets": targets,
         "train_data": train_data,
         "val_data": val_data,
@@ -97,6 +93,7 @@ def preprocess_lstm(store, dataset=None):
 
     data = load_and_process_data(version=dataset)
     store.save_processed_data(data)
+    store.categories_for(data)
     return data
 
 
@@ -104,7 +101,7 @@ def search_lstm(store):
     """Run hyperparameter search and save best_params."""
     logging.info("Starting hyperparameter search for LSTM...")
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
 
     from src.trainers.lstm_trainer import hyperparameter_search_lstm
 
@@ -144,7 +141,7 @@ def train_lstm(store):
 
     logging.info("Starting final LSTM training...")
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
 
     best_params = store.load_best_params()
 
@@ -231,7 +228,7 @@ def test_lstm(store):
 
     logging.info("Testing LSTM model...")
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
     session_state = _build_predict_state(store, splits)
 
     preds = _predict_lstm(session_state, store.run_id)
@@ -258,7 +255,7 @@ def plot_lstm(store):
 
     logging.info("Plotting LSTM predictions...")
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
     pred_bundle = store.load_predictions()
     preds = pred_bundle["preds"]
     targets = splits["targets"]
