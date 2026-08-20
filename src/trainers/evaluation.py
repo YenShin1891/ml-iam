@@ -13,8 +13,6 @@ import numpy as np
 import pandas as pd
 import concurrent.futures
 from tqdm import tqdm
-import xgboost as xgb
-from xgboost import DMatrix
 
 from typing import Optional
 
@@ -228,19 +226,11 @@ def test_xgb_autoregressively(
     if model is None:
         if run_id is None:
             raise ValueError("Either provide a preloaded `model` or a valid `run_id` to load from disk.")
-        ckpt_path = os.path.join(get_run_root(run_id), "checkpoints", "final_best.json")
-        # Try per-target models first (final_best_0.json, ...), fall back to
-        # single multi-output model for backward compatibility.
         from configs.data import OUTPUT_VARIABLES
-        stem, ext = os.path.splitext(ckpt_path)
-        if os.path.exists(f"{stem}_0{ext}"):
-            from src.trainers.xgb_trainer import PerTargetXGBRegressor
-            n_targets = y_test.shape[1] if y_test.ndim > 1 else 1
-            targets = OUTPUT_VARIABLES[:n_targets]
-            model = PerTargetXGBRegressor.load_model(ckpt_path, targets)
-        else:
-            model = xgb.XGBRegressor()
-            model.load_model(ckpt_path)
+        from src.trainers.xgb_trainer import load_final_xgb_model
+
+        n_targets = y_test.shape[1] if y_test.ndim > 1 else 1
+        model = load_final_xgb_model(run_id, OUTPUT_VARIABLES[:n_targets])
 
     # Get feature column names
     feature_columns = [col for col in X_test_with_index.columns if col not in NON_FEATURE_COLUMNS]

@@ -41,7 +41,6 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter, MaxNLocator
 import numpy as np
 import pandas as pd
-import xgboost as xgb
 
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -106,8 +105,9 @@ def load_artifacts(run_id: str):
         feat_meta = json.load(f)
 
     if model_type == "xgb":
-        model = xgb.XGBRegressor()
-        model.load_model(os.path.join(run_root, "checkpoints", "final_best.json"))
+        from src.trainers.xgb_trainer import load_final_xgb_model
+
+        model = load_final_xgb_model(run_id, feat_meta["targets"])
         return model_type, {
             "model": model,
             "x_scaler": store.load_artifact("x_scaler.pkl"),

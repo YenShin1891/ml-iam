@@ -95,6 +95,58 @@ class PerTargetXGBRegressor:
         return obj
 
 
+def final_model_path(run_id: str) -> str:
+    """Path of a run's final model (the per-target files add an ``_{i}`` suffix)."""
+    return os.path.join(get_run_root(run_id), "checkpoints", FINAL_MODEL_FILENAME)
+
+
+def count_final_target_models(run_id: str) -> int:
+    """How many ``final_best_{i}.json`` files the run wrote (0 if none)."""
+    stem, ext = os.path.splitext(final_model_path(run_id))
+    n = 0
+    while os.path.exists(f"{stem}_{n}{ext}"):
+        n += 1
+    return n
+
+
+def has_final_xgb_model(run_id: str) -> bool:
+    """True when either model layout is present on disk."""
+    return count_final_target_models(run_id) > 0 or os.path.exists(final_model_path(run_id))
+
+
+def load_final_xgb_model(run_id: str, targets: Optional[List[str]] = None):
+    """Load a run's final model in whichever layout it was saved.
+
+    KEEP_PARTIAL_TARGETS writes one booster per target as ``final_best_{i}.json``;
+    otherwise a single multi-output ``final_best.json`` is written.  Every caller
+    should come through here — checking only for ``final_best.json`` silently
+    skips per-target runs.
+    """
+    path = final_model_path(run_id)
+    n_target_models = count_final_target_models(run_id)
+
+    if n_target_models:
+        if targets is None:
+            from configs.data import OUTPUT_VARIABLES
+            targets = OUTPUT_VARIABLES
+        if len(targets) != n_target_models:
+            logging.warning(
+                "Run %s has %d per-target models but %d targets were requested; "
+                "using the first %d.",
+                run_id, n_target_models, len(targets), n_target_models,
+            )
+        return PerTargetXGBRegressor.load_model(path, list(targets)[:n_target_models])
+
+    if os.path.exists(path):
+        model = XGBRegressor()
+        model.load_model(path)
+        return model
+
+    raise FileNotFoundError(
+        f"No final XGBoost model for run {run_id}: expected {path} or {path[:-5]}_0.json"
+    )
+
+
 def group_k_fold_split(groups: np.array, n_splits: int, shuffle: bool = True, random_state: int = 42):
     """
     Create k-fold splits ensuring each group appears exactly once in test set across all folds.

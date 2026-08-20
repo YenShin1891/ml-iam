@@ -1,5 +1,5 @@
 # XGBoost SHAP plotting (migrated from utils.plot_shap_xgb)
-import os, logging, numpy as np, pandas as pd, shap, xgboost as xgb
+import os, logging, numpy as np, pandas as pd, shap
 from typing import List, Optional, Dict
 from src.utils.utils import get_run_root
 from configs.data import NON_FEATURE_COLUMNS, OUTPUT_UNITS, CATEGORICAL_COLUMNS
@@ -25,17 +25,32 @@ __all__ = ['get_shap_values','transform_outputs_to_former_inputs','draw_shap_plo
 
 # Original content (verbatim, minimal edits only for path):
 
-def get_shap_values(run_id, X_test: pd.DataFrame):
+def get_shap_values(run_id, X_test: pd.DataFrame, targets: Optional[List[str]] = None):
+    from src.trainers.xgb_trainer import load_final_xgb_model
+
     logging.info("Loading XGBoost model...")
-    model = xgb.XGBRegressor()
-    model.load_model(os.path.join(get_run_root(run_id), "checkpoints", "final_best.json"))
+    model = load_final_xgb_model(run_id, targets)
     logging.info("Creating SHAP explainer...")
-    explainer = shap.TreeExplainer(model, approximate=True)
-    logging.info("Calculating SHAP values...")
-    shap_values = explainer.shap_values(X_test)
+
+    per_target_models = getattr(model, "models", None)
+    if per_target_models is not None:
+        # One booster per target: explain each separately and stack to the
+        # (rows, features, targets) layout the multi-output explainer returns.
+        logging.info("Calculating SHAP values for %d per-target models...", len(per_target_models))
+        shap_values = np.stack(
+            [
+                shap.TreeExplainer(m, approximate=True).shap_values(X_test)
+                for m in per_target_models
+            ],
+            axis=-1,
+        )
+    else:
+        logging.info("Calculating SHAP values...")
+        shap_values = shap.TreeExplainer(model, approximate=True).shap_values(X_test)
+
     os.makedirs(os.path.join(get_run_root(run_id), "plots"), exist_ok=True)
     np.save(os.path.join(get_run_root(run_id), "plots", "shap_values.npy"), shap_values)
-    logging.info("SHAP values saved to shap_values.npy")
+    logging.info("SHAP values saved to shap_values.npy: shape %s", np.shape(shap_values))
 
 def transform_outputs_to_former_inputs(run_id: str, shap_values: np.ndarray, targets: List[str], features: List[str]) -> np.ndarray:
     import pandas as pd, json
@@ -174,10 +189,14 @@ def plot_xgb_shap(
     index_region: Optional[pd.Series] = None,
     categories: Optional[Dict[str, list]] = None,
 ):
+    from src.trainers.xgb_trainer import has_final_xgb_model
+
     logging.info("Creating SHAP plots...")
-    ckpt_path = os.path.join(get_run_root(run_id), "checkpoints", "final_best.json")
-    if not os.path.exists(ckpt_path):
-        logging.warning("Skipping SHAP plots: model checkpoint not found at %s", ckpt_path)
+    if not has_final_xgb_model(run_id):
+        logging.warning(
+            "Skipping SHAP plots: no final model found under %s",
+            os.path.join(get_run_root(run_id), "checkpoints"),
+        )
         return
     # Optional region filter (robust, supports prefix matching like "R10" -> "R10*").
     # If index_region is provided, it is treated as the raw Region labels aligned to rows.
@@ -222,7 +241,7 @@ def plot_xgb_shap(
         used_groups,
         ",".join(group_cols) if group_cols else "<none>",
     )
-    get_shap_values(run_id, X_test)
+    get_shap_values(run_id, X_test, targets=targets)
     shap_values = np.load(os.path.join(get_run_root(run_id), "plots", "shap_values.npy"), allow_pickle=True)
     shap_values = transform_outputs_to_former_inputs(run_id, shap_values, targets, features)
     draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, xlim_range=xlim_range, categories=categories)
