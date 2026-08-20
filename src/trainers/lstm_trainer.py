@@ -103,7 +103,7 @@ class LSTMDataset(Dataset):
         categorical_features: Optional[List[str]] = None,
     ):
         from configs.data import INDEX_COLUMNS
-        from src.data.preprocess import observed_mask_columns
+        from src.data.preprocess import observed_mask_columns, sanitize_target_scaler
         self.sequence_length = sequence_length
         self.target_offset = target_offset
         self.mask_value = mask_value
@@ -126,8 +126,11 @@ class LSTMDataset(Dataset):
         # Extract continuous features and targets
         X_cont = data[continuous_features].copy() if continuous_features else pd.DataFrame(index=data.index)
         y = data[targets].values.copy()
-        # Fill NaN targets with 0 for scaling (mask handles loss weighting)
-        y = np.where(np.isnan(y), 0.0, y)
+        # Hide unobserved targets from the scaler: StandardScaler ignores NaN
+        # when fitting, so its statistics describe real observations only.
+        # The scaled array is zero-filled afterwards and the loss masks those
+        # elements out via `target_obs`.
+        y = np.where(self._obs_mask.astype(bool), y, np.nan)
 
         # Handle NaN values in continuous features
         X_cont_filled = X_cont.fillna(mask_value).astype(np.float32)
@@ -152,16 +155,20 @@ class LSTMDataset(Dataset):
         if continuous_features:
             if fit_scalers:
                 self.X_cont_scaled = scaler_X.fit_transform(X_cont_filled)
-                self.y_scaled = scaler_y.fit_transform(y)
             else:
                 self.X_cont_scaled = scaler_X.transform(X_cont_filled)
-                self.y_scaled = scaler_y.transform(y)
         else:
             self.X_cont_scaled = np.empty((len(data), 0), dtype=np.float32)
-            if fit_scalers:
-                self.y_scaled = scaler_y.fit_transform(y)
-            else:
+
+        if fit_scalers:
+            self.y_scaled = scaler_y.fit_transform(y)
+            if sanitize_target_scaler(scaler_y, targets):
                 self.y_scaled = scaler_y.transform(y)
+        else:
+            self.y_scaled = scaler_y.transform(y)
+        # Unobserved elements are NaN after scaling; zero them so the tensors
+        # stay finite (the loss ignores them through `target_obs`).
+        self.y_scaled = np.nan_to_num(self.y_scaled, nan=0.0)
 
         self.X_cat = X_cat
         self.scaler_X = scaler_X

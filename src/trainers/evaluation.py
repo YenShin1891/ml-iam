@@ -271,8 +271,15 @@ def test_xgb_autoregressively(
                 full_preds[pos, :] = preds_target
 
     if not disable_progress:
-        mse = mean_squared_error(y_test, full_preds)
-        logging.info(f"Root Mean Squared Error: {np.sqrt(mse)}")
+        # y_test carries NaN at unobserved targets; score the observed ones.
+        finite = np.isfinite(np.asarray(y_test, dtype=float)) & np.isfinite(full_preds)
+        if finite.any():
+            mse = mean_squared_error(
+                np.asarray(y_test, dtype=float)[finite], full_preds[finite]
+            )
+            logging.info(f"Root Mean Squared Error: {np.sqrt(mse)}")
+        else:
+            logging.warning("No observed test targets to score")
 
     return full_preds
 

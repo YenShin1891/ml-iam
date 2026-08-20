@@ -421,12 +421,17 @@ def _train_single_fold(
         ar_dt = time.perf_counter() - ar_t0
         logging.info("Fold %d standard validation done in %.2fs", fold_num, ar_dt)
     
-    # Calculate RMSE on observed elements only
+    # Calculate RMSE on observed elements only.  Unobserved targets are NaN
+    # (see prepare_data), so fall back to finiteness when no mask is supplied.
+    y_flat = np.asarray(y_val, dtype=float).flatten()
+    pred_flat = np.asarray(predictions, dtype=float).flatten()
     if obs_val is not None:
-        mask = obs_val.astype(bool).flatten()
-        rmse = np.sqrt(mean_squared_error(y_val.flatten()[mask], predictions.flatten()[mask]))
+        mask = obs_val.astype(bool).flatten() & np.isfinite(y_flat)
     else:
-        rmse = np.sqrt(mean_squared_error(y_val, predictions))
+        mask = np.isfinite(y_flat)
+    if not mask.any():
+        raise ValueError("No observed validation targets to score this fold on")
+    rmse = np.sqrt(mean_squared_error(y_flat[mask], pred_flat[mask]))
     logging.info(f"Fold {fold_num} RMSE: {rmse:.4f}")
     
     try:

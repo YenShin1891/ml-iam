@@ -201,6 +201,58 @@ def impute_with_train_medians(
     return train_df, val_df, test_df
 
 
+def _keep_partial_targets() -> bool:
+    """Read KEEP_PARTIAL_TARGETS at call time.
+
+    scripts/train.py overrides ``configs.data.KEEP_PARTIAL_TARGETS`` at
+    runtime, so the module-level import captured above can be stale.
+    """
+    import configs.data as data_config
+
+    return bool(getattr(data_config, "KEEP_PARTIAL_TARGETS", KEEP_PARTIAL_TARGETS))
+
+
+def sanitize_target_scaler(scaler, targets=None) -> bool:
+    """Repair NaN statistics left by targets with no observed training value.
+
+    ``StandardScaler`` ignores NaN when fitting, so a target that is entirely
+    unobserved yields ``mean_``/``scale_`` of NaN, which would turn every
+    prediction for that target into NaN.  Fall back to the identity transform.
+    Returns True when anything was repaired.
+    """
+    degenerate = ~np.isfinite(scaler.mean_) | ~np.isfinite(scaler.scale_)
+    if not degenerate.any():
+        return False
+
+    names = (
+        [targets[i] for i in np.flatnonzero(degenerate)]
+        if targets is not None else np.flatnonzero(degenerate).tolist()
+    )
+    logging.warning(
+        "Targets with no observed training values, standardised as identity: %s", names
+    )
+    scaler.mean_[degenerate] = 0.0
+    scaler.scale_[degenerate] = 1.0
+    if getattr(scaler, "var_", None) is not None:
+        scaler.var_[degenerate] = 1.0
+    return True
+
+
+def _fit_target_scaler(y_train, y_val, y_test, targets):
+    """Standardise targets, ignoring NaN (unobserved) elements.
+
+    ``StandardScaler`` computes its statistics from the non-NaN entries and
+    propagates NaN through ``transform``, so unobserved elements stay NaN for
+    downstream per-target masking instead of being trained on as real zeros.
+    """
+    y_scaler = StandardScaler()
+    y_train_scaled = y_scaler.fit_transform(y_train)
+    if sanitize_target_scaler(y_scaler, targets):
+        y_train_scaled = y_scaler.transform(y_train)
+
+    return y_scaler, y_train_scaled, y_scaler.transform(y_val), y_scaler.transform(y_test)
+
+
 def prepare_data(prepared, targets, features):
     obs_cols = observed_mask_columns(targets)
     has_obs = all(c in prepared.columns for c in obs_cols)
@@ -240,14 +292,19 @@ def prepare_data(prepared, targets, features):
     X_val_scaled = pd.DataFrame(X_val_scaled, columns=X_val.columns, index=X_val.index)
     X_test_scaled = pd.DataFrame(X_test_scaled, columns=X_test.columns, index=X_test.index)
 
-    y_scaler = StandardScaler()
-    # Fit scaler on observed values only; fill NaN with 0 for transform
-    y_train_filled = np.where(np.isnan(y_train), 0.0, y_train)
-    y_val_filled = np.where(np.isnan(y_val), 0.0, y_val)
-    y_test_filled = np.where(np.isnan(y_test), 0.0, y_test)
-    y_train_scaled = y_scaler.fit_transform(y_train_filled)
-    y_val_scaled = y_scaler.transform(y_val_filled)
-    y_test_scaled = y_scaler.transform(y_test_filled)
+    # Blank out unobserved targets so they are neither fitted on nor trained
+    # on.  Interpolated values count as unobserved: the LSTM/TFT masked losses
+    # already skip them, and XGBoost has to agree or the models see different
+    # supervision.  With KEEP_PARTIAL_TARGETS=False every row is complete and
+    # the consumer (multi-output XGBRegressor) cannot take NaN, so leave it.
+    if _keep_partial_targets():
+        y_train = np.where(obs_train.astype(bool), y_train, np.nan)
+        y_val = np.where(obs_val.astype(bool), y_val, np.nan)
+        y_test = np.where(obs_test.astype(bool), y_test, np.nan)
+
+    y_scaler, y_train_scaled, y_val_scaled, y_test_scaled = _fit_target_scaler(
+        y_train, y_val, y_test, targets
+    )
 
     X_test_with_index_scaled = pd.concat(
         [X_test_scaled.reset_index(drop=True), X_test_index_columns.reset_index(drop=True)],
