@@ -35,67 +35,55 @@ def _seed(model: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Model-specific dispatch helpers (lazy imports)
+# Phase dispatch
 # ---------------------------------------------------------------------------
 
-def _preprocess(model, store, dataset):
-    if model == "xgb":
-        from scripts.train_xgb import preprocess_xgb
-        return preprocess_xgb(store, dataset=dataset)
-    elif model == "lstm":
-        from scripts.train_lstm import preprocess_lstm
-        return preprocess_lstm(store, dataset=dataset)
-    elif model == "tft":
-        from scripts.train_tft import preprocess_tft
-        return preprocess_tft(store, dataset=dataset)
+def preprocess(store, dataset=None):
+    """Cache the processed dataset and the assignments derived from it.
+
+    The only phase with no model-specific behaviour: all three models read the
+    same parquet, category vocabularies and split assignment.
+    """
+    from src.data.preprocess import load_and_process_data
+
+    data = load_and_process_data(version=dataset)
+    store.save_processed_data(data)
+    store.categories_for(data)
+    store.splits_for(data)
+    return data
 
 
-def _search(model, store, target_normalizer_mode=None):
-    if model == "xgb":
-        from scripts.train_xgb import search_xgb
-        return search_xgb(store)
-    elif model == "lstm":
-        from scripts.train_lstm import search_lstm
-        return search_lstm(store)
-    elif model == "tft":
-        from scripts.train_tft import search_tft
-        return search_tft(store, target_normalizer_mode=target_normalizer_mode)
+def _phase_function(model: str, phase: str):
+    """Resolve e.g. ("tft", "search") to scripts.train_tft.search_tft.
+
+    Imported here rather than at module scope so the XGBoost path never loads
+    the deep-learning stack.
+    """
+    from importlib import import_module
+
+    if phase == "preprocess":
+        return preprocess
+    return getattr(import_module(f"scripts.train_{model}"), f"{phase}_{model}")
 
 
-def _train(model, store, target_normalizer_mode=None):
-    if model == "xgb":
-        from scripts.train_xgb import train_xgb
-        return train_xgb(store)
-    elif model == "lstm":
-        from scripts.train_lstm import train_lstm
-        return train_lstm(store)
-    elif model == "tft":
-        from scripts.train_tft import train_tft
-        return train_tft(store, target_normalizer_mode=target_normalizer_mode)
+def run_phase(model: str, phase: str, store, **options):
+    """Run one phase, passing only the options its model accepts.
 
+    TFT alone takes target_normalizer_mode and two-window prediction, so the
+    options are filtered here instead of every phase function growing
+    parameters it ignores.
+    """
+    import inspect
 
-def _test(model, store, two_window=False):
-    if model == "xgb":
-        from scripts.train_xgb import test_xgb
-        return test_xgb(store)
-    elif model == "lstm":
-        from scripts.train_lstm import test_lstm
-        return test_lstm(store)
-    elif model == "tft":
-        from scripts.train_tft import test_tft
-        return test_tft(store, use_two_window=two_window)
+    function = _phase_function(model, phase)
+    accepted = inspect.signature(function).parameters
+    supported = {name: value for name, value in options.items() if name in accepted}
 
+    for name in options:
+        if name not in accepted and options[name] not in (None, False):
+            logging.info("%s %s does not support %s; ignoring it", model, phase, name)
 
-def _plot(model, store):
-    if model == "xgb":
-        from scripts.train_xgb import plot_xgb
-        return plot_xgb(store)
-    elif model == "lstm":
-        from scripts.train_lstm import plot_lstm
-        return plot_lstm(store)
-    elif model == "tft":
-        from scripts.train_tft import plot_tft
-        return plot_tft(store)
+    return function(store, **supported)
 
 
 def _set_default_params(model, store):
@@ -159,6 +147,16 @@ def _apply_run_settings(args) -> None:
                 "%s=%r on the command line overrides %r recorded for run %s",
                 name, current, recorded, args.run_id,
             )
+
+
+def _run(model: str, phase: str, store, args):
+    """Run a phase with the options this invocation parsed."""
+    return run_phase(
+        model, phase, store,
+        dataset=args.dataset,
+        target_normalizer_mode=args.target_normalizer_mode,
+        use_two_window=args.two_window,
+    )
 
 
 def _assert_resume_run_exists(run_id: str) -> None:
@@ -245,11 +243,8 @@ def main(argv=None):
         if args.note:
             logging.info("Run note: %s", args.note)
 
-        _preprocess(model, store, args.dataset)
-        _search(model, store, target_normalizer_mode=args.target_normalizer_mode)
-        _train(model, store, target_normalizer_mode=args.target_normalizer_mode)
-        _test(model, store, two_window=args.two_window)
-        _plot(model, store)
+        for phase in _ALLOWED_PHASES:
+            _run(model, phase, store, args)
         return
 
     # Resume mode: single phase
@@ -263,24 +258,16 @@ def main(argv=None):
     if args.note:
         logging.info("Run note: %s", args.note)
 
-    # Dispatch
-    phase = args.resume
-    if phase == "preprocess":
-        _preprocess(model, store, args.dataset)
+    # TFT plots from saved predictions, so make sure they exist.
+    if args.resume == "plot" and model == "tft" and not store.has_predictions():
+        logging.info("Predictions not found; rerunning test step before plotting.")
+        _run(model, "test", store, args)
+
+    _run(model, args.resume, store, args)
+
+    if args.resume == "preprocess":
         _set_default_params(model, store)
         logging.info("Preprocessing complete.")
-    elif phase == "search":
-        _search(model, store, target_normalizer_mode=args.target_normalizer_mode)
-    elif phase == "train":
-        _train(model, store, target_normalizer_mode=args.target_normalizer_mode)
-    elif phase == "test":
-        _test(model, store, two_window=args.two_window)
-    elif phase == "plot":
-        # TFT auto-runs test if predictions are missing
-        if model == "tft" and not store.has_predictions():
-            logging.info("Predictions not found; rerunning test step before plotting.")
-            _test(model, store, two_window=args.two_window)
-        _plot(model, store)
 
 
 if __name__ == "__main__":

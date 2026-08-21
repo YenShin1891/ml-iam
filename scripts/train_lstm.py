@@ -90,17 +90,6 @@ def derive_splits(data, store=None):
     }
 
 
-def preprocess_lstm(store, dataset=None):
-    """Run the expensive melt+pivot and cache as parquet."""
-    from src.data.preprocess import load_and_process_data
-
-    data = load_and_process_data(version=dataset)
-    store.save_processed_data(data)
-    store.categories_for(data)
-    store.splits_for(data)
-    return data
-
-
 def search_lstm(store):
     """Run hyperparameter search and save best_params."""
     logging.info("Starting hyperparameter search for LSTM...")
