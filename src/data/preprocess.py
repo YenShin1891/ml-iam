@@ -5,7 +5,7 @@ import logging
 from typing import List, Optional, Tuple, cast
 from sklearn.preprocessing import StandardScaler
 
-from configs.paths import DATA_PATH, RESULTS_PATH
+from configs.paths import DATA_PATH
 from configs.data import (
     DEFAULT_DATASET,
     N_LAG_FEATURES,
@@ -548,22 +548,6 @@ def load_and_process_data(version=None) -> pd.DataFrame:
         logging.warning("MAX_YEAR invalid; skipping year cutoff filter.")
     non_year_cols = [c for c in all_cols if c not in year_cols]
 
-    # Optional: save a heatmap of missing values over variables x years
-    try:
-        import seaborn as sns  # type: ignore
-        import matplotlib.pyplot as plt  # type: ignore
-        heatmap_df = processed_series.set_index('Variable')[year_cols]
-        plt.figure(figsize=(20, 80))
-        sns.heatmap(heatmap_df.isnull(), cbar=False, cmap='viridis')
-        plt.title('Missing Values Heatmap')
-        plt.xlabel('Year')
-        plt.ylabel('Variable')
-        os.makedirs(RESULTS_PATH, exist_ok=True)
-        plt.savefig(os.path.join(RESULTS_PATH, 'missing_values_heatmap.png'), bbox_inches='tight')
-        plt.close()
-    except Exception:
-        logging.warning("Could not generate missing values heatmap; continuing.")
-
     year_melted = processed_series.melt(
         id_vars=non_year_cols, value_vars=year_cols, var_name='Year', value_name='value'
     )
@@ -915,39 +899,3 @@ def prepare_features_and_targets_sequence(
 
     return prepared, features, targets
 
-
-def prepare_features_and_targets_tft(data: pd.DataFrame, **_kwargs) -> tuple:
-    """Legacy wrapper for TFT. Delegates to prepare_features_and_targets_sequence."""
-    logging.info("Preparing features and targets for TFT (using sequence preprocessing)...")
-    return prepare_features_and_targets_sequence(data)
-
-
-def remove_rows_with_missing_outputs(X, y, X2=None):
-    """
-    Remove rows with missing outputs from the dataset.
-    Args:
-        X (pd.DataFrame or np.ndarray): Feature DataFrame.
-        y (pd.DataFrame or np.ndarray): Target DataFrame or array.
-        X2 (pd.DataFrame or np.ndarray, optional): Additional feature DataFrame.
-    """
-    mask = ~np.isnan(y).any(axis=1)
-    logging.info(f"Removing {(~mask).sum()} rows with missing outputs")
-
-    if isinstance(X, pd.DataFrame):
-        X = X[mask].reset_index(drop=True)
-    else:
-        X = X[mask]
-
-    if isinstance(y, pd.DataFrame):
-        y = y[mask].reset_index(drop=True)
-    else:
-        y = y[mask]
-
-    if X2 is not None:
-        if isinstance(X2, pd.DataFrame):
-            X2 = X2[mask].reset_index(drop=True)
-        else:
-            X2 = X2[mask]
-        return X, y, X2
-
-    return X, y

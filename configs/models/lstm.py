@@ -1,31 +1,11 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Union, Optional
 
-from configs.data import CATEGORICAL_COLUMNS
 
 
 @dataclass
 class LSTMDatasetConfig:
     """Configuration for LSTM dataset feature separation."""
-
-    def build_feature_groups(self, features: List[str]) -> Dict[str, List[str]]:
-        """All features are exogenous u_t for LSTM with teacher forcing."""
-        # ALL features are exogenous - observed at current timestep
-        exogenous = ["Year", "DeltaYears"]
-        indicator_cols = [f for f in features if f.endswith("_is_missing")]
-        economic_indicators = [
-            f for f in features
-            if f not in (CATEGORICAL_COLUMNS + exogenous + indicator_cols)
-        ]
-
-        # ALL features are part of u_t (exogenous input)
-        all_exogenous = exogenous + indicator_cols + economic_indicators
-
-        return {
-            "exogenous_features": all_exogenous,  # u_t - ALL features from dataset
-            "static_categoricals": CATEGORICAL_COLUMNS,  # Static info
-        }
-
 
 @dataclass
 class LSTMTrainerConfig:

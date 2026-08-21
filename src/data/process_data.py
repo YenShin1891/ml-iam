@@ -556,7 +556,7 @@ def main() -> None:
     # Use OUTPUT_VARIABLES from unified config
     output_vars = dp.OUTPUT_VARIABLES
 
-    out_csv = run_pipeline(
+    run_pipeline(
         raw_dir=args.raw_dir,
         data_dir=args.data_dir,
         results_dir=args.results_dir,

@@ -533,7 +533,7 @@ def _infer_lstm(artifacts, synthetic, features, targets):
     from torch.utils.data import DataLoader
     from lightning.pytorch import Trainer
     from src.trainers.lstm_trainer import LSTMDataset
-    from src.data.preprocess import add_missingness_indicators, impute_with_train_medians
+    from src.data.preprocess import add_missingness_indicators
 
     data = synthetic.copy()
 
@@ -698,7 +698,6 @@ def _infer_tft(artifacts, synthetic, features, targets):
         trainer_kwargs={"accelerator": "gpu", "devices": 1},
     )
 
-    from pytorch_forecasting.models.base._base_model import Prediction as _PFPrediction
     outputs = returns.output
     if isinstance(outputs, list):
         preds_tensor = outputs[0] if len(outputs) == 1 else torch.stack(outputs, dim=-1)

@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 
 @dataclass
@@ -30,12 +30,6 @@ class TFTSearchSpace:
         "dropout": [0.1, 0.2, 0.3],
         "learning_rate": [0.001, 0.01],
     })
-    param_pairs: List[Tuple[str, str]] = field(default_factory=lambda: [    
-        # not actually used
-        # add implementation if you want smaller search space 
-        ("hidden_size", "dropout"),
-        ("lstm_layers", "learning_rate"),
-    ])
     search_iter_n: int = 50
     # Two-stage search: cheap exploration, then deeper rerank on top candidates.
     stage1_max_epochs: int = 25

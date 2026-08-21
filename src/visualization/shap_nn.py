@@ -1,7 +1,6 @@
 # Neural network SHAP plotting (migrated from utils.plot_shap_nn)
 import os, logging, numpy as np, pandas as pd, shap, torch
-from typing import List, Optional, Dict, Iterable, Set
-from configs.paths import RESULTS_PATH
+from typing import List, Optional, Iterable, Set
 from src.utils.utils import get_run_root
 from configs.data import CATEGORICAL_COLUMNS, NON_FEATURE_COLUMNS, OUTPUT_UNITS
 from configs.visualization import DEFAULT_REGION, SHAP_GRADIENT_NSAMPLES
@@ -162,7 +161,7 @@ def get_lstm_shap_values(run_id, X_test: pd.DataFrame, sequence_length=1):
     continuous_features = [f for f in features if f not in categorical_features]
 
     def preprocess_features(data, continuous_features, categorical_features, scaler_X, mask_value=-1.0):
-        from configs.data import CATEGORICAL_COLUMNS, REGION_CATEGORIES
+        from configs.data import REGION_CATEGORIES
         from src.data.preprocess import set_region_categories
         # Scale continuous features only
         X_cont = data[continuous_features].copy() if continuous_features else pd.DataFrame(index=data.index)
@@ -659,7 +658,7 @@ def plot_tft_shap(
 
     # For TFT, we need to keep grouping columns for sequence filtering
     # Keep all columns that TFT needs: features, targets, group_ids, categorical columns, time_idx
-    from configs.data import CATEGORICAL_COLUMNS, INDEX_COLUMNS
+    from configs.data import CATEGORICAL_COLUMNS
     from configs.models.tft import TFTDatasetConfig
 
     config = TFTDatasetConfig()

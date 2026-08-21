@@ -14,8 +14,6 @@ def derive_splits(data, store=None):
     *store* supplies the run's category vocabularies so codes stay identical
     across phases and models.
     """
-    import numpy as np
-    import pandas as pd
     from src.data.preprocess import (
         build_categorical_vocabularies,
         prepare_data,
@@ -127,20 +125,14 @@ def train_xgb(store):
 
     X_train = splits["X_train"]
     y_train = splits["y_train"]
-    X_train_index_columns = splits["X_train_index_columns"]
     train_groups = splits["train_groups"]
     X_val = splits["X_val"]
     y_val = splits["y_val"]
-    X_val_index_columns = splits["X_val_index_columns"]
     val_groups = splits["val_groups"]
     targets = splits["targets"]
 
-    X_train_with_index = pd.concat([X_train, X_train_index_columns], axis=1)
-    X_val_with_index = pd.concat([X_val, X_val_index_columns], axis=1)
-
     X_combined = pd.concat([X_train, X_val], axis=0, ignore_index=True)
     y_combined = np.concatenate([y_train, y_val], axis=0)
-    X_combined_with_index = pd.concat([X_train_with_index, X_val_with_index], axis=0, ignore_index=True)
     combined_groups = np.concatenate([train_groups, val_groups], axis=0)
 
     train_and_save_model(X_combined, y_combined, combined_groups, targets, best_params, store.run_id)

@@ -9,7 +9,6 @@ import pandas as pd
 import torch
 from pytorch_forecasting import TimeSeriesDataSet
 
-from configs.paths import RESULTS_PATH
 from src.utils.utils import get_run_root
 # TFTDatasetConfig imported locally in functions to match original pattern
 from configs.data import CATEGORICAL_COLUMNS, INDEX_COLUMNS
@@ -292,16 +291,6 @@ def load_dataset_template(run_id: str) -> DatasetTemplate:
     raise RuntimeError(
         f"Unrecognised dataset template at {dataset_tpl_path}: got {type(loaded)}"
     )
-
-
-def create_combined_dataset(
-    train_dataset: TimeSeriesDataSet,
-    train_df: pd.DataFrame,
-    val_df: pd.DataFrame
-) -> TimeSeriesDataSet:
-    """Create combined train+val dataset."""
-    combined_df = pd.concat([train_df, val_df], axis=0, ignore_index=True)
-    return TimeSeriesDataSet.from_dataset(train_dataset, combined_df)
 
 
 def create_dataset_with_custom_encoders(

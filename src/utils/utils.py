@@ -145,15 +145,3 @@ def get_next_run_id(model_type: str) -> str:
         except FileExistsError:
             candidate += 1
 
-
-def load_model(run_id):
-    run_dir = os.path.join(get_run_root(run_id), "checkpoints")
-    file_path = os.path.join(run_dir, "final_best.json")
-    try:
-        import xgboost as xgb
-        model = xgb.XGBRegressor()
-        model.load_model(file_path)
-        return model
-    except Exception as e:
-        logging.error("Error loading model: %s", str(e))
-        return None

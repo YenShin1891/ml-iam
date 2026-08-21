@@ -1,5 +1,6 @@
 # Shared plotting helpers (migrated from utils.plot_helpers)
-import io, math
+import io
+import numpy as np
 from typing import Callable, List, Optional, Sequence, Tuple
 import logging
 import matplotlib.pyplot as plt

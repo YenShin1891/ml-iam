@@ -11,8 +11,6 @@ Typically invoked by train_from_config.py (via `make train`), not directly.
 
 import argparse
 import logging
-import os
-import sys
 from pathlib import Path
 
 

@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple, Union
 
-import numpy as np
 import torch
 from pytorch_forecasting.data import EncoderNormalizer
 

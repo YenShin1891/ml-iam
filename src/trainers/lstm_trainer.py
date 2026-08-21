@@ -16,9 +16,8 @@ from sklearn.model_selection import ParameterSampler
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset, DataLoader
 
-from configs.paths import RESULTS_PATH
 from src.utils.utils import get_run_root, is_primary_rank
-from configs.models import LSTMTrainerConfig, LSTMSearchSpace, LSTMDatasetConfig
+from configs.models import LSTMTrainerConfig, LSTMSearchSpace
 
 
 def _infer_non_numeric_feature_columns(df: pd.DataFrame, features: List[str]) -> List[str]:
@@ -641,56 +640,6 @@ def create_lstm_final_trainer(
 
 
 
-def create_lstm_datasets_with_forecasting(
-    train_data: pd.DataFrame,
-    val_data: pd.DataFrame,
-    test_data: pd.DataFrame,
-    features: List[str],
-    targets: List[str],
-    sequence_length: int = 10,
-    mode: str = "train"
-) -> tuple:
-    """Create LSTM datasets with proper future feature handling for forecasting."""
-    from configs.models.lstm import LSTMDatasetConfig
-
-    dataset_config = LSTMDatasetConfig()
-    feature_groups = dataset_config.build_feature_groups(features)
-
-    known_future = feature_groups["time_varying_known_reals"] + feature_groups["time_varying_known_categoricals"]
-    unknown_future = feature_groups["time_varying_unknown_reals"]
-
-    if mode == "train":
-        # Training: use all features as-is
-        train_dataset, val_dataset, encoded_features = create_lstm_datasets(
-            train_data, val_data, features, targets,
-            sequence_length=sequence_length,
-        )
-        return train_dataset, val_dataset, len(unknown_future)
-
-    elif mode == "predict":
-        # Prediction: limit future unknown features to historical values only
-        # Create modified test data for proper forecasting
-        predict_data = test_data.copy()
-
-        # For unknown_future features: use only historical values (lag them forward)
-        # For known_future features: use actual future values
-        for col in unknown_future:
-            if col in predict_data.columns:
-                # Use last known value for each group (simple forward fill)
-                predict_data[col] = predict_data.groupby(['Model', 'Scenario', 'Region'])[col].ffill()
-
-        # Use a dummy split for create_lstm_datasets then take the "val" dataset
-        # which uses scalers fitted on predict_data
-        test_dataset, _, _ = create_lstm_datasets(
-            predict_data, predict_data, features, targets,
-            sequence_length=sequence_length,
-        )
-        return test_dataset, len(unknown_future)
-
-    else:
-        raise ValueError(f"Unknown mode: {mode}")
-
-
 def hyperparameter_search_lstm_parallel(
     train_data: pd.DataFrame,
     val_data: pd.DataFrame,
@@ -703,8 +652,6 @@ def hyperparameter_search_lstm_parallel(
 ) -> Dict:
     """Perform parallel hyperparameter search for LSTM model."""
     import torch.multiprocessing as mp
-    from concurrent.futures import ProcessPoolExecutor
-    import torch.distributed as dist
 
     categorical_features = categorical_features or []
 

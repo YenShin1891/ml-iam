@@ -14,7 +14,6 @@ phase from the cached parquet in seconds.
 
 import json
 import logging
-import os
 import pickle
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple

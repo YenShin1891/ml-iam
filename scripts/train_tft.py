@@ -21,7 +21,7 @@ def derive_splits(data, store=None, target_normalizer_mode=None):
     from src.data.preprocess import (
         add_missingness_indicators,
         impute_with_train_medians,
-        prepare_features_and_targets_tft,
+        prepare_features_and_targets_sequence,
         split_data,
     )
 
@@ -33,7 +33,7 @@ def derive_splits(data, store=None, target_normalizer_mode=None):
         store.categories_for(data)
         split_assignment = store.splits_for(data)
 
-    prepared, features, targets = prepare_features_and_targets_tft(data)
+    prepared, features, targets = prepare_features_and_targets_sequence(data)
     dataset_cfg.resolve_encoder_lengths()
     if context_length > 0:
         logging.info(
@@ -85,9 +85,6 @@ def search_tft(store, target_normalizer_mode=None):
     data = store.load_processed_data()
     splits = derive_splits(data, store, target_normalizer_mode=target_normalizer_mode)
 
-    from src.trainers.tft_dataset import build_datasets
-
-    # build_datasets expects a dict with train/val/test data
     best_params = _search_with_splits(splits, store)
     return best_params
 

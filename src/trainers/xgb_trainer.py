@@ -745,7 +745,7 @@ def hyperparameter_search(
                             show_autoreg_progress=trainer_cfg.search_show_autoreg_progress,
                             n_jobs=1,
                             use_autoregressive_eval=False,
-                            obs_mask=obs_train if use_cv else obs_train,
+                            obs_mask=obs_train,
                             obs_val_mask=None if use_cv else obs_val,
                         )
                         result = params_copy.copy()
@@ -790,7 +790,7 @@ def hyperparameter_search(
                             'stage_num': stage_num,
                             'score_key': score_key,
                             'result_queue': result_queue,
-                            'obs_train': obs_train if use_cv else obs_train,
+                            'obs_train': obs_train,
                             'obs_val': None if use_cv else obs_val,
                         },
                     )

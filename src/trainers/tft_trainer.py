@@ -14,12 +14,10 @@ import torch
 from lightning.pytorch.callbacks import EarlyStopping
 from sklearn.model_selection import ParameterSampler
 
-from configs.paths import RESULTS_PATH
 from configs.models import TFTSearchSpace, TFTTrainerConfig
 from src.utils.utils import get_run_root, is_primary_rank
 from .tft_dataset import (
     build_datasets,
-    create_combined_dataset,
     from_train_template,
     load_dataset_template,
     save_dataset_template,
@@ -459,64 +457,6 @@ def hyperparameter_search_tft(
     return best_params
 
 
-def _search_sequential(
-    train_dataset,
-    val_dataset,
-    n_targets,
-    all_params,
-    trainer_cfg,
-    run_id,
-    existing_ledger_rows=None,
-) -> Dict:
-    """Sequential search fallback for single-GPU / CPU environments."""
-    train_loader, val_loader = create_dataloaders(train_dataset, val_dataset, trainer_cfg.batch_size)
-
-    new_results = []
-    for i, params in enumerate(all_params):
-        logging.info("TFT Search Iteration %d/%d - Params: %s", i + 1, len(all_params), params)
-        tft = create_tft_model(train_dataset, params, n_targets)
-        trial_id = _trial_dirname_from_params(params)
-        log_dir = os.path.join(get_run_root(run_id), "search", "trials", trial_id)
-        os.makedirs(log_dir, exist_ok=True)
-        trainer = create_search_trainer(trainer_cfg, log_dir=log_dir)
-        trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
-        epoch, val_loss = _get_best_score(trainer)
-
-        row = {
-            **_canonicalize_search_params(params),
-            "val_loss": float(val_loss),
-            "best_epoch": int(epoch),
-            "trial_id": trial_id,
-        }
-        new_results.append(row)
-
-        # Append each trial to ledger so a killed job can resume without redoing work
-        try:
-            _append_trials_ledger(run_id, [{
-                **{k: row.get(k) for k in _SEARCH_PARAM_KEYS},
-                "val_loss": float(row["val_loss"]),
-                "best_epoch": int(row["best_epoch"]),
-                "signature": _params_signature(row),
-                "trial_id": trial_id,
-                "status": "completed",
-            }])
-        except Exception as exc:
-            logging.warning("Failed to write trial to ledger (result kept in memory): %s", exc)
-
-    # Choose best across existing ledger + new
-    combined = []
-    if existing_ledger_rows:
-        combined.extend([r for r in existing_ledger_rows if _is_completed_trial_row(r)])
-    combined.extend([r for r in new_results if _is_completed_trial_row(r)])
-
-    best = min(combined, key=lambda r: float(r["val_loss"]))
-    best_params = {k: best[k] for k in _SEARCH_PARAM_KEYS}
-    best_params["best_epoch"] = int(best.get("best_epoch", 0))
-    best_score = float(best["val_loss"])
-    logging.info("Best TFT Params: %s with Val Loss: %.4f (best epoch: %d)", best_params, best_score, best_params["best_epoch"])
-    return best_params
-
-
 def train_final_tft(
     train_dataset,
     val_dataset,
@@ -885,7 +825,6 @@ def predict_tft(session_state: Dict, run_id: str, *, skip_metrics: bool = False)
 
 
 # Maintain backward compatibility
-build_datasets = build_datasets
 
 __all__ = [
     "build_datasets",

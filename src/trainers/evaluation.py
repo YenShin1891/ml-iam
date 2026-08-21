@@ -16,81 +16,53 @@ from tqdm import tqdm
 
 from typing import Optional
 
-from configs.paths import RESULTS_PATH
 from configs.data import INDEX_COLUMNS, NON_FEATURE_COLUMNS, N_LAG_FEATURES
 from src.utils.regions import SCALE_ORDER_COARSEST_FIRST, scale_of_frame
 from src.utils.utils import get_run_root
 
 def group_test_data(X_test_with_index, cache=None):
-    """
-    Groups the test data by the specified index columns (group each instance)
-    Uses caching and more efficient operations for better performance.
+    """Split the test frame into per-group index lists and feature matrices.
+
+    *cache* holds results across search trials, which re-group the same
+    validation frame for every hyperparameter configuration.
     """
     if cache is None:
         cache = {}
 
     cache_key = (id(X_test_with_index), X_test_with_index.shape, tuple(INDEX_COLUMNS), tuple(NON_FEATURE_COLUMNS))
-    
-    if cache_key in cache:
-        return cache[cache_key]
-    
+
+    cached = cache.get(cache_key)
+    if cached is not None:
+        cached_frame, result = cached
+        # id() is only unique among live objects, so confirm identity rather
+        # than serving another frame that landed on a recycled address.
+        if cached_frame is X_test_with_index:
+            return result
+
     feature_columns = X_test_with_index.drop(columns=NON_FEATURE_COLUMNS, errors='ignore').columns
-    
-    # Create masks for all lag levels
-    lag_masks = {}
-    for lag in range(1, N_LAG_FEATURES + 1):
-        if lag == 1:
-            pattern = 'prev_'
-        else:
-            pattern = f'prev{lag}_'
-        
-        if hasattr(feature_columns, 'str'):  # pandas Index/Series
-            lag_result = feature_columns.str.startswith(pattern)
-            lag_masks[lag] = lag_result.values if hasattr(lag_result, 'values') else lag_result
-        else:  # already a numpy array
-            lag_masks[lag] = np.array([str(col).startswith(pattern) for col in feature_columns])
-    
     grouped = X_test_with_index.groupby(INDEX_COLUMNS, sort=False)
-    
-    num_groups = grouped.ngroups
+
     group_indices_list = []
     group_matrices = []
-    lag_indices_lists = {lag: [] for lag in range(1, N_LAG_FEATURES + 1)}
-    
-    group_keys = list(grouped.groups.keys())
-    
-    for group_key in group_keys:
+    for group_key in grouped.groups:
         group_df = grouped.get_group(group_key)
+        group_indices_list.append(group_df.index.tolist())
+        group_matrices.append(group_df[feature_columns].to_numpy())
 
-        group_indices = group_df.index.tolist()
+    result = (group_indices_list, group_matrices)
+    # Holding the frame also stops its id being reused while cached.
+    cache[cache_key] = (X_test_with_index, result)
 
-        group_matrix = group_df[feature_columns].to_numpy()
-        
-        group_indices_list.append(group_indices)
-        group_matrices.append(group_matrix)
-
-        # Append masks for all lag levels
-        for lag in range(1, N_LAG_FEATURES + 1):
-            lag_indices_lists[lag].append(lag_masks[lag])
-    
-    # Return tuple with all lag indices
-    result_tuple = [group_indices_list, group_matrices]
-    for lag in range(1, N_LAG_FEATURES + 1):
-        result_tuple.append(lag_indices_lists[lag])
-    result = tuple(result_tuple)
-    cache[cache_key] = result
-    
     return result
 
 
-def autoregressive_predictions(model, group_indices, group_matrix, lag_indices_dict, start_pos, y_scaler=None, x_scaler=None, feature_columns=None):
+def autoregressive_predictions(model, group_indices, group_matrix, start_pos, y_scaler=None, x_scaler=None, feature_columns=None):
     """
     Generate autoregressive predictions for a single grouped series.
 
     Notes:
     - Supports arbitrary N_LAG_FEATURES based on configs.data.N_LAG_FEATURES.
-    - Does not rely on lag_indices_dict; uses feature column names to locate
-      lagged feature columns of the form prev_<var> or prev{lag}_<var>.
+    - Locates lagged feature columns by name: prev_<var> or prev{lag}_<var>.
     - Assumes model.predict returns a vector of targets aligned with
       OUTPUT_VARIABLES[:num_targets].
     """
@@ -220,8 +192,7 @@ def test_xgb_autoregressively(
             x_scaler = None
         
     # group_test_data returns (group_indices_list, group_matrices, [optional lag masks...])
-    _grouped = group_test_data(X_test_with_index, cache)
-    group_indices_list, group_matrices = _grouped[0], _grouped[1]
+    group_indices_list, group_matrices = group_test_data(X_test_with_index, cache)
     full_preds = np.full(y_test.shape, np.nan, dtype=float)
     
     if model is None:
@@ -240,7 +211,7 @@ def test_xgb_autoregressively(
         group_indices, group_matrix = args
         # With no nan values in y_test, we always use the first instance as seed.
         start_pos = 0
-        preds_target = autoregressive_predictions(model, group_indices, group_matrix, None, start_pos, y_scaler, x_scaler, feature_columns)
+        preds_target = autoregressive_predictions(model, group_indices, group_matrix, start_pos, y_scaler, x_scaler, feature_columns)
         return group_indices, preds_target
 
     index_to_pos = {idx: pos for pos, idx in enumerate(X_test_with_index.index)}

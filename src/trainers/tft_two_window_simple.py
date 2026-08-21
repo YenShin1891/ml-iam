@@ -38,7 +38,6 @@ trajectories that the two-window approach cannot cover.
 """
 
 import logging
-import os
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional
 import numpy as np

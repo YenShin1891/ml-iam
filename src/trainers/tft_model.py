@@ -2,7 +2,7 @@
 
 import logging
 import os
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 # Suppress per-sample warnings from EncoderNormalizer's __getitem__ re-fitting
 # and pytorch_forecasting's group-drop notices (logged once is enough).
@@ -225,19 +225,6 @@ def create_final_trainer(
         callbacks=[early_stop, checkpoint],
         logger=logger,
         enable_progress_bar=False,
-    )
-
-
-def create_inference_trainer() -> Trainer:
-    """Create single-device trainer for inference to preserve index ordering."""
-    accelerator = "gpu" if torch.cuda.is_available() else "cpu"
-    return Trainer(
-        accelerator=accelerator,
-        devices=1,
-        strategy="auto",
-        logger=False,
-        enable_progress_bar=False,
-        enable_checkpointing=False,
     )
 
 

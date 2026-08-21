@@ -60,7 +60,6 @@ def get_cached_saved_plots(run_id):
 
 def delete_saved_plot(plot_info):
     """Delete a saved plot and its metadata files."""
-    import os
     try:
         # Delete the plot image file
         if os.path.exists(plot_info['plot_path']):
@@ -177,7 +176,6 @@ def filter_and_plot(run_id):
     # Get environment variables for individual plot saving
     # If you want to save individual plots, use the following command:
     # nohup bash -c "export SAVE_INDIVIDUAL_PLOTS=true && export INDIVIDUAL_PLOT_INDICES='[0]' && streamlit run scripts/dashboard.py --logger.level=info --server.runOnSave=false -- --run_id=run_37" &
-    import os
     save_individual = os.getenv('SAVE_INDIVIDUAL_PLOTS', 'false').lower() == 'true'
     logging.info(f"DEBUG: save_individual = {save_individual}")
     
@@ -308,14 +306,16 @@ def display_recent_plots_sidebar(run_id):
                     metrics = metadata.get('metrics')
                     if metrics:
                         r2_disp = metrics.get('R2')
-                        mae_disp = metrics.get('MAE')
                         rmse_disp = metrics.get('RMSE')
+                        mae_disp = metrics.get('MAE')
                         # Format numbers if not None
                         def _fmt(v):
                             if v is None or (isinstance(v, float) and np.isnan(v)):
                                 return '—'
                             return f"{v:.3f}"
-                        metadata_text += f"  \nR2 {_fmt(r2_disp)} | RMSE {_fmt(rmse_disp)}"
+                        metadata_text += (
+                            f"  \nR2 {_fmt(r2_disp)} | RMSE {_fmt(rmse_disp)} | MAE {_fmt(mae_disp)}"
+                        )
                     
                     st.markdown(metadata_text)
                 
