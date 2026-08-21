@@ -277,22 +277,103 @@ def test_xgb_autoregressively(
     return full_preds
 
 
-def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None):
+def _r2(yt, yp):
+    """Coefficient of determination for a single flat array pair."""
+    ss_res = float(np.sum((yt - yp) ** 2))
+    ss_tot = float(np.sum((yt - np.mean(yt)) ** 2))
+    return 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+
+
+def compute_r2_summary(y_true, y_pred, observed_mask=None) -> dict:
+    """Compute pooled and per-target-average R2/RMSE for one (y_true, y_pred) pair.
+
+    Mirrors the per-split "Overall" row logic in save_metrics(), factored out so
+    callers that need a quick split-level diagnostic (e.g. train/val/test R2
+    breakdowns) don't have to run the full save_metrics pipeline.
+    """
+    yt_2d = np.asarray(y_true)
+    yp_2d = np.asarray(y_pred)
+    if yt_2d.ndim == 1:
+        yt_2d = yt_2d.reshape(-1, 1)
+        yp_2d = yp_2d.reshape(-1, 1)
+    obs_2d = np.asarray(observed_mask) if observed_mask is not None else None
+
+    target_r2s = []
+    for col in range(yt_2d.shape[1]):
+        yt_col, yp_col = yt_2d[:, col], yp_2d[:, col]
+        if obs_2d is not None:
+            col_mask = obs_2d[:, col].astype(bool)
+            yt_col, yp_col = yt_col[col_mask], yp_col[col_mask]
+        valid = np.isfinite(yt_col) & np.isfinite(yp_col)
+        if valid.any():
+            target_r2s.append(_r2(yt_col[valid], yp_col[valid]))
+    per_target_r2 = float(np.mean(target_r2s)) if target_r2s else np.nan
+
+    yt_flat, yp_flat = yt_2d.flatten(), yp_2d.flatten()
+    if obs_2d is not None:
+        mask = obs_2d.astype(bool).flatten()
+        yt_flat, yp_flat = yt_flat[mask], yp_flat[mask]
+    valid = np.isfinite(yt_flat) & np.isfinite(yp_flat)
+    yt_flat, yp_flat = yt_flat[valid], yp_flat[valid]
+
+    if len(yt_flat) == 0:
+        return {
+            "R2 (per-target avg)": np.nan, "R2 (pooled)": np.nan,
+            "RMSE": np.nan, "MAE": np.nan, "Sample Size": 0,
+        }
+    return {
+        "R2 (per-target avg)": per_target_r2,
+        "R2 (pooled)": _r2(yt_flat, yp_flat),
+        "RMSE": float(np.sqrt(mean_squared_error(yt_flat, yp_flat))),
+        "MAE": float(np.mean(np.abs(yt_flat - yp_flat))),
+        "Sample Size": int(len(yt_flat)),
+    }
+
+
+def per_target_r2_table(y_true, y_pred, targets, observed_mask=None) -> pd.DataFrame:
+    """Per-output-variable R2/RMSE table (rows = targets), for ablation-style reporting."""
+    yt_2d = np.asarray(y_true)
+    yp_2d = np.asarray(y_pred)
+    if yt_2d.ndim == 1:
+        yt_2d = yt_2d.reshape(-1, 1)
+        yp_2d = yp_2d.reshape(-1, 1)
+    obs_2d = np.asarray(observed_mask) if observed_mask is not None else None
+
+    rows = []
+    for col, target in enumerate(targets):
+        yt_col, yp_col = yt_2d[:, col], yp_2d[:, col]
+        if obs_2d is not None:
+            col_mask = obs_2d[:, col].astype(bool)
+            yt_col, yp_col = yt_col[col_mask], yp_col[col_mask]
+        valid = np.isfinite(yt_col) & np.isfinite(yp_col)
+        yt_col, yp_col = yt_col[valid], yp_col[valid]
+        if len(yt_col) == 0:
+            rows.append({"Output Variable": target, "R2": np.nan, "RMSE": np.nan, "Sample Size": 0})
+            continue
+        rows.append({
+            "Output Variable": target,
+            "R2": _r2(yt_col, yp_col),
+            "RMSE": float(np.sqrt(mean_squared_error(yt_col, yp_col))),
+            "Sample Size": int(len(yt_col)),
+        })
+    return pd.DataFrame(rows)
+
+
+def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None, metrics_filename="performance.csv"):
     """Save performance metrics to a CSV file under the specified run directory.
 
     When *observed_mask* is provided (KEEP_PARTIAL_TARGETS=True), metrics are
     computed on observed elements only.  Otherwise all elements are used.
 
     If test_data is provided, also compute metrics by region type.
+
+    *metrics_filename* lets callers write split-specific metrics (e.g.
+    "performance_train.csv") without overwriting the canonical test-set
+    "performance.csv".
     """
 
     def compute_metrics(y_true_subset, y_pred_subset, subset_name="Overall", obs=None):
         results = []
-
-        def _r2(yt, yp):
-            ss_res = float(np.sum((yt - yp) ** 2))
-            ss_tot = float(np.sum((yt - np.mean(yt)) ** 2))
-            return 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
 
         def _metrics(yt, yp, per_target_r2):
             mse = mean_squared_error(yt, yp)
@@ -404,7 +485,7 @@ def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None):
 
     metrics_dir = os.path.join(get_run_root(run_id), "metrics")
     os.makedirs(metrics_dir, exist_ok=True)
-    metrics_file = os.path.join(metrics_dir, "performance.csv")
+    metrics_file = os.path.join(metrics_dir, metrics_filename)
     metrics.to_csv(metrics_file, index=False)
     logging.info("Metrics saved to %s.", metrics_file)
 

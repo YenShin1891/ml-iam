@@ -657,8 +657,20 @@ def train_final_tft(
         session_state["tft_time_idx_column"] = getattr(train_dataset, "time_idx", "Step")
 
 
-def predict_tft(session_state: Dict, run_id: str, *, skip_metrics: bool = False) -> np.ndarray:
-    """Make predictions following the exact original tft_trajectory_plotting logic."""
+def predict_tft(
+    session_state: Dict,
+    run_id: str,
+    *,
+    skip_metrics: bool = False,
+    metrics_filename: str = "performance.csv",
+    prediction_summary_filename: str = "prediction_summary.json",
+) -> np.ndarray:
+    """Make predictions following the exact original tft_trajectory_plotting logic.
+
+    *metrics_filename* and *prediction_summary_filename* let callers evaluate
+    non-test splits (e.g. train/val, for over/underfitting diagnostics) without
+    overwriting the canonical test-set artifacts under metrics/ and final/.
+    """
     from src.trainers.evaluation import save_metrics
 
     test_data = session_state["test_data"]
@@ -852,7 +864,7 @@ def predict_tft(session_state: Dict, run_id: str, *, skip_metrics: bool = False)
                 obs_mask = horizon_df[obs_cols].values
             else:
                 obs_mask = None
-            save_metrics(run_id, y_true, y_pred, observed_mask=obs_mask)
+            save_metrics(run_id, y_true, y_pred, observed_mask=obs_mask, metrics_filename=metrics_filename)
 
         removed_groups = None
         try:
@@ -877,7 +889,7 @@ def predict_tft(session_state: Dict, run_id: str, *, skip_metrics: bool = False)
             "removed_groups_count": removed_count,
             "removed_groups_sample": removed_groups[:5] if removed_groups else [],
         }
-        prediction_summary_path = os.path.join(get_run_root(run_id), "final", "prediction_summary.json")
+        prediction_summary_path = os.path.join(get_run_root(run_id), "final", prediction_summary_filename)
         try:
             os.makedirs(os.path.dirname(prediction_summary_path), exist_ok=True)
             with open(prediction_summary_path, "w", encoding="utf-8") as fp:

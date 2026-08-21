@@ -1152,8 +1152,19 @@ def train_final_lstm(
         session_state["lstm_target_offset"] = target_offset
 
 
-def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
-    """Make predictions using trained LSTM model via batched Trainer.predict."""
+def predict_lstm(
+    session_state: Dict,
+    run_id: str,
+    *,
+    skip_metrics: bool = False,
+    metrics_filename: str = "performance.csv",
+) -> np.ndarray:
+    """Make predictions using trained LSTM model via batched Trainer.predict.
+
+    *skip_metrics* / *metrics_filename* let callers evaluate non-test splits
+    (e.g. train/val, for over/underfitting diagnostics) without overwriting
+    the canonical test-set "performance.csv".
+    """
     from src.trainers.evaluation import save_metrics
     from configs.data import INDEX_COLUMNS
 
@@ -1274,7 +1285,8 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
     else:
         obs_mask = None
 
-    save_metrics(run_id, y_test, aligned_preds, observed_mask=obs_mask)
+    if not skip_metrics:
+        save_metrics(run_id, y_test, aligned_preds, observed_mask=obs_mask, metrics_filename=metrics_filename)
 
     # Store horizon data for plotting (like TFT pattern)
     session_state["horizon_df"] = test_data
