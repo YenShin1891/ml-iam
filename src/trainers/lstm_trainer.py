@@ -640,153 +640,107 @@ def create_lstm_final_trainer(
 
 
 
-def hyperparameter_search_lstm_parallel(
+def _resolve_search_features(train_data, targets, features):
+    """Features to search over, falling back to every non-index column."""
+    if features is not None:
+        return features
+
+    from configs.data import NON_FEATURE_COLUMNS, INDEX_COLUMNS
+
+    # 'Step' is added by sequence preprocessing, not a real feature.
+    excluded = set(NON_FEATURE_COLUMNS) | set(INDEX_COLUMNS) | {"Step"} | set(targets)
+    return [col for col in train_data.columns if col not in excluded]
+
+
+def _run_lstm_trial(
+    trial_id: int,
+    params: Dict,
     train_data: pd.DataFrame,
     val_data: pd.DataFrame,
+    features: List[str],
     targets: List[str],
     run_id: str,
-    features: List[str] = None,
-    categorical_features: Optional[List[str]] = None,
-    num_model_families: int = 0,
-    num_regions: int = 0,
+    categorical_features: List[str],
+    num_model_families: int,
+    num_regions: int,
+    devices=1,
 ) -> Dict:
-    """Perform parallel hyperparameter search for LSTM model."""
-    import torch.multiprocessing as mp
+    """Train one hyperparameter configuration and return its validation loss.
 
-    categorical_features = categorical_features or []
-
+    A failed trial is recorded with an infinite loss rather than aborting the
+    search — a single configuration can exhaust GPU memory without saying
+    anything about the rest.
+    """
     search_cfg = LSTMSearchSpace()
-    if features is None:
-        from configs.data import NON_FEATURE_COLUMNS, INDEX_COLUMNS
-        exclude_columns = NON_FEATURE_COLUMNS + INDEX_COLUMNS + ['Step']
-        features = [col for col in train_data.columns if col not in targets and col not in exclude_columns]
+    defaults = LSTMTrainerConfig()
 
-    # Generate all parameter combinations
-    param_list = list(ParameterSampler(
-        search_cfg.param_dist, n_iter=search_cfg.search_iter_n, random_state=0
-    ))
+    try:
+        sequence_length = int(params.get("sequence_length", defaults.sequence_length))
+        train_dataset, val_dataset, model_features = create_lstm_datasets(
+            train_data, val_data, features, targets,
+            sequence_length=sequence_length,
+            target_offset=defaults.target_offset,
+            categorical_features=categorical_features,
+        )
 
-    # Get number of available GPUs
-    num_gpus = torch.cuda.device_count()
-    logging.info(f"Using {num_gpus} GPUs for parallel hyperparameter search")
+        batch_size = params.get("batch_size", 32)
+        train_loader, val_loader = create_lstm_dataloaders(
+            train_dataset, val_dataset, batch_size=batch_size
+        )
 
-    # Group parameters by GPU (distribute evenly)
-    param_groups = [[] for _ in range(num_gpus)]
-    for i, params in enumerate(param_list):
-        param_groups[i % num_gpus].append((i, params))
+        config = LSTMTrainerConfig(
+            hidden_size=params.get("hidden_size", 64),
+            num_layers=params.get("num_layers", 1),
+            dropout=params.get("dropout", 0.0),
+            bidirectional=params.get("bidirectional", False),
+            dense_hidden_size=params.get("dense_hidden_size", 64),
+            dense_dropout=params.get("dense_dropout", 0.0),
+            learning_rate=params.get("learning_rate", 0.001),
+            batch_size=batch_size,
+            weight_decay=params.get("weight_decay", 0.0),
+            sequence_length=sequence_length,
+            embedding_dim=params.get("embedding_dim", defaults.embedding_dim),
+            max_epochs=search_cfg.max_epochs,
+            patience=search_cfg.patience,
+            devices=devices,
+        )
 
-    # Function to train on a specific GPU
-    def train_on_gpu(gpu_id, param_assignments, shared_results):
-        torch.cuda.set_device(gpu_id)
-        device_results = []
+        model = create_lstm_model(
+            model_features, len(targets), config,
+            num_model_families=num_model_families, num_regions=num_regions,
+        )
 
-        for trial_id, params in param_assignments:
-            logging.info(f"GPU {gpu_id} - Trial {trial_id+1}: {params}")
+        trial_dir = os.path.join(get_run_root(run_id), "search", f"trial_{trial_id}")
+        search_checkpoint = ModelCheckpoint(
+            dirpath=trial_dir, filename="best",
+            monitor=config.monitor, mode=config.mode, save_top_k=1,
+        )
+        trainer = create_lstm_search_trainer(
+            config, search_checkpoint, log_dir=os.path.join(trial_dir, "logs")
+        )
+        trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
-            try:
-                # Create datasets
-                sequence_length = int(params.get("sequence_length", LSTMTrainerConfig().sequence_length))
-                train_dataset, val_dataset, model_features = create_lstm_datasets(
-                    train_data, val_data, features, targets, sequence_length=sequence_length, target_offset=LSTMTrainerConfig().target_offset,
-                    categorical_features=categorical_features,
-                )
+        val_loss = trainer.callback_metrics["val_loss"].item()
+        logging.info("Trial %d val_loss: %.4f", trial_id + 1, val_loss)
+        return {**params, "val_loss": val_loss, "trial_id": trial_id}
 
-                # Create data loaders
-                batch_size = params.get("batch_size", 32)
-                train_loader, val_loader = create_lstm_dataloaders(
-                    train_dataset, val_dataset, batch_size=batch_size
-                )
+    except Exception as e:  # noqa: BLE001 - one trial must not end the search
+        logging.error("Trial %d failed: %s", trial_id + 1, e, exc_info=True)
+        return {**params, "val_loss": float("inf"), "trial_id": trial_id, "error": str(e)}
 
-                # Create model with search parameters
-                embedding_dim = params.get("embedding_dim", LSTMTrainerConfig().embedding_dim)
-                config = LSTMTrainerConfig(
-                    hidden_size=params.get("hidden_size", 64),
-                    num_layers=params.get("num_layers", 1),
-                    dropout=params.get("dropout", 0.0),
-                    bidirectional=params.get("bidirectional", False),
-                    dense_hidden_size=params.get("dense_hidden_size", 64),
-                    dense_dropout=params.get("dense_dropout", 0.0),
-                    learning_rate=params.get("learning_rate", 0.001),
-                    batch_size=batch_size,
-                    weight_decay=params.get("weight_decay", 0.0),
-                    sequence_length=sequence_length,
-                    embedding_dim=embedding_dim,
-                    max_epochs=20,
-                    patience=3,
-                    devices=1  # Single device per process
-                )
 
-                output_size = len(targets)
-                model = create_lstm_model(
-                    model_features, output_size, config,
-                    num_model_families=num_model_families, num_regions=num_regions,
-                )
-
-                # Create trainer for single GPU
-                search_checkpoint = ModelCheckpoint(
-                    dirpath=os.path.join(get_run_root(run_id), "search", f"trial_{trial_id}"),
-                    filename="best",
-                    monitor="val_loss",
-                    mode="min",
-                    save_top_k=1
-                )
-
-                trial_log_dir = os.path.join(get_run_root(run_id), "search", f"trial_{trial_id}", "logs")
-                trainer = Trainer(
-                    max_epochs=config.max_epochs,
-                    accelerator="gpu",
-                    devices=[gpu_id],  # Specific GPU
-                    strategy="auto",
-                    gradient_clip_val=config.gradient_clip_val,
-                    callbacks=[EarlyStopping(monitor="val_loss", patience=config.patience, mode="min"), search_checkpoint],
-                    logger=CSVLogger(save_dir=trial_log_dir, name="", version=""),
-                    enable_progress_bar=False,
-                )
-
-                # Train
-                trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=val_loader)
-
-                # Get validation loss
-                val_loss = trainer.callback_metrics["val_loss"].item()
-                result = {**params, "val_loss": val_loss, "trial_id": trial_id}
-                device_results.append(result)
-
-                logging.info(f"GPU {gpu_id} - Trial {trial_id+1} completed with val_loss: {val_loss:.4f}")
-
-            except Exception as e:
-                logging.error(f"GPU {gpu_id} - Trial {trial_id+1} failed: {str(e)}")
-                device_results.append({**params, "val_loss": float("inf"), "trial_id": trial_id, "error": str(e)})
-
-        shared_results.extend(device_results)
-
-    # Run parallel training
-    with mp.Manager() as manager:
-        shared_results = manager.list()
-        processes = []
-
-        for gpu_id in range(num_gpus):
-            if param_groups[gpu_id]:  # Only start process if there are parameters to train
-                p = mp.Process(target=train_on_gpu, args=(gpu_id, param_groups[gpu_id], shared_results))
-                p.start()
-                processes.append(p)
-
-        # Wait for all processes to complete
-        for p in processes:
-            p.join()
-
-        # Convert to regular list
-        search_results = list(shared_results)
-
-    # Find best parameters
-    valid_results = [r for r in search_results if r["val_loss"] != float("inf")]
+def _report_search_results(search_results: List[Dict], run_id: str) -> Dict:
+    """Persist the trial table, log the per-sequence-length winners, return the best params."""
+    valid_results = [r for r in search_results if np.isfinite(r["val_loss"])]
     if not valid_results:
-        raise RuntimeError("All hyperparameter trials failed")
+        raise RuntimeError("All LSTM hyperparameter trials failed")
 
-    best_result = min(valid_results, key=lambda x: x["val_loss"])
-    best_params = {k: v for k, v in best_result.items() if k not in ["val_loss", "trial_id", "error"]}
+    best_result = min(valid_results, key=lambda r: r["val_loss"])
     best_score = best_result["val_loss"]
+    best_params = {
+        k: v for k, v in best_result.items() if k not in ("val_loss", "trial_id", "error")
+    }
 
-    # Save search results
     search_results_df = pd.DataFrame(search_results)
     search_results_path = os.path.join(get_run_root(run_id), "search_results.csv")
     os.makedirs(os.path.dirname(search_results_path), exist_ok=True)
@@ -815,7 +769,7 @@ def hyperparameter_search_lstm_parallel(
     return best_params
 
 
-def hyperparameter_search_lstm(
+def hyperparameter_search_lstm_parallel(
     train_data: pd.DataFrame,
     val_data: pd.DataFrame,
     targets: List[str],
@@ -825,22 +779,50 @@ def hyperparameter_search_lstm(
     num_model_families: int = 0,
     num_regions: int = 0,
 ) -> Dict:
-    """Perform hyperparameter search for LSTM model (wrapper function)."""
-    # Use parallel search if multiple GPUs available, otherwise sequential
-    if torch.cuda.device_count() > 1:
-        logging.info(f"Using parallel hyperparameter search with {torch.cuda.device_count()} GPUs")
-        return hyperparameter_search_lstm_parallel(
-            train_data, val_data, targets, run_id, features,
-            categorical_features=categorical_features,
-            num_model_families=num_model_families, num_regions=num_regions,
-        )
-    else:
-        logging.info("Using sequential hyperparameter search (single GPU)")
-        return hyperparameter_search_lstm_sequential(
-            train_data, val_data, targets, run_id, features,
-            categorical_features=categorical_features,
-            num_model_families=num_model_families, num_regions=num_regions,
-        )
+    """Hyperparameter search with one worker process per GPU."""
+    import torch.multiprocessing as mp
+
+    categorical_features = categorical_features or []
+    features = _resolve_search_features(train_data, targets, features)
+    search_cfg = LSTMSearchSpace()
+
+    param_list = list(ParameterSampler(
+        search_cfg.param_dist, n_iter=search_cfg.search_iter_n, random_state=0
+    ))
+
+    num_gpus = torch.cuda.device_count()
+    logging.info(f"Using {num_gpus} GPUs for parallel hyperparameter search")
+
+    param_groups = [[] for _ in range(num_gpus)]
+    for i, params in enumerate(param_list):
+        param_groups[i % num_gpus].append((i, params))
+
+    def train_on_gpu(gpu_id, param_assignments, shared_results):
+        torch.cuda.set_device(gpu_id)
+        for trial_id, params in param_assignments:
+            logging.info(f"GPU {gpu_id} - Trial {trial_id + 1}: {params}")
+            shared_results.append(_run_lstm_trial(
+                trial_id, params, train_data, val_data, features, targets, run_id,
+                categorical_features, num_model_families, num_regions,
+                devices=[gpu_id],
+            ))
+
+    with mp.Manager() as manager:
+        shared_results = manager.list()
+        processes = []
+
+        for gpu_id in range(num_gpus):
+            if param_groups[gpu_id]:  # Only start a process if it has work
+                p = mp.Process(target=train_on_gpu, args=(gpu_id, param_groups[gpu_id], shared_results))
+                p.start()
+                processes.append(p)
+
+        for p in processes:
+            p.join()
+
+        search_results = list(shared_results)
+
+    return _report_search_results(search_results, run_id)
 
 
 def hyperparameter_search_lstm_sequential(
@@ -853,118 +835,45 @@ def hyperparameter_search_lstm_sequential(
     num_model_families: int = 0,
     num_regions: int = 0,
 ) -> Dict:
-    """Sequential hyperparameter search (original implementation)."""
+    """Hyperparameter search running one trial at a time."""
     categorical_features = categorical_features or []
-
+    features = _resolve_search_features(train_data, targets, features)
     search_cfg = LSTMSearchSpace()
-    # Use features from preprocessing if provided, otherwise derive from columns (but this shouldn't happen)
-    if features is None:
-        from configs.data import NON_FEATURE_COLUMNS, INDEX_COLUMNS
-        exclude_columns = NON_FEATURE_COLUMNS + INDEX_COLUMNS + ['Step']  # Step is added by sequence preprocessing
-        features = [col for col in train_data.columns if col not in targets and col not in exclude_columns]
 
     search_results = []
-    best_score = float("inf")
-    best_params = None
-
     for i, params in enumerate(ParameterSampler(
         search_cfg.param_dist, n_iter=search_cfg.search_iter_n, random_state=0
     )):
-        logging.info(f"LSTM Search Iteration {i+1}/{search_cfg.search_iter_n} - Params: {params}")
+        logging.info(f"LSTM Search Iteration {i + 1}/{search_cfg.search_iter_n} - Params: {params}")
+        search_results.append(_run_lstm_trial(
+            i, params, train_data, val_data, features, targets, run_id,
+            categorical_features, num_model_families, num_regions,
+        ))
 
-        # Create datasets
-        sequence_length = int(params.get("sequence_length", LSTMTrainerConfig().sequence_length))
-        train_dataset, val_dataset, model_features = create_lstm_datasets(
-            train_data, val_data, features, targets, sequence_length=sequence_length, target_offset=LSTMTrainerConfig().target_offset,
-            categorical_features=categorical_features,
-        )
+    return _report_search_results(search_results, run_id)
 
-        # Create data loaders
-        batch_size = params.get("batch_size", 32)
-        train_loader, val_loader = create_lstm_dataloaders(
-            train_dataset, val_dataset, batch_size=batch_size
-        )
 
-        # Create model with search parameters
-        embedding_dim = params.get("embedding_dim", LSTMTrainerConfig().embedding_dim)
-        config = LSTMTrainerConfig(
-            hidden_size=params.get("hidden_size", 64),
-            num_layers=params.get("num_layers", 1),
-            dropout=params.get("dropout", 0.0),
-            bidirectional=params.get("bidirectional", False),
-            dense_hidden_size=params.get("dense_hidden_size", 64),
-            dense_dropout=params.get("dense_dropout", 0.0),
-            learning_rate=params.get("learning_rate", 0.001),
-            batch_size=batch_size,
-            weight_decay=params.get("weight_decay", 0.0),
-            sequence_length=sequence_length,
-            embedding_dim=embedding_dim,
-            max_epochs=20,  # Reduced for search
-            patience=3,  # Reduced for search
-            devices=1  # Use single device for sequential search
-        )
-
-        output_size = len(targets)
-
-        model = create_lstm_model(
-            model_features, output_size, config,
-            num_model_families=num_model_families, num_regions=num_regions,
-        )
-
-        # Create trainer for search
-        trial_dir = os.path.join(get_run_root(run_id), "search", f"trial_{i}")
-        search_checkpoint = ModelCheckpoint(
-            dirpath=trial_dir,
-            filename="best",
-            monitor="val_loss",
-            mode="min",
-            save_top_k=1
-        )
-
-        trial_log_dir = os.path.join(trial_dir, "logs")
-        trainer = create_lstm_search_trainer(config, search_checkpoint, log_dir=trial_log_dir)
-
-        # Train
-        trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=val_loader)
-
-        # Get validation loss
-        val_loss = trainer.callback_metrics["val_loss"].item()
-        search_results.append({**params, "val_loss": val_loss, "trial_id": i})
-
-        if val_loss < best_score:
-            best_score = val_loss
-            best_params = params
-
-        logging.info(f"Trial {i+1} Val Loss: {val_loss:.4f}")
-
-    # Save search results like TFT
-    search_results_df = pd.DataFrame(search_results)
-    search_results_path = os.path.join(get_run_root(run_id), "search_results.csv")
-    os.makedirs(os.path.dirname(search_results_path), exist_ok=True)
-    search_results_df.to_csv(search_results_path, index=False)
-    logging.info(f"Search results saved to: {search_results_path}")
-
-    # Log best params per sequence_length and save a CSV report
-    if "sequence_length" in search_results_df.columns:
-        finite_df = search_results_df[np.isfinite(search_results_df["val_loss"])].copy()
-        if not finite_df.empty:
-            idx = finite_df.groupby("sequence_length")["val_loss"].idxmin()
-            best_by_seq = finite_df.loc[idx].sort_values("sequence_length")
-            best_by_seq_path = os.path.join(get_run_root(run_id), "search_best_by_seq_len.csv")
-            best_by_seq.to_csv(best_by_seq_path, index=False)
-            logging.info("Best params per sequence_length:")
-            for _, row in best_by_seq.iterrows():
-                seq = int(row["sequence_length"]) if not pd.isna(row["sequence_length"]) else None
-                score = float(row["val_loss"]) if not pd.isna(row["val_loss"]) else None
-                params_str = ", ".join(
-                    f"{k}={row[k]}" for k in search_results_df.columns
-                    if k not in ("val_loss", "trial_id", "error") and k in row and not pd.isna(row[k])
-                )
-                logging.info(f"  seq_len={seq}: val_loss={score:.4f} | {params_str}")
-
-    logging.info(f"Best LSTM Params: {best_params} with Val Loss: {best_score:.4f}")
-    return best_params
-
+def hyperparameter_search_lstm(
+    train_data: pd.DataFrame,
+    val_data: pd.DataFrame,
+    targets: List[str],
+    run_id: str,
+    features: List[str] = None,
+    categorical_features: Optional[List[str]] = None,
+    num_model_families: int = 0,
+    num_regions: int = 0,
+) -> Dict:
+    """Search hyperparameters, fanning out over GPUs when there is more than one."""
+    search = (
+        hyperparameter_search_lstm_parallel if torch.cuda.device_count() > 1
+        else hyperparameter_search_lstm_sequential
+    )
+    logging.info("Using %s LSTM hyperparameter search", search.__name__.rsplit("_", 1)[-1])
+    return search(
+        train_data, val_data, targets, run_id, features,
+        categorical_features=categorical_features,
+        num_model_families=num_model_families, num_regions=num_regions,
+    )
 
 
 def train_final_lstm(

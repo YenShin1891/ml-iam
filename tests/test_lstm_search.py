@@ -1,0 +1,153 @@
+"""The parallel and sequential LSTM searches must agree on everything but scheduling."""
+
+import pandas as pd
+import pytest
+
+pytest.importorskip("torch")
+
+import src.trainers.lstm_trainer as lstm_trainer
+from src.trainers.lstm_trainer import (
+    _report_search_results,
+    _resolve_search_features,
+    hyperparameter_search_lstm_sequential,
+)
+
+TARGETS = ["A", "B"]
+
+
+@pytest.fixture
+def frame():
+    return pd.DataFrame(
+        {
+            "Model": ["M0"] * 4, "Scenario": ["S0"] * 4, "Region": [0] * 4,
+            "Step": [0, 1, 2, 3], "Year": [2020, 2025, 2030, 2035],
+            "feat": [1.0, 2.0, 3.0, 4.0], "A": [1.0, 2.0, 3.0, 4.0], "B": [4.0, 3.0, 2.0, 1.0],
+        }
+    )
+
+
+@pytest.fixture
+def run(tmp_path, monkeypatch):
+    monkeypatch.setattr(lstm_trainer, "get_run_root", lambda _run_id: str(tmp_path))
+    return "lstm_01", tmp_path
+
+
+@pytest.fixture
+def three_trials(monkeypatch):
+    """Shrink the search space; the field default lives in __init__, not the class."""
+    real_space = lstm_trainer.LSTMSearchSpace
+
+    def _space():
+        space = real_space()
+        space.search_iter_n = 3
+        return space
+
+    monkeypatch.setattr(lstm_trainer, "LSTMSearchSpace", _space)
+
+
+# ── feature resolution ────────────────────────────────────────────────────
+
+
+def test_explicit_features_are_used_as_given(frame):
+    assert _resolve_search_features(frame, TARGETS, ["feat"]) == ["feat"]
+
+
+def test_derived_features_exclude_targets_and_index_columns(frame):
+    features = _resolve_search_features(frame, TARGETS, None)
+
+    assert features == ["feat"]
+    for excluded in TARGETS + ["Model", "Scenario", "Region", "Step", "Year"]:
+        assert excluded not in features
+
+
+# ── result reporting ──────────────────────────────────────────────────────
+
+
+def _trial(trial_id, val_loss, sequence_length=1, **extra):
+    return {
+        "sequence_length": sequence_length, "hidden_size": 64,
+        "val_loss": val_loss, "trial_id": trial_id, **extra,
+    }
+
+
+def test_best_params_exclude_bookkeeping_keys(run):
+    run_id, _ = run
+
+    best = _report_search_results(
+        [_trial(0, 1.5), _trial(1, 0.5), _trial(2, 2.0)], run_id
+    )
+
+    assert best == {"sequence_length": 1, "hidden_size": 64}
+    assert "val_loss" not in best and "trial_id" not in best
+
+
+def test_failed_trials_are_written_out_but_never_win(run):
+    run_id, root = run
+
+    best = _report_search_results(
+        [_trial(0, float("inf"), error="CUDA OOM"), _trial(1, 0.7, sequence_length=2)], run_id
+    )
+
+    assert best["sequence_length"] == 2
+    saved = pd.read_csv(root / "search_results.csv")
+    assert len(saved) == 2
+    assert saved["error"].notna().sum() == 1
+
+
+def test_all_trials_failing_raises(run):
+    run_id, _ = run
+
+    with pytest.raises(RuntimeError, match="All LSTM hyperparameter trials failed"):
+        _report_search_results([_trial(0, float("inf")), _trial(1, float("inf"))], run_id)
+
+
+def test_best_per_sequence_length_report_is_written(run):
+    run_id, root = run
+
+    _report_search_results(
+        [_trial(0, 1.0, sequence_length=1), _trial(1, 0.4, sequence_length=1),
+         _trial(2, 0.9, sequence_length=3)],
+        run_id,
+    )
+
+    by_seq = pd.read_csv(root / "search_best_by_seq_len.csv")
+    assert by_seq["sequence_length"].tolist() == [1, 3]
+    assert by_seq["val_loss"].tolist() == [0.4, 0.9]
+
+
+# ── a failing trial does not end the search ───────────────────────────────
+
+
+def test_one_failing_trial_does_not_abort_the_search(run, frame, monkeypatch, three_trials):
+    """Sequential search used to propagate the first exception."""
+    run_id, _ = run
+    calls = []
+
+    def fake_datasets(*args, **kwargs):
+        calls.append(kwargs.get("sequence_length"))
+        raise RuntimeError("CUDA out of memory")
+
+    monkeypatch.setattr(lstm_trainer, "create_lstm_datasets", fake_datasets)
+
+    with pytest.raises(RuntimeError, match="All LSTM hyperparameter trials failed"):
+        hyperparameter_search_lstm_sequential(frame, frame, TARGETS, run_id, ["feat"])
+
+    assert len(calls) == 3, "every trial should have been attempted"
+
+
+def test_a_surviving_trial_wins_over_failures(run, frame, monkeypatch, three_trials):
+    run_id, _ = run
+    attempts = {"n": 0}
+
+    def fake_run_trial(trial_id, params, *args, **kwargs):
+        attempts["n"] += 1
+        if trial_id == 1:
+            return {**params, "val_loss": 0.25, "trial_id": trial_id}
+        return {**params, "val_loss": float("inf"), "trial_id": trial_id, "error": "boom"}
+
+    monkeypatch.setattr(lstm_trainer, "_run_lstm_trial", fake_run_trial)
+
+    best = hyperparameter_search_lstm_sequential(frame, frame, TARGETS, run_id, ["feat"])
+
+    assert attempts["n"] == 3
+    assert "val_loss" not in best

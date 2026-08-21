@@ -107,6 +107,10 @@ class LSTMSearchSpace:
 
     # Search configuration
     search_iter_n: int = 48
+    # Trials are cut short: the search ranks configurations, the final fit
+    # (LSTMTrainerConfig.max_epochs / final_patience) trains them properly.
+    max_epochs: int = 20
+    patience: int = 3
 
     @property
     def param_dist(self) -> Dict[str, List]:
