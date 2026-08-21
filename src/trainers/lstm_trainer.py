@@ -180,6 +180,7 @@ class LSTMDataset(Dataset):
         self.target_obs = []        # per-target observed mask
         self.masks = []
         self.group_info = []
+        self.target_positions = []  # row of `data` each sequence predicts
 
         # Group by the group_ids columns
         for group_name, group_data in data.groupby(self.group_ids):
@@ -215,12 +216,14 @@ class LSTMDataset(Dataset):
                 self.target_obs.append(torch.FloatTensor(self._obs_mask[target_pos]))
                 self.masks.append(torch.FloatTensor(mask.values if hasattr(mask, 'values') else [mask]))
                 self.group_info.append(group_name)
+                self.target_positions.append(target_pos)
 
         self.X_sequences = torch.stack(self.X_sequences)
         self.cat_sequences = torch.stack(self.cat_sequences)
         self.y_sequences = torch.stack(self.y_sequences)
         self.target_obs = torch.stack(self.target_obs)
         self.masks = torch.stack(self.masks)
+        self.target_positions = np.asarray(self.target_positions, dtype=int)
 
     def __len__(self):
         return len(self.X_sequences)
@@ -234,6 +237,32 @@ class LSTMDataset(Dataset):
             'mask': self.masks[idx],
             'group': self.group_info[idx]
         }
+
+
+def align_sequence_predictions(dataset, predictions, n_rows: int) -> np.ndarray:
+    """Scatter one prediction per sequence back onto the rows it belongs to.
+
+    Rows the model produced nothing for — the first `sequence_length +
+    target_offset - 1` of each group, and groups too short for a single
+    sequence — stay NaN.
+
+    LSTMDataset already recorded which row each sequence predicts, so read it
+    rather than re-deriving the mapping from group sizes: a second
+    implementation of the same arithmetic can drift from the dataset's without
+    anything failing loudly, silently shifting every prediction.
+    """
+    predictions = np.asarray(predictions)
+    positions = dataset.target_positions
+
+    if len(positions) != len(predictions):
+        raise ValueError(
+            f"Model returned {len(predictions)} predictions for {len(positions)} sequences"
+        )
+
+    aligned = np.full((n_rows, predictions.shape[1]), np.nan)
+    if len(positions):
+        aligned[positions] = predictions
+    return aligned
 
 
 class LSTMModel(LightningModule):
@@ -1007,7 +1036,6 @@ def train_final_lstm(
 def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
     """Make predictions using trained LSTM model via batched Trainer.predict."""
     from src.trainers.evaluation import save_metrics
-    from configs.data import INDEX_COLUMNS
 
     # Get data from session state (stored as DataFrames like TFT)
     test_data = session_state["test_data"]
@@ -1054,8 +1082,6 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
         if col in test_data.columns and col not in test_data_enc.columns:
             test_data_enc[col] = test_data[col].values
 
-    group_ids = INDEX_COLUMNS
-
     all_features = features + categorical_features
     test_dataset = LSTMDataset(
         test_data_enc, all_features, targets,
@@ -1091,18 +1117,9 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
 
     predictions_unscaled = scaler_y.inverse_transform(predictions_array)
 
-    aligned_preds = np.full((len(test_data), len(targets)), np.nan)
-    pred_idx = 0
-    for _group_name, group_data in test_data.groupby(group_ids):
-        group_size = len(group_data)
-        group_indices = group_data.index
-        num_sequences = max(0, group_size - (sequence_length + target_offset) + 1)
-        for i in range(num_sequences):
-            if pred_idx < len(predictions_unscaled):
-                target_row_idx = group_indices[i + sequence_length - 1 + target_offset]
-                data_row_idx = test_data.index.get_loc(target_row_idx)
-                aligned_preds[data_row_idx] = predictions_unscaled[pred_idx]
-                pred_idx += 1
+    aligned_preds = align_sequence_predictions(
+        test_dataset, predictions_unscaled, len(test_data)
+    )
 
     logging.info("LSTM prediction completed. Shape: %s", aligned_preds.shape)
 

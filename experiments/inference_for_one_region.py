@@ -603,18 +603,10 @@ def _infer_lstm(artifacts, synthetic, features, targets):
 
     preds_unscaled = scaler_y.inverse_transform(preds_array)
 
-    # Align predictions with data rows (sequence alignment)
-    aligned = np.full((len(data), len(targets)), np.nan)
-    pred_idx = 0
-    for _, group_data in data.groupby(INDEX_COLUMNS):
-        group_size = len(group_data)
-        group_indices = group_data.index
-        num_seqs = max(0, group_size - (seq_len + target_offset) + 1)
-        for i in range(num_seqs):
-            if pred_idx < len(preds_unscaled):
-                row_idx = data.index.get_loc(group_indices[i + seq_len - 1 + target_offset])
-                aligned[row_idx] = preds_unscaled[pred_idx]
-                pred_idx += 1
+    # Align predictions with the rows the dataset built them from.
+    from src.trainers.lstm_trainer import align_sequence_predictions
+
+    aligned = align_sequence_predictions(dataset, preds_unscaled, len(data))
 
     logger.info("LSTM predictions aligned: %d/%d rows have values",
                 (~np.isnan(aligned[:, 0])).sum(), len(data))
