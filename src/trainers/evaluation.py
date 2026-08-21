@@ -1,9 +1,10 @@
 """Evaluation utilities.
 
-Note: pytorch-forecasting 1.4.x returns normalized outputs in Prediction.output; original-scale values
-may not be present unless Prediction.prediction is populated. The TFT prediction path enforces original-scale
-predictions to avoid computing metrics on mixed scales. See scripts/check_pf_prediction.py and requirements.txt
-for the version-specific note.
+Note: pytorch-forecasting 1.4.x returns normalized outputs in Prediction.output;
+original-scale values may not be present unless Prediction.prediction is
+populated. The TFT prediction path enforces original-scale predictions so
+metrics are never computed on mixed scales — see predict_tft in
+src/trainers/tft_trainer.py.
 """
 
 from sklearn.metrics import mean_squared_error

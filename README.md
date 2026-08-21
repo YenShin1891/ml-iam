@@ -151,8 +151,9 @@ Example configs are provided for each model under `configs/runs/`.
 | `dataset` | Processed dataset subdirectory name under `DATA_PATH` |
 | `cuda_visible_devices` | `default` for all phases, override `search` for multi-GPU (e.g. `{default: "0", search: "0,1,2,3"}`) |
 | `note` | Free-text note saved with the run |
-| `lag_required` | Whether full lag history is required (LSTM/TFT) |
-| `two_window` | Use two-window prediction (TFT only) |
+| `two_window` | Use two-window prediction (TFT only, affects the test phase) |
+| `target_normalizer_mode` | TFT only: `encoder_floored` (default) or `global` |
+| `keep_partial_targets` | Train on rows where only some targets are observed (default from `configs/data.py`) |
 | `run_id` | Existing run ID to resume (e.g. `tft_01`). Required when using `resume`. |
 | `resume` | Phase to resume from: `preprocess`, `search`, `train`, `test`, or `plot`. Runs only that single phase using the existing run's data/config. |
 
@@ -167,6 +168,12 @@ resume: test          # re-run only the test phase
 ```
 
 Then launch as usual with `make train RUN=...`.
+
+Each run records its resolved settings in `meta/run_config.resolved.json`, and a
+resumed phase reads them back, so it runs under the same `dataset`,
+`two_window`, `target_normalizer_mode` and `keep_partial_targets` the run was
+created with. Passing one of those explicitly overrides the recorded value and
+logs that it did.
 
 ### Step 5: Train
 
@@ -254,8 +261,11 @@ OUTPUT_VARIABLES = [
     # ... more targets
 ]
 
-MAX_YEAR = 2100  # Upper year limit
-N_LAG_FEATURES = 3  # Number of lagged timesteps
+MAX_YEAR = 2100         # Upper year limit
+N_LAG_FEATURES = 2      # Lagged timesteps fed to XGBoost (LSTM/TFT use their own history)
+MAX_SERIES_LENGTH = 15  # Encoder + decoder span for the sequence models
+KEEP_PARTIAL_TARGETS = True   # Train on rows where only some targets are observed
+INTERPOLATE_TARGETS = True    # Fill interior gaps before computing lag features
 ```
 
 ### Model Hyperparameters
@@ -274,9 +284,12 @@ After training, results are organized as:
 results/
 ├── xgb/
 │   └── xgb_NN/
-│       ├── artifacts/         # Scalers, features, predictions, best params
+│       ├── artifacts/         # Scalers, features, predictions, best params,
+│       │                      #   categories.json (category codes),
+│       │                      #   splits.parquet (group → train/val/test)
 │       ├── cache/             # Cached preprocessed data
 │       ├── checkpoints/       # Trained XGBoost model
+│       ├── meta/              # Resolved run config + environment snapshot
 │       ├── metrics/           # Performance metrics (RMSE, MAE, R², etc.)
 │       ├── plots/             # Scatter plots & SHAP explainability
 │       ├── search/            # Hyperparameter search results
@@ -289,12 +302,28 @@ results/
         └── ...                # Same structure, with final/ instead of checkpoints/
 ```
 
+`artifacts/splits.parquet` records which train/val/test split each
+`(Model, Scenario, Region)` group landed in. It is derived once per run from the
+full dataset and reused by every phase, so XGBoost, LSTM and TFT runs over the
+same processed dataset are scored on the same test groups.
+
 ### Visualizations
 
 Generated plots include:
 1. **Predicted vs Actual scatter plots** (per variable)
 2. **Trajectory comparisons** (model predictions vs IAM scenarios)
 3. **SHAP explainability plots** (feature importance over time)
+
+---
+
+## 🧪 Tests
+
+Fast regression tests over the data pipeline and helpers — no GPU, no dataset,
+no trained run required:
+
+```bash
+make unit-test        # or: python -m pytest tests -q
+```
 
 ---
 

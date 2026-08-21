@@ -452,8 +452,10 @@ def setup_session_and_logging(run_id):
             st.session_state.targets = targets
         else:
             st.error(
-                "No test data artifacts found. Re-run the test phase to generate them.\n\n"
-                f"Run: `make test RUN_ID={run_id}`"
+                "No test data artifacts found. Re-run the test phase to generate them:\n\n"
+                "Set `run_id` and `resume: test` in a run config, then\n\n"
+                "`make train RUN=configs/runs/<your_config>.yaml`\n\n"
+                f"(run_id: `{run_id}`)"
             )
             return None
 
