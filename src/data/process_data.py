@@ -300,14 +300,12 @@ def to_series_wide(processed_df_year: pd.DataFrame) -> pd.DataFrame:
     # Insert Model_Family as the second column
     year_pivoted.insert(1, "Model_Family", year_pivoted["Model"].apply(get_model_family))
     # Insert Region_Scale after Region
-    from configs.data import REGION_SCALE_PREFIXES, REGION_SCALE_DEFAULT
-    def _region_scale(r):
-        for prefix, scale in REGION_SCALE_PREFIXES:
-            if r == prefix or r.startswith(prefix):
-                return scale
-        return REGION_SCALE_DEFAULT
+    from src.utils.regions import region_scales
+
     region_col_idx = year_pivoted.columns.get_loc("Region")
-    year_pivoted.insert(region_col_idx + 1, "Region_Scale", year_pivoted["Region"].apply(_region_scale))
+    year_pivoted.insert(
+        region_col_idx + 1, "Region_Scale", region_scales(year_pivoted["Region"]).to_numpy()
+    )
     return year_pivoted
 
 

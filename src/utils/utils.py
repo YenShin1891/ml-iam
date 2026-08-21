@@ -16,6 +16,21 @@ def get_run_root(run_id: str) -> str:
     model_type = run_id.split("_", 1)[0]
     return os.path.join(RESULTS_PATH, model_type, run_id)
 
+def is_primary_rank() -> bool:
+    """True on the primary DDP rank, and in any non-distributed process.
+
+    Phases run under torchrun/Lightning DDP re-execute in every rank; artifact
+    writing and logging setup must happen once.
+    """
+    rank_vars = (
+        os.getenv("LOCAL_RANK"),
+        os.getenv("PL_TRAINER_GLOBAL_RANK"),
+        os.getenv("GLOBAL_RANK"),
+        os.getenv("RANK"),
+    )
+    return all(rank in (None, "0") for rank in rank_vars)
+
+
 class LocalFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
         record_time = datetime.fromtimestamp(record.created).astimezone()

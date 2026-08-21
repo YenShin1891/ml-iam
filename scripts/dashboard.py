@@ -10,6 +10,7 @@ import argparse
 
 from src.visualization.trajectories import plot_trajectories, get_saved_plots_metadata
 from src.utils.utils import setup_logging
+from src.utils.regions import regions_ordered_by_scale
 from src.utils.run_store import RunStore
 from configs.data import REGION_CODE_TO_LABEL
 from configs.dashboard import DEFAULT_RUNS
@@ -38,13 +39,10 @@ def get_unique_values(test_data):
     """Cache unique values for filters."""
     scenario_categories = test_data['Scenario_Category'].unique()
 
-    regions = [r for r in test_data['Region'].dropna().astype(str).unique()]
-    R10 = [r for r in regions if r.startswith('R10')]
-    R6 = [r for r in regions if r.startswith('R6')]
-    R5 = [r for r in regions if r.startswith('R5')]
-    World = [r for r in regions if r.startswith('World')]
-    ISO = [r for r in regions if not (r.startswith('R10') or r.startswith('R6') or r.startswith('R5') or r.startswith('World'))]
-    new_region_order = ISO + R10 + R6 + R5 + World
+    # Countries first, then progressively coarser aggregates.
+    new_region_order = regions_ordered_by_scale(
+        test_data['Region'].dropna().astype(str).unique()
+    )
 
     model_families = test_data['Model_Family'].unique()
     return scenario_categories, new_region_order, model_families

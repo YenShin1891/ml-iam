@@ -16,7 +16,7 @@ from sklearn.model_selection import ParameterSampler
 
 from configs.paths import RESULTS_PATH
 from configs.models import TFTSearchSpace, TFTTrainerConfig
-from src.utils.utils import get_run_root
+from src.utils.utils import get_run_root, is_primary_rank
 from .tft_dataset import (
     build_datasets,
     create_combined_dataset,
@@ -517,17 +517,6 @@ def _search_sequential(
     return best_params
 
 
-def _is_primary_rank() -> bool:
-    """Check if this is the primary DDP rank (or non-DDP)."""
-    rank_vars = [
-        os.getenv("LOCAL_RANK"),
-        os.getenv("PL_TRAINER_GLOBAL_RANK"),
-        os.getenv("GLOBAL_RANK"),
-        os.getenv("RANK"),
-    ]
-    return all(rv in (None, "0") for rv in rank_vars)
-
-
 def train_final_tft(
     train_dataset,
     val_dataset,
@@ -551,7 +540,7 @@ def train_final_tft(
     final_dir = os.path.join(get_run_root(run_id), "final")
     final_ckpt_path = os.path.join(final_dir, "best.ckpt")
 
-    primary = _is_primary_rank()
+    primary = is_primary_rank()
 
     os.makedirs(final_dir, exist_ok=True)
 

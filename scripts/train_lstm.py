@@ -6,6 +6,8 @@ All heavy imports are lazy to avoid pulling in unnecessary dependencies.
 
 import logging
 
+from src.utils.utils import is_primary_rank
+
 
 def _default_best_params_from_config() -> dict:
     from configs.models.lstm import LSTMTrainerConfig
@@ -120,17 +122,6 @@ def search_lstm(store):
     return best_params
 
 
-def _is_primary_rank():
-    import os
-    rank_vars = [
-        os.getenv("LOCAL_RANK"),
-        os.getenv("PL_TRAINER_GLOBAL_RANK"),
-        os.getenv("GLOBAL_RANK"),
-        os.getenv("RANK"),
-    ]
-    return all(rv in (None, "0") for rv in rank_vars)
-
-
 def train_lstm(store):
     """Final training using best_params.
 
@@ -139,7 +130,7 @@ def train_lstm(store):
     """
     from src.trainers.lstm_trainer import train_final_lstm as _train_final
 
-    primary = _is_primary_rank()
+    primary = is_primary_rank()
 
     logging.info("Starting final LSTM training...")
     data = store.load_processed_data()

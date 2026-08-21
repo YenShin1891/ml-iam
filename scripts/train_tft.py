@@ -6,6 +6,8 @@ All heavy imports are lazy to avoid pulling in unnecessary dependencies.
 
 import logging
 
+from src.utils.utils import is_primary_rank
+
 
 def derive_splits(data, store=None, target_normalizer_mode=None):
     """From cached processed_data, derive all TFT splits. Takes seconds.
@@ -106,23 +108,12 @@ def _search_with_splits(splits, store):
     return best_params
 
 
-def _is_primary_rank():
-    import os
-    rank_vars = [
-        os.getenv("LOCAL_RANK"),
-        os.getenv("PL_TRAINER_GLOBAL_RANK"),
-        os.getenv("GLOBAL_RANK"),
-        os.getenv("RANK"),
-    ]
-    return all(rv in (None, "0") for rv in rank_vars)
-
-
 def train_tft(store, target_normalizer_mode=None):
     """Final training using best_params."""
     from src.trainers.tft_dataset import build_datasets
     from src.trainers.tft_trainer import train_final_tft as _train_final
 
-    primary = _is_primary_rank()
+    primary = is_primary_rank()
 
     if primary:
         logging.info("Starting final TFT training...")

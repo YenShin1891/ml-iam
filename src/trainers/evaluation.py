@@ -18,6 +18,7 @@ from typing import Optional
 
 from configs.paths import RESULTS_PATH
 from configs.data import INDEX_COLUMNS, NON_FEATURE_COLUMNS, N_LAG_FEATURES
+from src.utils.regions import SCALE_ORDER_COARSEST_FIRST, scale_of_frame
 from src.utils.utils import get_run_root
 
 def group_test_data(X_test_with_index, cache=None):
@@ -352,28 +353,12 @@ def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None):
     # Compute overall metrics
     all_metrics = compute_metrics(y_true, y_pred, "Overall", obs=observed_mask)
 
-    # If test_data is provided, compute metrics by region type
-    if test_data is not None and 'Region' in test_data.columns:
-        regions = test_data['Region'].unique()
-        R10 = [region for region in regions if region.startswith('R10')]
-        R6 = [region for region in regions if region.startswith('R6')]
-        R5 = [region for region in regions if region.startswith('R5')]
-        World = [region for region in regions if region.startswith('World')]
-        ISO = [region for region in regions if not (region.startswith('R10') or region.startswith('R6') or region.startswith('R5') or region.startswith('World'))]
-
-        region_groups = {
-            'R10': R10,
-            'R6': R6,
-            'R5': R5,
-            'World': World,
-            'ISO': ISO
-        }
-
-        for region_type, region_list in region_groups.items():
-            if len(region_list) > 0:
-                region_mask = test_data['Region'].isin(region_list)
-                region_positions = np.where(region_mask.values)[0]
-
+    # If test_data is provided, compute metrics by region scale
+    scales = scale_of_frame(test_data) if test_data is not None else None
+    if scales is not None:
+        for region_type in SCALE_ORDER_COARSEST_FIRST:
+            region_positions = np.where((scales == region_type).to_numpy())[0]
+            if len(region_positions) > 0:
                 y_true_region = y_true[region_positions]
                 y_pred_region = y_pred[region_positions]
                 obs_region = observed_mask[region_positions] if observed_mask is not None else None

@@ -14,39 +14,17 @@ import logging
 import os
 import sys
 from pathlib import Path
-import warnings
 
 
 _ALLOWED_MODELS = ("xgb", "lstm", "tft")
 _ALLOWED_PHASES = ("preprocess", "search", "train", "test", "plot")
 
-_SKLEARN_FEATURENAME_WARN_1 = (
-    "ignore:X does not have valid feature names, but StandardScaler was fitted with feature names:UserWarning"
-)
-_SKLEARN_FEATURENAME_WARN_2 = (
-    "ignore:X has feature names, but StandardScaler was fitted without feature names:UserWarning"
-)
-
-
 def _install_warning_filters() -> None:
     """Install warning filters for current process and spawned Python workers."""
-    warnings.filterwarnings(
-        "ignore",
-        message=r"X does not have valid feature names, but StandardScaler was fitted with feature names",
-        category=UserWarning,
-    )
-    warnings.filterwarnings(
-        "ignore",
-        message=r"X has feature names, but StandardScaler was fitted without feature names",
-        category=UserWarning,
-    )
+    from configs.warning_filters import export_to_environ, install
 
-    existing = os.environ.get("PYTHONWARNINGS", "")
-    parts = [p for p in existing.split(",") if p]
-    for rule in (_SKLEARN_FEATURENAME_WARN_1, _SKLEARN_FEATURENAME_WARN_2):
-        if rule not in parts:
-            parts.append(rule)
-    os.environ["PYTHONWARNINGS"] = ",".join(parts)
+    install()
+    export_to_environ()
 
 
 def _seed(model: str) -> None:
@@ -56,17 +34,6 @@ def _seed(model: str) -> None:
     if model in ("lstm", "tft"):
         from lightning.pytorch import seed_everything
         seed_everything(0, workers=True)
-
-
-def _is_primary_rank() -> bool:
-    """Check if this is the primary DDP rank (or non-DDP)."""
-    rank_vars = [
-        os.getenv("LOCAL_RANK"),
-        os.getenv("PL_TRAINER_GLOBAL_RANK"),
-        os.getenv("GLOBAL_RANK"),
-        os.getenv("RANK"),
-    ]
-    return all(rv in (None, "0") for rv in rank_vars)
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +217,7 @@ def main(argv=None):
 
     _seed(model)
 
-    from src.utils.utils import setup_logging, get_next_run_id
+    from src.utils.utils import setup_logging, get_next_run_id, is_primary_rank
     from src.utils.run_store import RunStore
 
     if args.run_id:
@@ -267,7 +234,7 @@ def main(argv=None):
         # (each rank would allocate a different run_id and re-run all
         # phases).  Use train_from_config.py which invokes per-phase
         # with --resume, or pass --resume explicitly.
-        if not _is_primary_rank():
+        if not is_primary_rank():
             raise RuntimeError(
                 "Full-pipeline mode (no --resume) cannot be used under DDP. "
                 "Use train_from_config.py or pass --resume <phase> --run_id <id>."
@@ -290,7 +257,7 @@ def main(argv=None):
     # Resume mode: single phase
     run_id = args.run_id
     _assert_resume_run_exists(run_id)
-    if _is_primary_rank():
+    if is_primary_rank():
         setup_logging(run_id)
 
     store = RunStore(run_id)

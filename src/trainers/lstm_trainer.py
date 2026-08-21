@@ -17,7 +17,7 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset, DataLoader
 
 from configs.paths import RESULTS_PATH
-from src.utils.utils import get_run_root
+from src.utils.utils import get_run_root, is_primary_rank
 from configs.models import LSTMTrainerConfig, LSTMSearchSpace, LSTMDatasetConfig
 
 
@@ -1019,17 +1019,6 @@ def hyperparameter_search_lstm_sequential(
     return best_params
 
 
-def _is_primary_rank() -> bool:
-    """Check if this is the primary DDP rank (or non-DDP)."""
-    rank_vars = [
-        os.getenv("LOCAL_RANK"),
-        os.getenv("PL_TRAINER_GLOBAL_RANK"),
-        os.getenv("GLOBAL_RANK"),
-        os.getenv("RANK"),
-    ]
-    return all(rv in (None, "0") for rv in rank_vars)
-
-
 
 def train_final_lstm(
     train_data: pd.DataFrame,
@@ -1053,7 +1042,7 @@ def train_final_lstm(
     All ranks build the dataset and model (cheap) so trainer.fit() can proceed.
     """
 
-    primary = _is_primary_rank()
+    primary = is_primary_rank()
     categorical_features = categorical_features or []
 
     # Sanitise best_params: CSV round-trips and pandas may turn ints into
