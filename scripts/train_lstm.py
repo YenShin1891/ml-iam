@@ -10,23 +10,10 @@ from src.utils.utils import is_primary_rank
 
 
 def _default_best_params_from_config() -> dict:
-    from configs.models.lstm import LSTMTrainerConfig
+    """Hyperparameters to train with when the search phase is skipped."""
+    from src.trainers.lstm_trainer import default_lstm_params
 
-    default_config = LSTMTrainerConfig()
-    return {
-        "hidden_size": default_config.hidden_size,
-        "num_layers": default_config.num_layers,
-        "dropout": default_config.dropout,
-        "bidirectional": default_config.bidirectional,
-        "dense_hidden_size": default_config.dense_hidden_size,
-        "dense_dropout": default_config.dense_dropout,
-        "learning_rate": default_config.learning_rate,
-        "batch_size": default_config.batch_size,
-        "weight_decay": default_config.weight_decay,
-        "sequence_length": default_config.sequence_length,
-        "target_offset": default_config.target_offset,
-        "embedding_dim": default_config.embedding_dim,
-    }
+    return default_lstm_params()
 
 
 def derive_splits(data, store=None):

@@ -669,8 +669,46 @@ def create_lstm_final_trainer(
 
 
 
-def _resolve_search_features(train_data, targets, features):
-    """Features to search over, falling back to every non-index column."""
+# Parameters a search trial or a saved best_params entry may set on the config.
+LSTM_TUNABLE_PARAMS = (
+    "hidden_size", "num_layers", "dropout", "bidirectional",
+    "dense_hidden_size", "dense_dropout", "learning_rate", "batch_size",
+    "weight_decay", "sequence_length", "target_offset", "embedding_dim",
+)
+
+
+def default_lstm_params() -> Dict:
+    """The parameter dict equivalent to LSTMTrainerConfig's own defaults."""
+    defaults = LSTMTrainerConfig()
+    return {name: getattr(defaults, name) for name in LSTM_TUNABLE_PARAMS}
+
+
+def lstm_config_from_params(params: Dict, **overrides) -> LSTMTrainerConfig:
+    """Build a trainer config from a sampled or persisted parameter dict.
+
+    Anything *params* leaves out falls back to LSTMTrainerConfig's own default,
+    so a search trial and the final fit cannot disagree about what a missing
+    parameter means.  *overrides* wins over both — that is how a trial gets its
+    shortened epochs and single device.
+
+    Integer-typed settings are coerced from whole floats: best_params comes
+    back through a CSV, which turns batch_size=128 into 128.0.
+    """
+    defaults = LSTMTrainerConfig()
+    settings = {name: params.get(name, getattr(defaults, name)) for name in LSTM_TUNABLE_PARAMS}
+
+    for name, value in list(settings.items()):
+        default = getattr(defaults, name)
+        is_integral = isinstance(default, int) and not isinstance(default, bool)
+        if is_integral and isinstance(value, float) and value == int(value):
+            settings[name] = int(value)
+
+    settings.update(overrides)
+    return LSTMTrainerConfig(**settings)
+
+
+def resolve_feature_columns(train_data, targets, features):
+    """Features to model, falling back to every non-index, non-target column."""
     if features is not None:
         return features
 
@@ -841,7 +879,7 @@ def hyperparameter_search_lstm_parallel(
     import torch.multiprocessing as mp
 
     categorical_features = categorical_features or []
-    features = _resolve_search_features(train_data, targets, features)
+    features = resolve_feature_columns(train_data, targets, features)
     search_cfg = LSTMSearchSpace()
 
     param_list = list(ParameterSampler(
@@ -908,7 +946,7 @@ def hyperparameter_search_lstm_sequential(
 ) -> Dict:
     """Hyperparameter search running one trial at a time."""
     categorical_features = categorical_features or []
-    features = _resolve_search_features(train_data, targets, features)
+    features = resolve_feature_columns(train_data, targets, features)
     search_cfg = LSTMSearchSpace()
 
     search_results = []
@@ -971,57 +1009,26 @@ def train_final_lstm(
 
     primary = is_primary_rank()
     categorical_features = categorical_features or []
+    features = resolve_feature_columns(train_data, targets, features)
 
-    # Sanitise best_params: CSV round-trips and pandas may turn ints into
-    # floats (e.g. batch_size=128.0).  Convert whole-number floats back to int.
-    best_params = {
-        k: int(v) if isinstance(v, float) and v == int(v) else v
-        for k, v in best_params.items()
-    }
-
-    if features is None:
-        from configs.data import NON_FEATURE_COLUMNS, INDEX_COLUMNS
-        exclude_columns = NON_FEATURE_COLUMNS + INDEX_COLUMNS + ['Step']
-        features = [col for col in train_data.columns if col not in targets and col not in exclude_columns]
-
-    sequence_length = int(best_params.get("sequence_length", LSTMTrainerConfig().sequence_length))
-    target_offset = int(best_params.get("target_offset", LSTMTrainerConfig().target_offset))
+    # Full-length training: no max_epochs/patience override, unlike a trial.
+    config = lstm_config_from_params(best_params)
 
     # Use the same train/val split as the search phase: scalers fit on train_data
     train_dataset, val_dataset, encoded_features = create_lstm_datasets(
         train_data, val_data, features, targets,
-        sequence_length=sequence_length,
-        target_offset=target_offset,
+        sequence_length=config.sequence_length,
+        target_offset=config.target_offset,
         categorical_features=categorical_features,
     )
     non_numeric_cols = _infer_non_numeric_feature_columns(train_data, [f for f in features if f not in categorical_features])
 
-    batch_size = best_params.get("batch_size", 32)
     train_loader, val_loader = create_lstm_dataloaders(
-        train_dataset, val_dataset, batch_size=batch_size,
+        train_dataset, val_dataset, batch_size=config.batch_size,
     )
-
-    # Create final model
-    embedding_dim = best_params.get("embedding_dim", LSTMTrainerConfig().embedding_dim)
-    config = LSTMTrainerConfig(
-        hidden_size=best_params.get("hidden_size", 64),
-        num_layers=best_params.get("num_layers", 1),
-        dropout=best_params.get("dropout", 0.0),
-        bidirectional=best_params.get("bidirectional", False),
-        dense_hidden_size=best_params.get("dense_hidden_size", 64),
-        dense_dropout=best_params.get("dense_dropout", 0.0),
-        learning_rate=best_params.get("learning_rate", 0.001),
-        batch_size=batch_size,
-        weight_decay=best_params.get("weight_decay", 0.0),
-        sequence_length=sequence_length,
-        target_offset=target_offset,
-        embedding_dim=embedding_dim,
-    )
-
-    output_size = len(targets)
 
     model = create_lstm_model(
-        encoded_features, output_size, config,
+        encoded_features, len(targets), config,
         num_model_families=num_model_families,
         num_regions=num_regions,
     )
@@ -1071,8 +1078,8 @@ def train_final_lstm(
         session_state["lstm_categorical_features"] = categorical_features
         session_state["lstm_num_model_families"] = num_model_families
         session_state["lstm_num_regions"] = num_regions
-        session_state["lstm_sequence_length"] = sequence_length
-        session_state["lstm_target_offset"] = target_offset
+        session_state["lstm_sequence_length"] = config.sequence_length
+        session_state["lstm_target_offset"] = config.target_offset
 
 
 def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:

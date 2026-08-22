@@ -8,7 +8,7 @@ pytest.importorskip("torch")
 import src.trainers.lstm_trainer as lstm_trainer
 from src.trainers.lstm_trainer import (
     _report_search_results,
-    _resolve_search_features,
+    resolve_feature_columns,
     hyperparameter_search_lstm_sequential,
 )
 
@@ -49,11 +49,11 @@ def three_trials(monkeypatch):
 
 
 def test_explicit_features_are_used_as_given(frame):
-    assert _resolve_search_features(frame, TARGETS, ["feat"]) == ["feat"]
+    assert resolve_feature_columns(frame, TARGETS, ["feat"]) == ["feat"]
 
 
 def test_derived_features_exclude_targets_and_index_columns(frame):
-    features = _resolve_search_features(frame, TARGETS, None)
+    features = resolve_feature_columns(frame, TARGETS, None)
 
     assert features == ["feat"]
     for excluded in TARGETS + ["Model", "Scenario", "Region", "Step", "Year"]:
@@ -151,3 +151,77 @@ def test_a_surviving_trial_wins_over_failures(run, frame, monkeypatch, three_tri
 
     assert attempts["n"] == 3
     assert "val_loss" not in best
+
+
+# ── shared config construction ────────────────────────────────────────────
+
+
+def test_default_params_cover_every_tunable():
+    from src.trainers.lstm_trainer import LSTM_TUNABLE_PARAMS, default_lstm_params
+
+    assert set(default_lstm_params()) == set(LSTM_TUNABLE_PARAMS)
+
+
+def test_defaults_round_trip_to_the_config_they_came_from():
+    from configs.models import LSTMTrainerConfig
+    from src.trainers.lstm_trainer import (
+        LSTM_TUNABLE_PARAMS, default_lstm_params, lstm_config_from_params,
+    )
+
+    built = lstm_config_from_params(default_lstm_params())
+    reference = LSTMTrainerConfig()
+
+    for name in LSTM_TUNABLE_PARAMS:
+        assert getattr(built, name) == getattr(reference, name), name
+
+
+def test_missing_parameters_fall_back_to_the_config_default():
+    """They used to fall back to literals that contradicted it (64 vs 128)."""
+    from configs.models import LSTMTrainerConfig
+    from src.trainers.lstm_trainer import lstm_config_from_params
+
+    built = lstm_config_from_params({"dropout": 0.5})
+
+    assert built.dropout == 0.5
+    assert built.hidden_size == LSTMTrainerConfig().hidden_size
+    assert built.learning_rate == LSTMTrainerConfig().learning_rate
+
+
+def test_whole_floats_are_coerced_only_for_integer_settings():
+    """best_params comes back through a CSV, which floats the ints."""
+    from src.trainers.lstm_trainer import lstm_config_from_params
+
+    built = lstm_config_from_params(
+        {"batch_size": 128.0, "hidden_size": 64.0, "dropout": 0.0, "learning_rate": 1.0}
+    )
+
+    assert isinstance(built.batch_size, int) and built.batch_size == 128
+    assert isinstance(built.hidden_size, int) and built.hidden_size == 64
+    assert isinstance(built.dropout, float) and built.dropout == 0.0
+    assert isinstance(built.learning_rate, float) and built.learning_rate == 1.0
+
+
+def test_overrides_beat_both_params_and_defaults():
+    from src.trainers.lstm_trainer import lstm_config_from_params
+
+    built = lstm_config_from_params({"batch_size": 64}, max_epochs=20, patience=3, devices=[1])
+
+    assert (built.max_epochs, built.patience, built.devices) == (20, 3, [1])
+    assert built.batch_size == 64
+
+
+def test_the_search_and_the_final_fit_build_the_same_model_config():
+    """Same best_params must mean the same architecture in both phases."""
+    from src.trainers.lstm_trainer import LSTM_TUNABLE_PARAMS, lstm_config_from_params
+
+    params = {"hidden_size": 96, "num_layers": 3, "dropout": 0.3,
+              "batch_size": 64, "sequence_length": 4, "embedding_dim": 16}
+
+    trial = lstm_config_from_params(params, max_epochs=20, patience=3, devices=1)
+    final = lstm_config_from_params(params)
+
+    architecture = [n for n in LSTM_TUNABLE_PARAMS]
+    for name in architecture:
+        assert getattr(trial, name) == getattr(final, name), name
+    # ...and they differ only in how long they train.
+    assert trial.max_epochs != final.max_epochs
