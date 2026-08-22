@@ -798,6 +798,35 @@ def _report_search_results(search_results: List[Dict], run_id: str) -> Dict:
     return best_params
 
 
+def _search_worker(
+    gpu_id: int,
+    assignments: List,
+    shared_results,
+    train_data: pd.DataFrame,
+    val_data: pd.DataFrame,
+    features: List[str],
+    targets: List[str],
+    run_id: str,
+    categorical_features: List[str],
+    num_model_families: int,
+    num_regions: int,
+) -> None:
+    """Run one GPU's share of the trials.
+
+    Defined at module level, and taking everything by argument, so it can be
+    pickled to a spawned process; a closure would confine the search to the
+    fork start method.
+    """
+    torch.cuda.set_device(gpu_id)
+    for trial_id, params in assignments:
+        logging.info("GPU %d - Trial %d: %s", gpu_id, trial_id + 1, params)
+        shared_results.append(_run_lstm_trial(
+            trial_id, params, train_data, val_data, features, targets, run_id,
+            categorical_features, num_model_families, num_regions,
+            devices=[gpu_id],
+        ))
+
+
 def hyperparameter_search_lstm_parallel(
     train_data: pd.DataFrame,
     val_data: pd.DataFrame,
@@ -826,28 +855,41 @@ def hyperparameter_search_lstm_parallel(
     for i, params in enumerate(param_list):
         param_groups[i % num_gpus].append((i, params))
 
-    def train_on_gpu(gpu_id, param_assignments, shared_results):
-        torch.cuda.set_device(gpu_id)
-        for trial_id, params in param_assignments:
-            logging.info(f"GPU {gpu_id} - Trial {trial_id + 1}: {params}")
-            shared_results.append(_run_lstm_trial(
-                trial_id, params, train_data, val_data, features, targets, run_id,
-                categorical_features, num_model_families, num_regions,
-                devices=[gpu_id],
-            ))
+    # Spawn, not the platform default: the CUDA runtime cannot be re-initialised
+    # in a forked child, so a fork works only while nothing has touched CUDA in
+    # this process before the search — a precondition nothing enforces, and one
+    # that fails every trial at once when it breaks.  Spawn costs a fresh
+    # interpreter and a pickle of the training frames per worker, which is
+    # nothing against a trial's runtime.
+    ctx = mp.get_context("spawn")
 
-    with mp.Manager() as manager:
+    with ctx.Manager() as manager:
         shared_results = manager.list()
         processes = []
 
-        for gpu_id in range(num_gpus):
-            if param_groups[gpu_id]:  # Only start a process if it has work
-                p = mp.Process(target=train_on_gpu, args=(gpu_id, param_groups[gpu_id], shared_results))
-                p.start()
-                processes.append(p)
+        for gpu_id, assignments in enumerate(param_groups):
+            if not assignments:  # Only start a process if it has work
+                continue
+            process = ctx.Process(
+                target=_search_worker,
+                args=(gpu_id, assignments, shared_results, train_data, val_data,
+                      features, targets, run_id, categorical_features,
+                      num_model_families, num_regions),
+            )
+            process.start()
+            processes.append(process)
 
-        for p in processes:
-            p.join()
+        for process in processes:
+            process.join()
+
+        # A worker killed outright (OOM, segfault) takes its trials with it and
+        # would otherwise just look like a shorter search.
+        crashed = [p for p in processes if p.exitcode not in (0, None)]
+        if crashed:
+            raise RuntimeError(
+                "LSTM search worker(s) crashed: "
+                + ", ".join(f"pid={p.pid} exitcode={p.exitcode}" for p in crashed)
+            )
 
         search_results = list(shared_results)
 
