@@ -1,0 +1,6 @@
+# Test dependencies, on top of requirements.txt.
+# Run with: make unit-test
+
+-r requirements.txt
+
+pytest==8.4.2

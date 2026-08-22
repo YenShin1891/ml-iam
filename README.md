@@ -322,6 +322,7 @@ Fast regression tests over the data pipeline and helpers — no GPU, no dataset,
 no trained run required:
 
 ```bash
+pip install -r requirements-dev.txt
 make unit-test        # or: python -m pytest tests -q
 ```
 
