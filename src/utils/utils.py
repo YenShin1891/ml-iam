@@ -31,6 +31,41 @@ def is_primary_rank() -> bool:
     return all(rank in (None, "0") for rank in rank_vars)
 
 
+def format_number(value, digits: int = 4) -> str:
+    """Format one number for a log line.
+
+    Losses and metrics in this project span per-capita scaled units (0.0538)
+    and absolute ones (2.9e+07); fixed point stays readable in the middle of
+    that range and scientific notation takes over at both ends.
+    """
+    if value is None:
+        return "NA"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "NA"
+    if number != number:
+        return "nan"
+    if number == 0:
+        return "0"
+    if 1e-3 <= abs(number) < 1e5:
+        return f"{number:.{digits}f}"
+    return f"{number:.{digits}e}"
+
+
+def format_duration(seconds) -> str:
+    """Format an elapsed time in the largest unit that keeps it a small number."""
+    try:
+        total = float(seconds)
+    except (TypeError, ValueError):
+        return "NA"
+    if total < 90:
+        return f"{total:.0f}s"
+    if total < 90 * 60:
+        return f"{total / 60:.1f}m"
+    return f"{total / 3600:.1f}h"
+
+
 class LocalFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
         record_time = datetime.fromtimestamp(record.created).astimezone()

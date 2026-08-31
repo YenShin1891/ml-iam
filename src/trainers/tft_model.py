@@ -18,6 +18,7 @@ from pytorch_forecasting import TemporalFusionTransformer, RMSE, TimeSeriesDataS
 from pytorch_forecasting.metrics import MultiLoss
 
 from configs.models.tft import TFTTrainerConfig
+from .progress import EpochProgressLogger
 from .tft_utils import get_default_num_workers
 from src.utils.utils import get_run_root
 
@@ -207,6 +208,8 @@ def create_final_trainer(
         save_top_k=1,
     )
 
+    progress = EpochProgressLogger("TFT final training")
+
     logger = False
     if log_dir:
         logger = CSVLogger(save_dir=log_dir, name="", version="")
@@ -222,7 +225,7 @@ def create_final_trainer(
         devices=devices,
         strategy="auto",
         gradient_clip_val=trainer_cfg.gradient_clip_val,
-        callbacks=[early_stop, checkpoint],
+        callbacks=[early_stop, checkpoint, progress],
         logger=logger,
         enable_progress_bar=False,
     )

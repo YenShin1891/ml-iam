@@ -17,6 +17,7 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset, DataLoader
 
 from src.utils.utils import get_run_root, is_primary_rank
+from src.trainers.progress import EpochProgressLogger
 from configs.models import LSTMTrainerConfig, LSTMSearchSpace
 
 
@@ -651,6 +652,7 @@ def create_lstm_final_trainer(
         save_top_k=1,
     )
     progress_bar = TQDMProgressBar(refresh_rate=5000)
+    progress = EpochProgressLogger("LSTM final training")
 
     logger = False
     if log_dir:
@@ -662,7 +664,7 @@ def create_lstm_final_trainer(
         devices=config.devices,
         strategy="auto",
         gradient_clip_val=config.gradient_clip_val,
-        callbacks=[early_stop, checkpoint, progress_bar],
+        callbacks=[early_stop, checkpoint, progress_bar, progress],
         logger=logger,
         num_sanity_val_steps=0,  # Skip validation sanity checks
     )
