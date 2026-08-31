@@ -336,6 +336,21 @@ Launch the interactive Streamlit dashboard to explore results:
 make dashboard RUN_ID=xgb_37
 ```
 
+The dashboard runs in its own conda environment (`mliam_st` by default) so
+Streamlit's dependencies stay out of the training environment. Create it with:
+
+```bash
+conda create -n mliam_st python=3.9 pip
+conda activate mliam_st
+pip install -r requirements-dashboard.txt
+pip install -e .
+```
+
+If your environment names differ from the defaults (`ml-iam` for training,
+`mliam_st` for the dashboard), override them on the command line, e.g.
+`make dashboard DASHBOARD_ENV=my_env`. `make check-env` prints which
+interpreter and library versions the make targets will actually use.
+
 Access at `http://localhost:8501`. Logs are saved under `logs/`.
 
 By default, individual plots are saved for index 6. Override with:

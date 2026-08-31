@@ -1,0 +1,19 @@
+# The Streamlit dashboard environment, separate from the training environment.
+#
+# Streamlit brings ~25 packages of its own and constrains future upgrades of
+# the core stack, so it stays out of the training environment:
+#
+#   conda create -n mliam_st python=3.9 pip
+#   conda activate mliam_st
+#   pip install -r requirements-dashboard.txt
+#   pip install -e .
+#
+# `make dashboard` uses this environment; if yours is named differently,
+# run `make dashboard DASHBOARD_ENV=<name>`.
+
+-r requirements.txt
+
+streamlit==1.45.0
+
+# Imported directly by scripts/dashboard.py to show saved plot images.
+pillow==11.3.0

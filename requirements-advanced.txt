@@ -1,12 +1,12 @@
 # Additional dependencies for LSTM/TFT training, on top of requirements.txt.
 #
-# These versions are the ones the pipeline is actually run and tested against.
+# These pins are the environment the results were produced in.
 
 -r requirements.txt
 
 # Deep Learning (Optional, Only needed for LSTM/TFT)
-torch==2.7.1
-lightning==2.5.2
+torch==2.8.0
+lightning==2.6.0
 
 # The TFT code targets the 1.4 API specifically: the Prediction namedtuple and
 # its field order, TimeSeriesDataSet.from_parameters, and the shape of
