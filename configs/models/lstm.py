@@ -18,14 +18,14 @@ class LSTMTrainerConfig:
     bidirectional: bool = False
 
     # Categorical embeddings
-    embedding_dim: int = 8
+    embedding_dim: int = 16
 
     # Dense layers after LSTM
-    dense_hidden_size: int = 128
-    dense_dropout: float = 0.0
+    dense_hidden_size: int = 64
+    dense_dropout: float = 0.1
 
     # Training parameters
-    learning_rate: float = 0.02
+    learning_rate: float = 0.01
     batch_size: int = 128
     max_epochs: int = 100
     patience: int = 5
@@ -45,7 +45,7 @@ class LSTMTrainerConfig:
     scheduler_params: Dict[str, Any] = field(default_factory=dict)
 
     # Data processing
-    sequence_length: int = 1  # Number of historical timesteps fed into the model
+    sequence_length: int = 3  # Number of historical timesteps fed into the model
     target_offset: int = 0  # Set 1 for warm start: reserves encoder context for future predictions (set 0 for cold start)
     mask_value: float = -1.0
 

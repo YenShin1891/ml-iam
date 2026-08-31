@@ -40,13 +40,13 @@ class XGBDefaultParams:
     """Default XGBoost hyperparameters used when search is skipped.
     """
 
-    max_depth: int = 5
-    min_child_weight: int = 1
+    max_depth: int = 9
+    min_child_weight: int = 10
     gamma: float = 0.0
-    eta: float = 0.4
-    num_boost_round: int = 1000
-    reg_alpha: float = 5.0
-    reg_lambda: float = 0.1
+    eta: float = 0.1
+    num_boost_round: int = 700
+    reg_alpha: float = 1.0
+    reg_lambda: float = 10.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
