@@ -3,20 +3,63 @@
 SHELL := /bin/bash
 .ONESHELL:
 
-.PHONY: process-data train train-bg stop status dashboard unit-test
+.PHONY: process-data train train-bg stop status dashboard unit-test check-env
 
 # Allow overrides via environment variables (resolved at recipe time under conda)
 RAW_DIR ?=
 DATA_DIR ?=
 RESULTS_DIR ?=
 
+# Conda activation (auto-detect from conda on PATH)
+CONDA_SH ?= $(shell conda info --base 2>/dev/null)/etc/profile.d/conda.sh
+
+# The environment to run in. Set CONDA_ENV to empty to use whichever
+# environment is already activated, which is what a venv or uv user wants.
+CONDA_ENV ?= ml-iam
+
+# Enter environment $(1) and set BIN to the directory its commands live in.
+#
+# `conda activate` reliably sets CONDA_PREFIX, but it does not always win the
+# PATH race against a conda bin that the surrounding shell injected earlier --
+# in a VSCode terminal here, `python` after activation is still the base
+# interpreter, which has this repo installed and would run the pipeline under
+# the wrong library versions without a word.  Addressing each command by path
+# instead of by name closes that hole.
+define enter_env
+	if [ -n "$(1)" ]; then \
+		if [ ! -r "$(CONDA_SH)" ]; then \
+			echo "ERROR: no conda profile at '$(CONDA_SH)'."; \
+			echo "Set CONDA_SH=<conda base>/etc/profile.d/conda.sh, or pass an empty env to use the active one."; \
+			exit 1; \
+		fi; \
+		source "$(CONDA_SH)"; \
+		conda activate "$(1)" || { \
+			echo "ERROR: conda env '$(1)' not found."; \
+			echo "Create it (see README), or override CONDA_ENV / DASHBOARD_ENV on the make command line."; \
+			exit 1; \
+		}; \
+	fi; \
+	BIN="$${CONDA_PREFIX:+$$CONDA_PREFIX/bin/}"; \
+	PY="$$BIN"python; \
+	if [ ! -x "$$PY" ]; then PY="$$(command -v python || true)"; BIN=""; fi; \
+	if [ -z "$$PY" ]; then echo "ERROR: no python interpreter found."; exit 1; fi
+endef
+
+# Report which interpreter the other targets will use, and what it has.
+# The first thing to run when a target behaves as if it were in another env.
+check-env:
+	@$(call enter_env,$(CONDA_ENV))
+	echo "CONDA_ENV     = $(CONDA_ENV)"
+	echo "DASHBOARD_ENV = $(DASHBOARD_ENV)"
+	"$$PY" scripts/env_report.py
+
 process-data:
-	source "$(CONDA_SH)"
-	conda activate "$(CONDA_ENV)"
-	RAW_DIR="$${RAW_DIR:-$$(python -c 'import configs.paths as c; print(c.RAW_DATA_PATH)')}" ; \
-	DATA_DIR="$${DATA_DIR:-$$(python -c 'import configs.paths as c; print(c.DATA_PATH)')}" ; \
-	RESULTS_DIR="$${RESULTS_DIR:-$$(python -c 'import configs.paths as c; print(c.RESULTS_PATH)')}" ; \
-	python -m src.data.process_data \
+	@$(call enter_env,$(CONDA_ENV))
+	echo "Using interpreter: $$PY"
+	RAW_DIR="$${RAW_DIR:-$$("$$PY" -c 'import configs.paths as c; print(c.RAW_DATA_PATH)')}" ; \
+	DATA_DIR="$${DATA_DIR:-$$("$$PY" -c 'import configs.paths as c; print(c.DATA_PATH)')}" ; \
+	RESULTS_DIR="$${RESULTS_DIR:-$$("$$PY" -c 'import configs.paths as c; print(c.RESULTS_PATH)')}" ; \
+	"$$PY" -m src.data.process_data \
 		--raw-dir "$$RAW_DIR" \
 		--data-dir "$$DATA_DIR" \
 		--results-dir "$$RESULTS_DIR"
@@ -29,21 +72,17 @@ process-data:
 # Run config file (YAML/JSON) used by scripts/train_from_config.py
 RUN ?=
 
-# Conda activation (auto-detect from conda on PATH)
-CONDA_SH ?= $(shell conda info --base 2>/dev/null)/etc/profile.d/conda.sh
-CONDA_ENV ?= ml-iam
-
 # Foreground training (prints run_id to stdout)
 train:
-	set -e
+	@set -e
 	set -o pipefail
 	@if [ -z "$(RUN)" ]; then \
 		echo "ERROR: RUN is required (e.g. RUN=configs/runs/xgb_example.yaml)"; \
 		exit 2; \
 	fi
-	source "$(CONDA_SH)"
-	conda activate "$(CONDA_ENV)"
-	python scripts/train_from_config.py --run "$(RUN)"
+	$(call enter_env,$(CONDA_ENV))
+	echo "Using interpreter: $$PY"
+	"$$PY" scripts/train_from_config.py --run "$(RUN)"
 
 
 # Background training via nohup; writes logs + pid under ./logs/
@@ -117,9 +156,8 @@ status:
 
 # Fast, data-free regression tests (no GPU, no dataset required)
 unit-test:
-	source "$(CONDA_SH)"
-	conda activate "$(CONDA_ENV)"
-	python -m pytest tests -q
+	@$(call enter_env,$(CONDA_ENV))
+	"$$PY" -m pytest tests -q
 
 
 # ----------------------
@@ -131,18 +169,27 @@ RUN_ID ?= xgb
 # Optional: save individual plots (comma-separated indices, default: 6)
 SAVE_PLOTS ?= 6
 
+# The dashboard runs in its own environment so Streamlit's dependencies stay
+# out of the training stack.  requirements-dashboard.txt describes how to
+# build it; override on the command line if yours is named differently
+# (make dashboard DASHBOARD_ENV=<name>).
 DASHBOARD_ENV ?= mliam_st
 
 dashboard:
 	@mkdir -p "$(LOG_DIR)"
-	source "$(CONDA_SH)"
-	conda activate "$(DASHBOARD_ENV)"
-	@ts=$$(date +%Y%m%d_%H%M%S); \
+	$(call enter_env,$(DASHBOARD_ENV))
+	echo "Using streamlit: $$BIN"streamlit
+	if [ ! -x "$$BIN"streamlit ]; then \
+		echo "ERROR: no streamlit in env '$(DASHBOARD_ENV)'."; \
+		echo "Install it there (see requirements.txt), or point DASHBOARD_ENV at an env that has it."; \
+		exit 1; \
+	fi
+	ts=$$(date +%Y%m%d_%H%M%S); \
 	log="$(LOG_DIR)/dashboard_$${ts}.log"; \
 	pid="$(LOG_DIR)/dashboard_$${ts}.pid"; \
 	setsid nohup env SAVE_INDIVIDUAL_PLOTS=true INDIVIDUAL_PLOT_INDICES="[$(SAVE_PLOTS)]" \
 		PYTHONUNBUFFERED=1 \
-		streamlit run scripts/dashboard.py \
+		"$$BIN"streamlit run scripts/dashboard.py \
 		--logger.level=debug \
 		--server.runOnSave=false \
 		-- --run_id=$(RUN_ID) > "$$log" 2>&1 & \
@@ -150,5 +197,5 @@ dashboard:
 	echo "Started dashboard (default run: $(RUN_ID))"; \
 	echo "- pidfile: $$pid"; \
 	echo "- logfile: $$log"; \
-	echo "Tip: http://localhost:8501/?run_id=xgb | lstm | tft"
+	echo "Tip: http://localhost:8501/?run_id=xgb | lstm | tft"; \
 	echo "Stop: make stop PID_FILE=$$pid"
