@@ -4,12 +4,6 @@ import logging
 import os
 from typing import Dict, Optional
 
-# Suppress per-sample warnings from EncoderNormalizer's __getitem__ re-fitting
-# and pytorch_forecasting's group-drop notices (logged once is enough).
-from configs.warning_filters import install as _install_warning_filters
-
-_install_warning_filters()
-
 import torch
 from lightning.pytorch import Trainer
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
@@ -47,7 +41,21 @@ class MaskedRMSE(RMSE):
         return sq_err
 
 
-class MaskedTFT(TemporalFusionTransformer):
+class SyncedTFT(TemporalFusionTransformer):
+    """TFT whose logged metrics are reduced across DDP ranks.
+
+    pytorch_forecasting logs val_loss and its per-target metrics without
+    ``sync_dist``, so under DDP each rank kept its own value of the metric
+    EarlyStopping and ModelCheckpoint monitor, and Lightning warned about it
+    once per metric name -- 75 lines a run.
+    """
+
+    def log(self, *args, **kwargs):
+        kwargs.setdefault("sync_dist", True)
+        super().log(*args, **kwargs)
+
+
+class MaskedTFT(SyncedTFT):
     """Thin wrapper that injects per-target observed masks into MaskedRMSE
     metrics before each loss computation.
 
@@ -122,7 +130,7 @@ def create_tft_model(
         output_size = 1
         loss = MaskedRMSE() if KEEP_PARTIAL_TARGETS else RMSE()
 
-    model_cls = MaskedTFT if KEEP_PARTIAL_TARGETS else TemporalFusionTransformer
+    model_cls = MaskedTFT if KEEP_PARTIAL_TARGETS else SyncedTFT
 
     kwargs = dict(
         hidden_size=params["hidden_size"],
@@ -240,7 +248,7 @@ def load_tft_checkpoint(run_id: str) -> TemporalFusionTransformer:
         raise FileNotFoundError(f"Final TFT checkpoint not found at {final_ckpt_path}")
     
     from configs.data import KEEP_PARTIAL_TARGETS
-    model_cls = MaskedTFT if KEEP_PARTIAL_TARGETS else TemporalFusionTransformer
+    model_cls = MaskedTFT if KEEP_PARTIAL_TARGETS else SyncedTFT
 
     try:
         model = model_cls.load_from_checkpoint(
