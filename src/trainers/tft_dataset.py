@@ -92,6 +92,37 @@ def compute_target_scale_floors(
     return floors
 
 
+def drop_underlength_groups(
+    data: pd.DataFrame,
+    group_ids: List[str],
+    time_idx: str,
+    required_length: int,
+) -> pd.DataFrame:
+    """Drop groups with fewer than *required_length* steps, in one log line.
+
+    pytorch_forecasting indexes such groups out itself, but announces it with
+    a warning naming every dropped group on every dataset build.
+    """
+    sizes = data.groupby(list(group_ids), observed=True, sort=False)[time_idx].size()
+    short = sizes[sizes < required_length]
+    if short.empty:
+        return data
+    if len(short) == len(sizes):
+        raise ValueError(
+            f"Every group has fewer than {required_length} steps; no "
+            "encoder+prediction window fits. Check the encoder/prediction "
+            "lengths against the data."
+        )
+
+    logging.info(
+        "%d of %d groups have fewer than %d steps and cannot fill one "
+        "encoder+prediction window; dropping them.",
+        len(short), len(sizes), required_length,
+    )
+    keep = ~data.set_index(list(group_ids)).index.isin(short.index)
+    return data.loc[keep]
+
+
 def create_train_dataset(session_state: Dict) -> Tuple[TimeSeriesDataSet, Any]:
     """Create training dataset with configuration, coercing categorical-like columns first."""
     from configs.models.tft import TFTDatasetConfig
@@ -119,6 +150,12 @@ def create_train_dataset(session_state: Dict) -> Tuple[TimeSeriesDataSet, Any]:
     categorical_cols = _ordered_categorical_cols(features)
     pretrained_encoders = _build_union_encoders(session_state, categorical_cols, add_nan=False)
     config.pretrained_categorical_encoders = pretrained_encoders
+
+    min_encoder_length, _ = config.resolve_encoder_lengths()
+    train_data = drop_underlength_groups(
+        train_data, config.group_ids, config.time_idx,
+        min_encoder_length + config.min_prediction_length,
+    )
 
     params = config.build(features, targets, mode="train")
 
@@ -230,6 +267,17 @@ def from_train_template(
 
     Accepts a live ``TimeSeriesDataSet`` or a loaded :class:`DatasetTemplate`.
     """
+    # predict mode raises min_prediction_length to max_prediction_length
+    # (one full-horizon prediction per group), so a group needs that much
+    # more room to survive.
+    prediction_length = (
+        train_dataset.max_prediction_length if mode == "predict"
+        else train_dataset.min_prediction_length
+    )
+    data = drop_underlength_groups(
+        data, train_dataset.group_ids, train_dataset.time_idx,
+        train_dataset.min_encoder_length + prediction_length,
+    )
     if isinstance(train_dataset, DatasetTemplate):
         return train_dataset.build(data, mode=mode)
 
@@ -321,6 +369,12 @@ def create_dataset_with_custom_encoders(
         config.target_scale_floors = compute_target_scale_floors(
             train_data, targets, fraction=config.scale_floor_fraction,
         )
+
+    min_encoder_length, _ = config.resolve_encoder_lengths()
+    train_data = drop_underlength_groups(
+        train_data, config.group_ids, config.time_idx,
+        min_encoder_length + config.min_prediction_length,
+    )
 
     params = config.build(features, targets, mode="train")
 

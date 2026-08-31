@@ -1,10 +1,39 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple, Union
 
+import numpy as np
+import pandas as pd
 import torch
 from pytorch_forecasting.data import EncoderNormalizer
+from sklearn.preprocessing import StandardScaler
 
 from configs.data import CATEGORICAL_COLUMNS, INDEX_COLUMNS, MAX_SERIES_LENGTH
+
+
+class NamelessStandardScaler(StandardScaler):
+    """StandardScaler that never learns feature names.
+
+    TimeSeriesDataSet fits covariate scalers on one-column DataFrames but
+    re-applies the per-sample ones (the target center/scale columns) to bare
+    numpy slices in ``__getitem__``, and sklearn warns about the mismatch on
+    every one of those calls -- 18 lines per sample.  Fitting on the values
+    alone keeps both sides nameless.
+    """
+
+    @staticmethod
+    def _nameless(X):
+        # Only pandas carries feature names; torch input must stay torch,
+        # because __getitem__ assigns the transformed value back into a tensor.
+        return X.to_numpy() if isinstance(X, (pd.DataFrame, pd.Series)) else X
+
+    def fit(self, X, y=None):
+        return super().fit(self._nameless(X), y)
+
+    def transform(self, X, copy=None):
+        return super().transform(self._nameless(X), copy=copy)
+
+    def inverse_transform(self, X, copy=None):
+        return super().inverse_transform(self._nameless(X), copy=copy)
 
 
 class FlooredEncoderNormalizer(EncoderNormalizer):
@@ -77,11 +106,25 @@ class TFTDatasetConfig:
         # Include __observed mask columns as known reals so the masked loss
         # can access them from the batch.  They are boolean-like (0/1) and
         # known at all time steps.
+        # pytorch_forecasting standardises every real it is not told otherwise
+        # about.  The __observed columns must reach MaskedRMSE as the 0/1
+        # masks they are -- standardised, an unobserved element's weight goes
+        # negative and the loss rewards error on it.  The target center/scale
+        # columns keep default scaling but need scalers without feature names
+        # (see NamelessStandardScaler).
+        scalers: Dict[str, Any] = {}
+
         from configs.data import KEEP_PARTIAL_TARGETS
         if KEEP_PARTIAL_TARGETS:
             from src.data.preprocess import observed_mask_columns
             obs_cols = observed_mask_columns(targets)
             time_known_reals.extend(obs_cols)
+            scalers.update({col: None for col in obs_cols})
+
+        if self.add_target_scales:
+            for target in targets:
+                scalers[f"{target}_center"] = NamelessStandardScaler()
+                scalers[f"{target}_scale"] = NamelessStandardScaler()
 
         if self.target_normalizer_mode == "global":
             # Single global μ/σ per target, fitted once on the full training
@@ -120,6 +163,7 @@ class TFTDatasetConfig:
             "add_relative_time_idx": self.add_relative_time_idx,
             "add_target_scales": self.add_target_scales,
             "allow_missing_timesteps": self.allow_missing_timesteps,
+            "scalers": scalers,
         }
 
         return params
