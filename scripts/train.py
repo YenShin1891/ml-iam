@@ -66,6 +66,23 @@ def _phase_function(model: str, phase: str):
     return getattr(import_module(f"scripts.train_{model}"), f"{phase}_{model}")
 
 
+def _accepted_by_any_phase(model: str, name: str) -> bool:
+    """Whether *any* phase of *model* takes the option *name*.
+
+    All of a model's phases live in one module, so this costs no extra import.
+    """
+    import inspect
+
+    for phase in _ALLOWED_PHASES:
+        try:
+            function = _phase_function(model, phase)
+        except Exception:  # noqa: BLE001 - a missing phase is not this check's problem
+            continue
+        if name in inspect.signature(function).parameters:
+            return True
+    return False
+
+
 def run_phase(model: str, phase: str, store, **options):
     """Run one phase, passing only the options its model accepts.
 
@@ -80,8 +97,14 @@ def run_phase(model: str, phase: str, store, **options):
     supported = {name: value for name, value in options.items() if name in accepted}
 
     for name in options:
-        if name not in accepted and options[name] not in (None, False):
-            logging.info("%s %s does not support %s; ignoring it", model, phase, name)
+        if name in accepted or options[name] in (None, False):
+            continue
+        # `dataset` is set for the whole run but only preprocess reads it, and
+        # saying so in all four other phases is noise about nothing.  Report
+        # only options no phase of this model will ever act on.
+        if _accepted_by_any_phase(model, name):
+            continue
+        logging.info("%s %s does not support %s; ignoring it", model, phase, name)
 
     return function(store, **supported)
 
@@ -149,14 +172,65 @@ def _apply_run_settings(args) -> None:
             )
 
 
-def _run(model: str, phase: str, store, args):
-    """Run a phase with the options this invocation parsed."""
-    return run_phase(
+def _log_run_header(run_id: str, model: str, args, resolved: dict) -> None:
+    """Record what this run is, once, where its own log will carry it.
+
+    Every phase is a separate process appending to one train.log, and the
+    settings lived only in meta/run_config.resolved.json — so tft_93's log
+    never said which dataset it read or that its search had been skipped.
+    """
+    lines = [f"model={model}"]
+    dataset = args.dataset or resolved.get("dataset")
+    if dataset:
+        lines.append(f"dataset={dataset}")
+    phases = resolved.get("phases")
+    if phases:
+        lines.append(f"phases={', '.join(phases)}")
+
+    gpus = resolved.get("cuda_visible_devices_resolved_by_phase") or {}
+    if gpus:
+        lines.append("gpus=" + ", ".join(f"{phase}:{value}" for phase, value in gpus.items()))
+
+    for name in ("keep_partial_targets", "target_normalizer_mode", "two_window"):
+        value = getattr(args, name, None)
+        if value is None:
+            value = resolved.get(name)
+        if value not in (None, False):
+            lines.append(f"{name}={value}")
+
+    logging.info("=== Run %s: %s ===", run_id, " | ".join(lines))
+    note = args.note or resolved.get("note")
+    if note:
+        logging.info("Run note: %s", note)
+
+
+def _run(model: str, phase: str, store, args, phases=(), after=None):
+    """Run a phase, bracketed by a banner naming it and its duration.
+
+    *after* runs inside the bracket, so work that belongs to the phase is not
+    logged beneath the line announcing the phase finished.
+    """
+    import time
+
+    from src.utils.utils import format_duration
+
+    position = f" {phases.index(phase) + 1}/{len(phases)}" if phase in phases else ""
+    logging.info("--- %s phase%s: %s ---", store.run_id, position, phase)
+
+    started = time.monotonic()
+    result = run_phase(
         model, phase, store,
         dataset=args.dataset,
         target_normalizer_mode=args.target_normalizer_mode,
         use_two_window=args.two_window,
     )
+    if after is not None:
+        after()
+    logging.info(
+        "--- %s phase%s: %s done in %s ---",
+        store.run_id, position, phase, format_duration(time.monotonic() - started),
+    )
+    return result
 
 
 def _assert_resume_run_exists(run_id: str) -> None:
@@ -239,12 +313,10 @@ def main(argv=None):
         setup_logging(run_id)
 
         store = RunStore(run_id)
-
-        if args.note:
-            logging.info("Run note: %s", args.note)
+        _log_run_header(run_id, model, args, {"phases": list(_ALLOWED_PHASES)})
 
         for phase in _ALLOWED_PHASES:
-            _run(model, phase, store, args)
+            _run(model, phase, store, args, phases=_ALLOWED_PHASES)
         return
 
     # Resume mode: single phase
@@ -255,19 +327,24 @@ def main(argv=None):
 
     store = RunStore(run_id)
 
-    if args.note:
-        logging.info("Run note: %s", args.note)
+    resolved = _load_resolved_config(run_id)
+    phases = tuple(resolved.get("phases") or ())
+    # The run's settings belong at the top of its log, so they are written by
+    # whichever phase leads the run rather than repeated by every phase.
+    if not phases or phases[0] == args.resume:
+        _log_run_header(run_id, model, args, resolved)
 
     # TFT plots from saved predictions, so make sure they exist.
     if args.resume == "plot" and model == "tft" and not store.has_predictions():
         logging.info("Predictions not found; rerunning test step before plotting.")
         _run(model, "test", store, args)
 
-    _run(model, args.resume, store, args)
-
-    if args.resume == "preprocess":
-        _set_default_params(model, store)
-        logging.info("Preprocessing complete.")
+    # Runs without a search phase still need parameters to train with, so the
+    # defaults are written while preprocess is still the phase in progress.
+    inject_defaults = (
+        (lambda: _set_default_params(model, store)) if args.resume == "preprocess" else None
+    )
+    _run(model, args.resume, store, args, phases=phases, after=inject_defaults)
 
 
 if __name__ == "__main__":

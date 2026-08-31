@@ -135,7 +135,10 @@ def setup_logging(run_id, log_file=None):
     ]
 
     logging.basicConfig(level=logging.INFO, handlers=handlers)
-    logging.info("Logging is set up for %s.", run_id)
+    # Every phase runs in its own process and sets logging up again; the phase
+    # banner marks where each one starts, so this only needs to be findable
+    # when debugging the logging itself.
+    logging.debug("Logging is set up for %s.", run_id)
 
 
 def get_next_run_id(model_type: str) -> str:

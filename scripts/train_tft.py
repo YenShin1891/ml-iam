@@ -90,7 +90,8 @@ def _search_with_splits(splits, store):
     )
     store.save_best_params(best_params)
     store.save_features(splits["features"], splits["targets"])
-    logging.info("Hyperparameter search complete. Best params: %s", best_params)
+    # The searcher already logged the winning parameters, and the phase banner
+    # marks the end of the phase; repeating both here said nothing new.
     return best_params
 
 
