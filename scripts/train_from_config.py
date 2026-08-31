@@ -379,12 +379,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # Prepare env for subprocesses
     child_env = dict(os.environ)
 
-    # Ensure spawned phase processes (and their workers) suppress the same
-    # third-party warning spam this process does.
-    from configs.warning_filters import export_to_environ
-
-    export_to_environ(child_env)
-
     # Apply global/default CUDA setting (if provided) so phases that don't override are stable.
     if cfg.cuda_visible_devices_by_phase and "default" in cfg.cuda_visible_devices_by_phase:
         default_cuda = cfg.cuda_visible_devices_by_phase["default"]

@@ -1,18 +1,9 @@
 """Helpers that were duplicated across modules, now with one definition each."""
 
-import subprocess
-import sys
-
 import pandas as pd
 import pytest
 
 from configs.data import REGION_SCALE_ORDER
-from configs.warning_filters import (
-    SUPPRESSED,
-    as_pythonwarnings,
-    export_to_environ,
-    install,
-)
 from src.utils.regions import (
     SCALE_ORDER_COARSEST_FIRST,
     group_regions_by_scale,
@@ -76,55 +67,6 @@ def test_ordering_keeps_every_region_exactly_once():
     ordered = regions_ordered_by_scale(REGIONS + ["KOR"])
 
     assert sorted(ordered) == sorted(set(REGIONS))
-
-
-# ── warning filters ───────────────────────────────────────────────────────
-
-
-def test_pythonwarnings_entries_are_comma_free():
-    """A comma splits the entry, so the tail becomes an invalid -W action."""
-    for rule in as_pythonwarnings():
-        assert "," not in rule
-    assert len(as_pythonwarnings()) == len(SUPPRESSED)
-
-
-def test_child_process_accepts_the_rules_and_suppresses():
-    rules = ",".join(as_pythonwarnings())
-    env = export_to_environ({"PYTHONWARNINGS": ""})
-
-    result = subprocess.run(
-        [sys.executable, "-c", (
-            "import warnings\n"
-            "warnings.warn('X does not have valid feature names, but StandardScaler "
-            "was fitted with feature names', UserWarning)\n"
-            "warnings.warn('an unrelated warning', UserWarning)\n"
-        )],
-        capture_output=True, text=True, env={**env, "PYTHONWARNINGS": rules},
-    )
-
-    assert "Invalid -W option" not in result.stderr
-    assert "StandardScaler" not in result.stderr
-    assert "an unrelated warning" in result.stderr
-
-
-def test_export_preserves_existing_entries_and_is_idempotent():
-    env = export_to_environ({"PYTHONWARNINGS": "ignore::DeprecationWarning"})
-
-    assert env["PYTHONWARNINGS"].startswith("ignore::DeprecationWarning,")
-    assert export_to_environ(dict(env))["PYTHONWARNINGS"] == env["PYTHONWARNINGS"]
-
-
-def test_install_suppresses_in_process(recwarn):
-    import warnings
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("always")
-        install()
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.warn("Min encoder length and/or min_prediction_idx is off", UserWarning)
-            warnings.warn("keep me", UserWarning)
-
-    assert [str(w.message) for w in caught] == ["keep me"]
 
 
 # ── DDP rank ──────────────────────────────────────────────────────────────

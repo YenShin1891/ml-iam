@@ -17,14 +17,6 @@ from pathlib import Path
 _ALLOWED_MODELS = ("xgb", "lstm", "tft")
 _ALLOWED_PHASES = ("preprocess", "search", "train", "test", "plot")
 
-def _install_warning_filters() -> None:
-    """Install warning filters for current process and spawned Python workers."""
-    from configs.warning_filters import export_to_environ, install
-
-    install()
-    export_to_environ()
-
-
 def _seed(model: str) -> None:
     """Set reproducibility seeds. Lazy-imports to avoid pulling in torch for XGB."""
     import numpy as np
@@ -281,7 +273,6 @@ def parse_arguments(argv=None):
 
 
 def main(argv=None):
-    _install_warning_filters()
     args = parse_arguments(argv)
     model = args.model
 
