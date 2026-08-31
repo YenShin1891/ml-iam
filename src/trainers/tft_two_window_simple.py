@@ -465,13 +465,12 @@ def predict_tft_two_window(session_state: Dict, run_id: str) -> np.ndarray:
     """
     from .tft_trainer import predict_tft
 
-    logging.info("Starting two-window prediction (using existing trained model)...")
+    # The caller has already said which prediction approach it chose.
 
     # Generate early window predictions
     early_window = _predict_early_window(session_state, run_id)
 
     # Generate late window predictions (positioned to end at trajectory ends)
-    logging.info("Generating late window predictions...")
     late_window = _predict_late_window(session_state, run_id)
 
     if late_window.horizon is None or len(late_window.horizon) == 0:
@@ -565,7 +564,7 @@ def predict_tft_two_window(session_state: Dict, run_id: str) -> np.ndarray:
         obs_mask = final_horizon[obs_cols].values
     else:
         obs_mask = None
-    save_metrics(run_id, y_true_combined, final_preds, observed_mask=obs_mask)
+    save_metrics(run_id, y_true_combined, final_preds, final_horizon, observed_mask=obs_mask)
 
     logging.info("Two-window prediction completed successfully!")
     return final_preds

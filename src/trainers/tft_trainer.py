@@ -781,7 +781,9 @@ def predict_tft(session_state: Dict, run_id: str, *, skip_metrics: bool = False)
                 obs_mask = horizon_df[obs_cols].values
             else:
                 obs_mask = None
-            save_metrics(run_id, y_true, y_pred, observed_mask=obs_mask)
+            # horizon_df, not test_data: predictions cover the forecast horizon
+            # only, and the rows were checked against it just above.
+            save_metrics(run_id, y_true, y_pred, horizon_df, observed_mask=obs_mask)
 
         removed_groups = None
         try:

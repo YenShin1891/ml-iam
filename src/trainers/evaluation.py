@@ -10,16 +10,19 @@ src/trainers/tft_trainer.py.
 from sklearn.metrics import mean_squared_error
 import os
 import logging
+import time
 import numpy as np
 import pandas as pd
 import concurrent.futures
-from tqdm import tqdm
 
 from typing import Optional
 
 from configs.data import INDEX_COLUMNS, NON_FEATURE_COLUMNS, N_LAG_FEATURES
 from src.utils.regions import SCALE_ORDER_COARSEST_FIRST, scale_of_frame
-from src.utils.utils import get_run_root
+from src.utils.utils import format_number, get_run_root
+
+# How often a long-running loop reports progress to the run log.
+PROGRESS_LOG_SECONDS = 60
 
 def group_test_data(X_test_with_index, cache=None):
     """Split the test frame into per-group index lists and feature matrices.
@@ -174,8 +177,11 @@ def test_xgb_autoregressively(
     x_scaler=None,
     max_workers: Optional[int] = None,
 ):
-    """
-    Test the model autoregressively on the test set.
+    """Test the model autoregressively on the test set.
+
+    *disable_progress* silences the periodic progress line and the closing
+    RMSE; the search sets it, where one line per trial is enough and these
+    would arrive once per fold.
     """
     if cache is None:
         cache = {}
@@ -222,16 +228,25 @@ def test_xgb_autoregressively(
         for group in groups:
             futures.append(executor.submit(process_group, group))
             
-        if disable_progress:
-            for future in concurrent.futures.as_completed(futures):
-                group_indices, preds_target = future.result()
-                pos = [index_to_pos[idx] for idx in group_indices]
-                full_preds[pos, :] = preds_target
-        else:
-            for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Processing groups"):
-                group_indices, preds_target = future.result()
-                pos = [index_to_pos[idx] for idx in group_indices]
-                full_preds[pos, :] = preds_target
+        total = len(futures)
+        completed = 0
+        last_logged = time.monotonic()
+
+        for future in concurrent.futures.as_completed(futures):
+            group_indices, preds_target = future.result()
+            pos = [index_to_pos[idx] for idx in group_indices]
+            full_preds[pos, :] = preds_target
+
+            completed += 1
+            # Reported to the log rather than a progress bar: the bar reached
+            # only a terminal, so train.log had nothing for the six minutes
+            # this takes, while its redraws filled the console log instead.
+            now = time.monotonic()
+            if not disable_progress and (
+                completed == total or now - last_logged >= PROGRESS_LOG_SECONDS
+            ):
+                logging.info("Autoregressive prediction: %d/%d groups", completed, total)
+                last_logged = now
 
     if not disable_progress:
         # y_test carries NaN at unobserved targets; score the observed ones.
@@ -240,11 +255,38 @@ def test_xgb_autoregressively(
             mse = mean_squared_error(
                 np.asarray(y_test, dtype=float)[finite], full_preds[finite]
             )
-            logging.info(f"Root Mean Squared Error: {np.sqrt(mse)}")
+            # Named for its units: this runs on the scaled targets the model
+            # predicts, while save_metrics reports RMSE in absolute units a few
+            # lines later, and the two differ by eight orders of magnitude.
+            logging.info(
+                "Autoregressive test RMSE (scaled units): %s",
+                format_number(np.sqrt(mse)),
+            )
         else:
             logging.warning("No observed test targets to score")
 
     return full_preds
+
+
+def _metrics_line(headline) -> str:
+    """The metric values as one log line, defined once so that the per-scale
+    and overall lines cannot drift apart.
+
+    Absolute targets run to 1e16, where %.4f prints seventeen digits of noise,
+    while the scaled losses elsewhere are ~0.05; format_number picks the
+    notation that stays readable across both.
+    """
+    return " ".join(
+        f"{label}={format_number(headline[key])}"
+        for label, key in (
+            ("MSE", "Mean Squared Error"),
+            ("RMSE", "RMSE"),
+            ("MAE", "MAE"),
+            ("R2_avg", "R2 Score (per-target avg)"),
+            ("R2_pooled", "R2 Score (pooled)"),
+            ("Pearson", "Pearson Correlation"),
+        )
+    )
 
 
 def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None):
@@ -253,8 +295,17 @@ def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None):
     When *observed_mask* is provided (KEEP_PARTIAL_TARGETS=True), metrics are
     computed on observed elements only.  Otherwise all elements are used.
 
-    If test_data is provided, also compute metrics by region type.
+    *test_data* is the frame whose rows correspond one-for-one, in order, with
+    the rows of *y_true*: for the sequence models that is the forecast horizon
+    frame rather than the full test split.  Given it, metrics are additionally
+    broken down by region scale, which is the comparison the models are read
+    against each other on.
     """
+    if test_data is not None and len(test_data) != len(y_true):
+        raise ValueError(
+            f"save_metrics got {len(test_data)} frame rows for {len(y_true)} scored rows; "
+            "pass the frame the predictions were made on, row for row."
+        )
 
     def compute_metrics(y_true_subset, y_pred_subset, subset_name="Overall", obs=None):
         results = []
@@ -339,20 +390,13 @@ def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None):
                     region_results = compute_metrics(y_true_region, y_pred_region, region_type, obs=obs_region)
                     all_metrics.extend(region_results)
 
-                    try:
+                    if region_results:
                         headline = region_results[0]
                         logging.info(
-                            "Run %s %s regions (%d samples) -> MSE=%.4f RMSE=%.4f MAE=%.4f R2_avg=%.4f R2_pooled=%.4f Pearson=%.4f",
+                            "Run %s %s regions (%d samples) -> %s",
                             run_id, region_type, int(headline["Sample Size"]),
-                            float(headline["Mean Squared Error"]),
-                            float(headline["RMSE"]),
-                            float(headline["MAE"]),
-                            float(headline["R2 Score (per-target avg)"]),
-                            float(headline["R2 Score (pooled)"]),
-                            float(headline["Pearson Correlation"]) if not np.isnan(headline["Pearson Correlation"]) else float('nan'),
+                            _metrics_line(headline),
                         )
-                    except Exception:
-                        pass
 
     metrics = pd.DataFrame(all_metrics)
 
@@ -362,15 +406,9 @@ def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None):
     metrics.to_csv(metrics_file, index=False)
     logging.info("Metrics saved to %s.", metrics_file)
 
-    try:
+    if all_metrics:
         headline = all_metrics[0]
         logging.info(
-            "Run %s overall metrics -> MSE=%.4f RMSE=%.4f MAE=%.4f R2_avg=%.4f R2_pooled=%.4f Pearson=%.4f",
-            run_id,
-            float(headline["Mean Squared Error"]), float(headline["RMSE"]),
-            float(headline["MAE"]), float(headline["R2 Score (per-target avg)"]),
-            float(headline["R2 Score (pooled)"]),
-            float(headline["Pearson Correlation"]) if not np.isnan(headline["Pearson Correlation"]) else float('nan')
+            "Run %s overall metrics (%d samples) -> %s",
+            run_id, int(headline["Sample Size"]), _metrics_line(headline),
         )
-    except Exception:
-        pass
