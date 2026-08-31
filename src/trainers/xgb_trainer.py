@@ -6,7 +6,7 @@ import queue
 import subprocess
 import time
 from contextlib import contextmanager
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import multiprocessing as mp
 import numpy as np
@@ -15,7 +15,7 @@ from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import ParameterSampler
 from xgboost import XGBRegressor
 
-from src.utils.utils import get_run_root
+from src.utils.utils import format_duration, get_run_root
 from configs.models import (
     XGBTrainerConfig,
     XGBSearchSpace,
@@ -439,7 +439,7 @@ def _train_single_fold(
         X_train,
         y_train_df,
         eval_set=[(X_val, y_val_df)],
-        verbose=25,
+        verbose=(trainer_cfg or XGBTrainerConfig()).search_fit_verbose,
     )
     fit_dt = time.perf_counter() - fit_t0
     logging.info(
@@ -552,14 +552,66 @@ def _search_worker(
             result_queue.put(result)
 
 
-def _collect_worker_results(processes: List[mp.Process], result_queue) -> List[Dict]:
+def _log_trial_result(
+    stage_name: str,
+    result: Dict,
+    rmse: float,
+    completed: int,
+    expected: int,
+    best: float,
+    varied_params: Sequence[str] = (),
+) -> None:
+    """Log one finished trial, identically from the parallel and sequential paths.
+
+    Only the parameters the stage actually varies are shown; the rest hold the
+    same value for every trial in the stage, and printing all seven would bury
+    the two or three that differ.
+    """
+    settings = ", ".join(f"{name}={result[name]}" for name in varied_params if name in result)
+    logging.info(
+        "%s %d/%d trial=%s gpu=%s RMSE=%.4f best=%.4f%s",
+        stage_name,
+        completed,
+        expected,
+        result.get('trial', '-'),
+        result.get('gpu', '-'),
+        rmse,
+        best,
+        f" | {settings}" if settings else "",
+    )
+
+
+def _collect_worker_results(
+    processes: List[mp.Process],
+    result_queue,
+    *,
+    stage_name: str,
+    expected: int,
+    score_key: str,
+    varied_params: Sequence[str] = (),
+) -> List[Dict]:
+    """Drain worker results, logging each trial the moment it lands.
+
+    Logging here rather than after the stage is what makes a search
+    observable: workers finish minutes apart, but a stage-end loop stamped
+    every line with the same timestamp, so a 40-minute stage read as 24 trials
+    completing at once with no sign of life in between.
+    """
     results: List[Dict] = []
+    best = float('inf')
+
+    def record(result: Dict) -> None:
+        nonlocal best
+        results.append(result)
+        rmse = -float(result[score_key])
+        best = min(best, rmse)
+        _log_trial_result(stage_name, result, rmse, len(results), expected, best, varied_params)
 
     # Drain results while workers run (avoid queue backpressure).
     while True:
         alive = any(p.is_alive() for p in processes)
         try:
-            results.append(result_queue.get(timeout=0.5 if alive else 0.1))
+            record(result_queue.get(timeout=0.5 if alive else 0.1))
         except queue.Empty:
             if not alive:
                 break
@@ -570,7 +622,7 @@ def _collect_worker_results(processes: List[mp.Process], result_queue) -> List[D
     # Drain any remaining items
     while True:
         try:
-            results.append(result_queue.get_nowait())
+            record(result_queue.get_nowait())
         except queue.Empty:
             break
 
@@ -691,10 +743,9 @@ def hyperparameter_search(
             if stage_num < start_stage:
                 continue
             
-            cv_suffix = "" if use_cv else " (Single Validation Set)"
-            logging.info(f"{'='*50}")
-            logging.info(f"Starting {stage_name}{cv_suffix}")
-            logging.info(f"{'='*50}")
+            cv_suffix = "" if use_cv else " (single validation set)"
+            logging.info("Starting %s%s", stage_name, cv_suffix)
+            stage_started = time.monotonic()
             
             current_param_dist = XGBSearchSpace.build_param_dist(stage_params, best_params)
             
@@ -716,18 +767,19 @@ def hyperparameter_search(
 
             score_key = 'mean_test_score' if use_cv else 'val_score'
             expected_results = len(params_list)
+            # What this stage sweeps; the other parameters are pinned to one
+            # value here and are not worth repeating on every trial line.
+            varied_params = [
+                name for name, values in current_param_dist.items() if len(values) > 1
+            ]
 
             if len(gpu_pool) <= 1:
                 # Single GPU visible (or forced): run sequentially, but still cap threads.
-                with cuda_device(_first_visible_gpu_token(gpu_pool)):
+                gpu_token = _first_visible_gpu_token(gpu_pool)
+                stage_best_rmse = float('inf')
+                with cuda_device(gpu_token):
                     _cap_search_cpu_threads()
                     for i, params in enumerate(params_list):
-                        logging.info(
-                            "%s - Iteration %d/%d",
-                            stage_name,
-                            i + 1,
-                            expected_results,
-                        )
                         params_copy, score = train_and_evaluate_single_config(
                             X_train,
                             y_train,
@@ -751,7 +803,16 @@ def hyperparameter_search(
                         result = params_copy.copy()
                         result[score_key] = float(score)
                         result['stage'] = stage_num
+                        result['gpu'] = str(gpu_token)
+                        result['trial'] = i
                         stage_results.append(result)
+
+                        rmse = -float(score)
+                        stage_best_rmse = min(stage_best_rmse, rmse)
+                        _log_trial_result(
+                            stage_name, result, rmse, len(stage_results),
+                            expected_results, stage_best_rmse, varied_params,
+                        )
             else:
                 # Multi-GPU: one worker process per GPU.
                 try:
@@ -797,7 +858,14 @@ def hyperparameter_search(
                     p.start()
                     processes.append(p)
 
-                stage_results = _collect_worker_results(processes, result_queue)
+                stage_results = _collect_worker_results(
+                    processes,
+                    result_queue,
+                    stage_name=stage_name,
+                    expected=expected_results,
+                    score_key=score_key,
+                    varied_params=varied_params,
+                )
 
             if len(stage_results) != expected_results:
                 raise RuntimeError(
@@ -814,9 +882,6 @@ def hyperparameter_search(
                     overall_best_score = score
                     overall_best_params = {k: v for k, v in r.items() if k in current_param_dist or k in best_params}
 
-            for r in stage_results:
-                logging.info("%s trial=%s gpu=%s RMSE: %.4f", stage_name, r.get('trial'), r.get('gpu'), -float(r[score_key]))
-        
             # Update best_params with stage results
             if stage_best_params:
                 for param in current_param_dist.keys():
@@ -835,16 +900,22 @@ def hyperparameter_search(
             stage_key = f'stage_{stage_num}'
             all_results[stage_key] = stage_results
             
-            logging.info(f"\n{stage_name} Complete")
-            logging.info(f"Stage Best RMSE: {-stage_best_score:.4f}")
-            logging.info(f"Stage Best Params: {stage_best_params}")
-        
-        search_type = "STAGED SEARCH COMPLETE" if use_cv else "STAGED SEARCH COMPLETE (Single Validation Set)"
-        logging.info(f"{'='*50}")
-        logging.info(search_type)
-        logging.info(f"{'='*50}")
-        logging.info(f"Overall Best RMSE: {-overall_best_score:.4f}")
-        logging.info(f"Final Best Parameters: {overall_best_params}")
+            # No leading newline: it produced a blank, timestamp-less line that
+            # broke grep over the log.
+            logging.info(
+                "%s complete in %s -> best RMSE %.4f with %s",
+                stage_name,
+                format_duration(time.monotonic() - stage_started),
+                -stage_best_score,
+                stage_best_params,
+            )
+
+        logging.info(
+            "Staged search complete%s -> best RMSE %.4f with %s",
+            "" if use_cv else " (single validation set)",
+            -overall_best_score,
+            overall_best_params,
+        )
 
         # Ensure non-None dict for type safety
         safe_best = overall_best_params or best_params or {}
