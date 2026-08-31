@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from lightning.pytorch import LightningModule, Trainer
-from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint, TQDMProgressBar
+from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger
 from sklearn.model_selection import ParameterSampler
 from sklearn.preprocessing import StandardScaler
@@ -651,7 +651,6 @@ def create_lstm_final_trainer(
         mode="min",
         save_top_k=1,
     )
-    progress_bar = TQDMProgressBar(refresh_rate=5000)
     progress = EpochProgressLogger("LSTM final training")
 
     logger = False
@@ -664,8 +663,13 @@ def create_lstm_final_trainer(
         devices=config.devices,
         strategy="auto",
         gradient_clip_val=config.gradient_clip_val,
-        callbacks=[early_stop, checkpoint, progress_bar, progress],
+        callbacks=[early_stop, checkpoint, progress],
         logger=logger,
+        # The per-epoch heartbeat above reports progress to the log.  A tqdm bar
+        # writes to stderr with no trailing newline, so under nohup it redrew
+        # 1150 of a run's 1392 console lines and welded its text onto the front
+        # of every heartbeat line.  Every other trainer here disables it too.
+        enable_progress_bar=False,
         num_sanity_val_steps=0,  # Skip validation sanity checks
     )
 
@@ -811,6 +815,17 @@ def _report_search_results(search_results: List[Dict], run_id: str) -> Dict:
     }
 
     search_results_df = pd.DataFrame(search_results)
+    def _format_param(value):
+        """Whole numbers should read as whole numbers.
+
+        Collecting the trials into a DataFrame widens the integer
+        hyperparameters to float64, so the summary said sequence_length=1.0
+        and hidden_size=64.0 for values that are only ever integers.
+        """
+        if isinstance(value, float) and float(value).is_integer():
+            return str(int(value))
+        return str(value)
+
     search_results_path = os.path.join(get_run_root(run_id), "search_results.csv")
     os.makedirs(os.path.dirname(search_results_path), exist_ok=True)
     search_results_df.to_csv(search_results_path, index=False)
@@ -829,7 +844,7 @@ def _report_search_results(search_results: List[Dict], run_id: str) -> Dict:
                 seq = int(row["sequence_length"]) if not pd.isna(row["sequence_length"]) else None
                 score = float(row["val_loss"]) if not pd.isna(row["val_loss"]) else None
                 params_str = ", ".join(
-                    f"{k}={row[k]}" for k in search_results_df.columns
+                    f"{k}={_format_param(row[k])}" for k in search_results_df.columns
                     if k not in ("val_loss", "trial_id", "error") and k in row and not pd.isna(row[k])
                 )
                 logging.info(f"  seq_len={seq}: val_loss={score:.4f} | {params_str}")
@@ -1194,7 +1209,9 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
     else:
         obs_mask = None
 
-    save_metrics(run_id, y_test, aligned_preds, observed_mask=obs_mask)
+    # test_data drives the per-region-scale breakdown; align_sequence_predictions
+    # returned one row per test_data row, so the frame matches the scored arrays.
+    save_metrics(run_id, y_test, aligned_preds, test_data, observed_mask=obs_mask)
 
     # Store horizon data for plotting (like TFT pattern)
     session_state["horizon_df"] = test_data

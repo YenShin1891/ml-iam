@@ -8,6 +8,7 @@ from matplotlib.figure import Figure
 from PIL import Image
 import pandas as pd
 
+from configs.data import SPLIT_SEED
 from configs.visualization import DEFAULT_REGION, SHAP_MAX_SCENARIO_GROUPS, SHAP_GRID_FIGSIZE
 
 __all__ = [
@@ -136,6 +137,11 @@ def draw_shap_beeswarm(
         max_display=max_display,
         plot_type='dot',  # beeswarm
         show=False,
+        # The beeswarm jitters overlapping points randomly.  Passing the
+        # generator explicitly keeps that jitter reproducible under a coming
+        # shap release that stops reading the global RNG -- which is what its
+        # FutureWarning, one per plot, was about.
+        rng=_np.random.default_rng(SPLIT_SEED),
     )
     # Reduce dot size by adjusting PathCollections on the target axes
     try:
