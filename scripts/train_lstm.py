@@ -42,12 +42,6 @@ def derive_splits(data, store=None):
     prepared, features, targets = prepare_features_and_targets_sequence(data)
     prepared, features = add_missingness_indicators(prepared, features)
 
-    # Encode categoricals as integer codes against the run's vocabulary; the
-    # embedding sizes must cover every code, not just the ones present here.
-    prepared = encode_categorical_columns(prepared, CATEGORICAL_COLUMNS, categories)
-    for col in CATEGORICAL_COLUMNS:
-        if col in prepared.columns:
-            prepared[col] = prepared[col].astype("int64")
     num_regions = len(categories.get("Region", [])) or None
     model_family_categories = categories.get("Model_Family")
     num_model_families = len(model_family_categories) if model_family_categories else None
@@ -56,7 +50,22 @@ def derive_splits(data, store=None):
     categorical_features = [c for c in CATEGORICAL_COLUMNS if c in features]
     continuous_features = [f for f in features if f not in categorical_features]
 
+    # Split while the identity columns still hold region labels: the run's
+    # assignment is keyed by them, and the codes assigned below would match
+    # none of them.  XGB splits before encoding for the same reason.
     train_data, val_data, test_data = split_data(prepared, assignment=split_assignment)
+
+    # Encode categoricals as integer codes against the run's vocabulary, one
+    # vocabulary for all three splits so a label keeps the same code in each;
+    # the embedding sizes must cover every code, not just the ones present here.
+    train_data, val_data, test_data = (
+        encode_categorical_columns(frame, CATEGORICAL_COLUMNS, categories)
+        for frame in (train_data, val_data, test_data)
+    )
+    train_data, val_data, test_data = (
+        frame.astype({col: "int64" for col in CATEGORICAL_COLUMNS if col in frame.columns})
+        for frame in (train_data, val_data, test_data)
+    )
     # Only impute continuous features (categoricals are already int codes, no NaN)
     train_data, val_data, test_data = impute_with_train_medians(
         train_data, val_data, test_data, continuous_features
@@ -94,7 +103,8 @@ def search_lstm(store):
     )
     store.save_best_params(best_params)
     store.save_features(splits["features"], splits["targets"])
-    logging.info("Hyperparameter search complete. Best params: %s", best_params)
+    # The searcher already logged the winning parameters, and the phase banner
+    # marks the end of the phase; repeating both here said nothing new.
     return best_params
 
 
@@ -218,6 +228,32 @@ def test_lstm(store):
     return preds
 
 
+def _region_labels(frame, categories):
+    """Region labels for *frame*, whichever form its Region column is in.
+
+    Region survives as text in some frames and as embedding codes in others;
+    returning None where neither is available lets the caller decide, rather
+    than filtering against codes that match no region prefix.
+    """
+    import pandas as pd
+
+    from src.data.preprocess import decode_categorical_column
+
+    if "Region" not in frame.columns:
+        return None
+    if not pd.api.types.is_numeric_dtype(frame["Region"]):
+        return frame["Region"].astype(str)
+
+    vocabulary = (categories or {}).get("Region")
+    if not vocabulary:
+        logging.warning(
+            "Region is encoded but this run has no Region vocabulary; "
+            "SHAP cannot be filtered by region."
+        )
+        return None
+    return decode_categorical_column(frame["Region"], vocabulary)
+
+
 def plot_lstm(store):
     """Plot LSTM predictions and SHAP plots."""
     from src.visualization import plot_scatter, plot_lstm_shap
@@ -262,4 +298,11 @@ def plot_lstm(store):
     if store.has_train_meta():
         meta = store.load_train_meta()
         sequence_length = meta.get("lstm_sequence_length", sequence_length)
-    plot_lstm_shap(store.run_id, test_data_for_shap, features, targets, sequence_length=sequence_length)
+
+    # The frame carries Region as the integer codes the embeddings were fit on,
+    # which no region prefix can match; hand SHAP the labels behind them.
+    plot_lstm_shap(
+        store.run_id, test_data_for_shap, features, targets,
+        sequence_length=sequence_length,
+        region_series=_region_labels(test_data_for_shap, splits["categories"]),
+    )

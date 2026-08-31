@@ -548,7 +548,8 @@ def get_tft_shap_values(
         # (cuDNN's RNN backward requires training mode, but SHAP needs gradients)
         with torch.backends.cudnn.flags(enabled=False):
             explainer = shap.GradientExplainer(wrapper, background_inputs)
-            logging.info(f"Calculating SHAP values for {target_name}...")
+            # The caller already announced this target with its position in the
+            # list; saying it again adds a line per target and no information.
             shap_values = explainer.shap_values(
                 test_inputs, nsamples=SHAP_GRADIENT_NSAMPLES
             )
@@ -604,7 +605,21 @@ def get_tft_shap_values(
 
     return original_temporal_shap, averaged, X_processed, test_inputs_np, features
 
-def plot_lstm_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str], targets: List[str], sequence_length=1, region: Optional[str] = DEFAULT_REGION):
+def plot_lstm_shap(
+    run_id,
+    X_test_with_index: pd.DataFrame,
+    features: List[str],
+    targets: List[str],
+    sequence_length=1,
+    region: Optional[str] = DEFAULT_REGION,
+    region_series: Optional[pd.Series] = None,
+):
+    """SHAP plots for the LSTM, over *region* only.
+
+    The frame's own Region column holds the integer codes the embeddings were
+    fit on, so callers pass *region_series* -- the decoded labels, aligned row
+    for row -- for the filter to match against.
+    """
     logging.info("Creating LSTM SHAP plots...")
     model_path = os.path.join(get_run_root(run_id), "final", "best.ckpt")
     if not os.path.exists(model_path):
@@ -614,8 +629,20 @@ def plot_lstm_shap(run_id, X_test_with_index: pd.DataFrame, features: List[str],
     X_filtered, _, pre_rows, post_rows, matched, _mode = filter_index_frame_by_region(
         X_test_with_index,
         region,
+        region_series=region_series,
         log_prefix="Applied region filter",
     )
+
+    if region is not None and not matched:
+        # Plotting every region under a filename that says R10 is worse than
+        # plotting nothing: lstm_87 shipped exactly that, from a warning buried
+        # in the log, because the codes could never match a region prefix.
+        logging.error(
+            "Skipping LSTM SHAP plots: region filter %r matched no rows of %d. "
+            "Pass region_series with decoded Region labels.",
+            region, pre_rows,
+        )
+        return
 
     # Scenario-based sampling on the full index frame (Model/Scenario kept as indices)
     group_keys, total_groups, used_groups, group_cols = sample_scenario_groups(

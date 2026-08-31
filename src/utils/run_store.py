@@ -207,6 +207,45 @@ class RunStore:
         self.save_splits(assignment)
         return assignment
 
+    def _identity_in_labels(self, test_data: pd.DataFrame, data: pd.DataFrame) -> pd.DataFrame:
+        """The saved test rows' identity columns, in *data*'s own terms.
+
+        The sequence models save their test frame after encoding categoricals
+        for their embeddings, so Region comes back as integer codes that cannot
+        be merged against the labels in the processed data.  Decoding is the
+        only safe repair: matching the codes as strings would find nothing,
+        leave the run with no test groups, and silently re-split a run whose
+        results are already published.
+        """
+        from configs.data import INDEX_COLUMNS
+        from src.data.preprocess import decode_categorical_column
+
+        keys = test_data[list(INDEX_COLUMNS)].copy()
+        encoded = [
+            col for col in INDEX_COLUMNS
+            if pd.api.types.is_numeric_dtype(keys[col])
+            and col in data.columns
+            and not pd.api.types.is_numeric_dtype(data[col])
+        ]
+        if not encoded:
+            return keys
+
+        vocabularies = self.categories_for(data)
+        for col in encoded:
+            vocabulary = vocabularies.get(col)
+            if not vocabulary:
+                raise ValueError(
+                    f"Run {self.run_id} saved {col} as integer codes and has no vocabulary "
+                    f"to decode them, so its original test groups cannot be recovered. "
+                    "Re-run the preprocess phase to write artifacts/splits.parquet."
+                )
+            keys[col] = decode_categorical_column(keys[col], vocabulary)
+            logging.info(
+                "Decoded %s from the saved test data to recover run %s's split.",
+                col, self.run_id,
+            )
+        return keys
+
     def _legacy_splits(self, data: pd.DataFrame) -> Optional[pd.DataFrame]:
         """Recover a pre-existing run's split from the test rows it saved.
 
@@ -232,7 +271,7 @@ class RunStore:
             return None
 
         keys = data[INDEX_COLUMNS].drop_duplicates()
-        test_keys = test_data[INDEX_COLUMNS].drop_duplicates()
+        test_keys = self._identity_in_labels(test_data, data).drop_duplicates()
         is_test = (
             keys.merge(test_keys.assign(_test=True), on=list(INDEX_COLUMNS), how="left")["_test"]
             .notna()

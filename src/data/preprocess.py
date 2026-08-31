@@ -231,6 +231,28 @@ def encode_categorical_columns(data, columns, vocabularies=None):
     return data
 
 
+def decode_categorical_column(codes, categories) -> pd.Series:
+    """Recover the labels behind codes from :func:`encode_categorical_columns`.
+
+    The sequence models feed integer codes to their embeddings, so anything
+    downstream that reasons about region *names* -- filtering SHAP to R10, say
+    -- has to translate back first.  Codes outside the vocabulary (-1, and the
+    floats Region is stored as) decode to None rather than silently indexing
+    from the end of the list.
+    """
+    vocabulary = list(categories)
+    series = codes if isinstance(codes, pd.Series) else pd.Series(list(codes))
+
+    def label(code):
+        try:
+            index = int(code)
+        except (TypeError, ValueError):
+            return None
+        return vocabulary[index] if 0 <= index < len(vocabulary) else None
+
+    return series.map(label)
+
+
 def add_missingness_indicators(
     prepared: pd.DataFrame,
     features: list,

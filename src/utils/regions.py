@@ -7,6 +7,7 @@ drifted: the metrics writer labelled country-level rows "ISO" while the
 ``Region_Scale`` column produced by data processing calls them "ISO3".
 """
 
+import logging
 from typing import Dict, Iterable, List, Optional, Sequence
 
 import pandas as pd
@@ -41,11 +42,21 @@ def region_scales(regions: Iterable) -> pd.Series:
 def scale_of_frame(frame: pd.DataFrame) -> Optional[pd.Series]:
     """Per-row scale for *frame*, preferring its persisted Region_Scale column.
 
-    Returns None when the frame carries neither Region_Scale nor Region.
+    Returns None when the frame carries neither Region_Scale nor usable Region
+    labels.  The sequence models encode Region to integer codes for their
+    embeddings, and prefix matching on those codes would not fail -- it would
+    quietly bucket every row as the default scale -- so numeric labels are
+    refused rather than guessed at.
     """
     if "Region_Scale" in frame.columns:
         return frame["Region_Scale"].astype(str)
     if "Region" in frame.columns:
+        if pd.api.types.is_numeric_dtype(frame["Region"]):
+            logging.warning(
+                "Region is integer-coded and Region_Scale is absent, so rows cannot "
+                "be bucketed by scale; pass a frame that kept its region labels."
+            )
+            return None
         return region_scales(frame["Region"])
     return None
 
