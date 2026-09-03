@@ -26,15 +26,10 @@ Both windows require ``encoder_length + prediction_length`` steps (e.g. 3 + 12
 = 15).  Trajectories shorter than this are excluded from *both* windows and
 therefore receive no predictions.
 
-The standard single-window method (``predict_tft`` in ``tft_trainer.py``) runs
-the same ``predict=True`` mode over the *unsliced* test data, which only needs
-``min_encoder_length`` steps (e.g. 3).  For a short trajectory of
-*N* steps the standard method uses the first 3 steps as encoder context and
-outputs ``prediction_length`` (12) decoder steps; after merging back with
-test data, only the *N − encoder_length* steps that have ground truth are kept.
-
-To get full coverage, the caller can run the standard method as a fallback for
-trajectories that the two-window approach cannot cover.
+The single-window method (``predict_tft`` in ``tft_trainer.py``) cannot fill
+that gap: ``predict=True`` raises ``min_prediction_length`` to
+``max_prediction_length``, so it too needs ``min_encoder_length +
+prediction_length`` steps per trajectory -- the same 15 here.
 """
 
 import logging
@@ -246,8 +241,8 @@ def _predict_window(
         target_offset = int(session_state.get("tft_target_offset", 0) or 0)
 
         cfg = WindowConfig(
-            encoder_length=getattr(train_template, 'max_encoder_length', 2),
-            prediction_length=getattr(train_template, 'max_prediction_length', 13),
+            encoder_length=train_template.max_encoder_length,
+            prediction_length=train_template.max_prediction_length,
         )
 
         window_data = slice_window(session_state["test_data"], cfg.total_length, template_time_idx)
@@ -461,28 +456,29 @@ def _combine_predictions_weighted(
         return late
 
 
-def predict_tft_two_window(session_state: Dict, run_id: str) -> np.ndarray:
-    """Dual-approach TFT prediction.
+def predict_tft_two_window(
+    session_state: Dict,
+    run_id: str,
+    *,
+    skip_metrics: bool = False,
+    metrics_filename: str = "performance.csv",
+) -> np.ndarray:
+    """Two-window TFT prediction: early and late windows, blended over the overlap.
 
-    1. Two-window (early + late with weighted blending) for trajectories with
-       enough steps (>= encoder_length + prediction_length).
-    2. Standard single-window prediction for shorter trajectories that cannot
-       fit a full two-window pass (see module docstring "Coverage note").
+    Trajectories shorter than ``encoder_length + prediction_length`` fit
+    neither window and receive no prediction (module docstring, "Coverage
+    note").
+
+    *skip_metrics* / *metrics_filename* let callers evaluate non-test splits
+    (e.g. train/val, for over/underfitting diagnostics) without overwriting
+    the canonical test-set "performance.csv".
     """
-    from .tft_trainer import predict_tft
-
-    # The caller has already said which prediction approach it chose.
-
-    # Generate early window predictions
     early_window = _predict_early_window(session_state, run_id)
-
-    # Generate late window predictions (positioned to end at trajectory ends)
     late_window = _predict_late_window(session_state, run_id)
 
     if late_window.horizon is None or len(late_window.horizon) == 0:
         raise ValueError("Late window predictions failed or returned empty results")
 
-    # Combine predictions with weighted averaging
     time_idx_col = session_state.get("tft_time_idx_column", "Step")
     combined_window = _combine_predictions_weighted(
         early_window,
@@ -491,7 +487,6 @@ def predict_tft_two_window(session_state: Dict, run_id: str) -> np.ndarray:
         time_idx_col,
     )
 
-    # Identify trajectories not covered by two-window
     test_data = session_state["test_data"]
     targets = session_state["targets"]
     all_test_trajectories = set(
@@ -500,57 +495,25 @@ def predict_tft_two_window(session_state: Dict, run_id: str) -> np.ndarray:
     combined_trajectories = set(
         map(tuple, combined_window.horizon[TRAJECTORY_COLS].drop_duplicates().itertuples(index=False, name=None))
     )
-    missing_trajectories = all_test_trajectories - combined_trajectories
-
     logging.info(
         "Two-window coverage: %d/%d trajectories",
         len(combined_trajectories),
         len(all_test_trajectories),
     )
+    n_missing = len(all_test_trajectories - combined_trajectories)
+    if n_missing:
+        logging.warning(
+            "%d/%d test trajectories are shorter than the encoder+decoder window "
+            "and receive no TFT prediction.",
+            n_missing, len(all_test_trajectories),
+        )
 
     final_horizon = combined_window.horizon
     final_preds = combined_window.preds
 
-    if len(missing_trajectories) > 0:
-        logging.info(
-            "%d trajectories too short for two-window; using single-window prediction.",
-            len(missing_trajectories),
-        )
-
-        # Run standard single-window prediction on the full test set.
-        # predict_tft writes horizon_df into session_state as a side effect.
-        sw_preds = predict_tft(session_state, run_id, skip_metrics=True)
-        sw_horizon = session_state["horizon_df"]
-
-        # Filter to only the missing trajectories by matching on trajectory keys.
-        sw_traj_tuples = list(zip(
-            sw_horizon["Model"], sw_horizon["Scenario"], sw_horizon["Region"]
-        ))
-        sw_mask = np.array([t in missing_trajectories for t in sw_traj_tuples])
-
-        if sw_mask.any():
-            additional_horizon = sw_horizon.loc[sw_mask].reset_index(drop=True)
-            additional_preds = sw_preds[sw_mask]
-
-            final_horizon = pd.concat(
-                [combined_window.horizon, additional_horizon], ignore_index=True
-            )
-            final_preds = np.vstack([combined_window.preds, additional_preds])
-
-            sw_added = additional_horizon[TRAJECTORY_COLS].drop_duplicates().shape[0]
-            logging.info(
-                "Single-window added %d trajectories (%d rows). Final coverage: %d/%d",
-                sw_added,
-                len(additional_horizon),
-                combined_trajectories.__len__() + sw_added,
-                len(all_test_trajectories),
-            )
-
-    # Update session state. final_preds (and early_window.preds/late_window.preds)
-    # are already absolute (denormalized in _predict_early_window/_predict_late_window
-    # and in predict_tft's single-window fallback); ground truth here is read
-    # fresh from final_horizon and must be denormalized to match.
-    from src.data.preprocess import denormalize_by_population
+    # The window predictions are already absolute (denormalized in
+    # _predict_window); the ground truth read from final_horizon has to match.
+    from src.data.preprocess import denormalize_by_population, observed_mask_from_frame
     from configs.data import POPULATION_COLUMN
     session_state['horizon_df'] = final_horizon
     y_true_combined = denormalize_by_population(
@@ -560,17 +523,13 @@ def predict_tft_two_window(session_state: Dict, run_id: str) -> np.ndarray:
     session_state['early_predictions'] = early_window.preds
     session_state['late_predictions'] = late_window.preds
 
-    # Compute metrics on the full combined predictions (two-window + single-window
-    # fallback).  The predict_tft call above only evaluated the single-window
-    # subset, so those metrics are incomplete.
-    from src.trainers.evaluation import save_metrics
-    from src.data.preprocess import observed_mask_columns
-    obs_cols = observed_mask_columns(targets)
-    if all(c in final_horizon.columns for c in obs_cols):
-        obs_mask = final_horizon[obs_cols].values
-    else:
-        obs_mask = None
-    save_metrics(run_id, y_true_combined, final_preds, final_horizon, observed_mask=obs_mask)
+    if not skip_metrics:
+        from src.trainers.evaluation import save_metrics
+        save_metrics(
+            run_id, y_true_combined, final_preds, final_horizon,
+            observed_mask=observed_mask_from_frame(final_horizon, targets),
+            metrics_filename=metrics_filename,
+        )
 
     logging.info("Two-window prediction completed successfully!")
     return final_preds

@@ -14,11 +14,7 @@ from src.utils.utils import get_run_root
 from configs.data import CATEGORICAL_COLUMNS, INDEX_COLUMNS
 
 
-# --- Categorical encoder construction (restored from working logic) ---
-try:
-    from pytorch_forecasting.data.encoders import NaNLabelEncoder  # type: ignore
-except Exception:  # pragma: no cover
-    NaNLabelEncoder = None  # type: ignore
+from pytorch_forecasting.data.encoders import NaNLabelEncoder
 
 
 def _ordered_categorical_cols(features: List[str]) -> List[str]:
@@ -31,16 +27,14 @@ def _ordered_categorical_cols(features: List[str]) -> List[str]:
 
 def _build_union_encoders(session_state: Dict, categorical_cols: List[str], add_nan: bool = False) -> Dict[str, Any]:
     """Fit NaNLabelEncoder with a closed vocabulary aggregated across splits."""
-    if NaNLabelEncoder is None:
-        logging.warning("NaNLabelEncoder unavailable; skipping pretrained categorical encoders.")
-        return {}
     dfs = [session_state.get("train_data"), session_state.get("val_data"), session_state.get("test_data")]
     df_all = pd.concat([df for df in dfs if df is not None], axis=0, ignore_index=True)
     encoders: Dict[str, Any] = {}
     # ensure deterministic iteration order
     for col in categorical_cols:
         if col in df_all.columns:
-            s_raw = df_all[col].astype(str).fillna("__NA__")
+            # fillna before astype: str(NaN) is "nan", not the token below.
+            s_raw = df_all[col].fillna("__NA__").astype(str)
             # Explicit, deterministic category order
             categories = sorted(pd.unique(s_raw))
             s = pd.Series(pd.Categorical(s_raw, categories=categories, ordered=True))
@@ -339,43 +333,3 @@ def load_dataset_template(run_id: str) -> DatasetTemplate:
     raise RuntimeError(
         f"Unrecognised dataset template at {dataset_tpl_path}: got {type(loaded)}"
     )
-
-
-def create_dataset_with_custom_encoders(
-    session_state: Dict,
-    custom_encoders: Dict[str, Any]
-) -> TimeSeriesDataSet:
-    """Create a TFT dataset using custom categorical encoders.
-
-    Args:
-        session_state: Dictionary containing training data, features, and targets
-        custom_encoders: Dictionary of pre-trained categorical encoders
-
-    Returns:
-        TimeSeriesDataSet configured with the custom encoders
-    """
-    from configs.models.tft import TFTDatasetConfig
-
-    train_data = session_state["train_data"].copy()
-    features = session_state["features"]
-    targets = session_state["targets"]
-
-    config = TFTDatasetConfig()
-    config.pretrained_categorical_encoders = custom_encoders
-    normalizer_mode = session_state.get("tft_target_normalizer_mode")
-    if normalizer_mode is not None:
-        config.target_normalizer_mode = normalizer_mode
-    if config.target_normalizer_mode == "encoder_floored":
-        config.target_scale_floors = compute_target_scale_floors(
-            train_data, targets, fraction=config.scale_floor_fraction,
-        )
-
-    min_encoder_length, _ = config.resolve_encoder_lengths()
-    train_data = drop_underlength_groups(
-        train_data, config.group_ids, config.time_idx,
-        min_encoder_length + config.min_prediction_length,
-    )
-
-    params = config.build(features, targets, mode="train")
-
-    return TimeSeriesDataSet(train_data, **params)

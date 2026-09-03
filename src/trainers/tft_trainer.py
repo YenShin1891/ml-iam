@@ -122,21 +122,33 @@ def _get_search_gpu_ids() -> List[int]:
     return list(range(n)) if n > 0 else []
 
 
-def _get_best_epoch(trainer) -> int:
-    """Extract the epoch of the best val_loss from an EarlyStopping callback."""
-    best_epoch, _ = _get_best_score(trainer)
-    return best_epoch
-
-
 def _get_best_score(trainer):
-    """Return (best_epoch, best_val_loss) from the EarlyStopping callback."""
+    """Return (best_epoch, best_val_loss) from the EarlyStopping callback.
+
+    After fit, ``current_epoch`` counts completed epochs, so the last one ran
+    at index ``current_epoch - 1``, and ``wait_count`` epochs have passed since
+    the best.  Epochs are 0-based, as the progress log reports them.
+    """
     for cb in trainer.callbacks:
         if isinstance(cb, EarlyStopping):
-            best_epoch = trainer.current_epoch - cb.wait_count
+            best_epoch = trainer.current_epoch - 1 - cb.wait_count
             best_val_loss = cb.best_score.item()
             return best_epoch, best_val_loss
     # Fallback: if no early stopping, use last epoch's metrics.
-    return trainer.current_epoch, trainer.callback_metrics["val_loss"].item()
+    return trainer.current_epoch - 1, trainer.callback_metrics["val_loss"].item()
+
+
+def _fit_search_trial(train_dataset, params, n_targets, trainer_cfg, log_dir, train_loader, val_loader):
+    """Fit one configuration and return (best_epoch, best_val_loss).
+
+    The model and trainer are locals, so they are released on return; the
+    caller empties the CUDA cache before the next trial.
+    """
+    tft = create_tft_model(train_dataset, params, n_targets)
+    os.makedirs(log_dir, exist_ok=True)
+    trainer = create_search_trainer(trainer_cfg, log_dir=log_dir)
+    trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    return _get_best_score(trainer)
 
 
 def _search_worker(gpu_id, trials, train_dataset, val_dataset, n_targets, trainer_cfg, result_queue, run_id, stage):
@@ -161,22 +173,24 @@ def _search_worker(gpu_id, trials, train_dataset, val_dataset, n_targets, traine
         params = trial["params"]
         trial_id = trial["trial_id"]
         logging.info("[%s] GPU %d - Trial %d/%d - Params: %s", stage, gpu_id, i + 1, len(trials), params)
-        tft = create_tft_model(train_dataset, params, n_targets)
         log_dir = os.path.join(get_run_root(run_id), "search", "trials", trial_id)
-        os.makedirs(log_dir, exist_ok=True)
-        trainer = create_search_trainer(trainer_cfg, log_dir=log_dir)
         try:
-            trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
+            best = _fit_search_trial(
+                train_dataset, params, n_targets, trainer_cfg, log_dir, train_loader, val_loader,
+            )
         except torch.cuda.OutOfMemoryError:
             logging.warning(
                 "[%s] GPU %d - Trial %d/%d OOM — skipping trial %s. "
                 "Consider reducing batch_size or excluding this GPU if another process holds memory.",
                 stage, gpu_id, i + 1, len(trials), trial_id,
             )
-            del tft, trainer
-            torch.cuda.empty_cache()
+            best = None
+        # The trial's model and trainer were locals of _fit_search_trial and
+        # are gone by now; hand their cached blocks back before the next one.
+        torch.cuda.empty_cache()
+        if best is None:
             continue
-        best_epoch, best_val_loss = _get_best_score(trainer)
+        best_epoch, best_val_loss = best
         result_queue.put({
             **_canonicalize_search_params(params),
             "val_loss": float(best_val_loss),
@@ -190,8 +204,6 @@ def _search_worker(gpu_id, trials, train_dataset, val_dataset, n_targets, traine
             "[%s] GPU %d - Trial %d/%d - best_val_loss: %.4f best_epoch: %d",
             stage, gpu_id, i + 1, len(trials), best_val_loss, best_epoch,
         )
-        del tft, trainer
-        torch.cuda.empty_cache()
 
 
 def _run_trials_once(
@@ -223,12 +235,18 @@ def _run_trials_once(
         for i, trial in enumerate(trials):
             params = trial["params"]
             logging.info("[%s] Trial %d/%d - Params: %s", stage, i + 1, len(trials), params)
-            tft = create_tft_model(train_dataset, params, n_targets)
             log_dir = os.path.join(get_run_root(run_id), "search", "trials", trial["trial_id"])
-            os.makedirs(log_dir, exist_ok=True)
-            trainer = create_search_trainer(trainer_cfg, log_dir=log_dir)
-            trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
-            epoch, val_loss = _get_best_score(trainer)
+            try:
+                epoch, val_loss = _fit_search_trial(
+                    train_dataset, params, n_targets, trainer_cfg, log_dir, train_loader, val_loader,
+                )
+            except torch.cuda.OutOfMemoryError:
+                # Same policy as the multi-GPU workers: one configuration that
+                # does not fit must not end the search.
+                logging.warning("[%s] Trial %d/%d OOM — skipping trial %s.", stage, i + 1, len(trials), trial["trial_id"])
+                torch.cuda.empty_cache()
+                continue
+            torch.cuda.empty_cache()
             results.append({
                 **_canonicalize_search_params(params),
                 "val_loss": float(val_loss),
@@ -345,15 +363,10 @@ def hyperparameter_search_tft(
         )
     )
 
-    sig_to_params = {}
-    for p in all_params:
-        try:
-            sig_to_params[_params_signature(p)] = p
-        except Exception:
-            continue
+    sig_to_params = {_params_signature(p): p for p in all_params}
 
-    stage1_epochs = int(getattr(search_cfg, "stage1_max_epochs", 40))
-    stage2_top_k = int(getattr(search_cfg, "stage2_top_k", 10))
+    stage1_epochs = int(search_cfg.stage1_max_epochs)
+    stage2_top_k = int(search_cfg.stage2_top_k)
 
     stage1_sigs = set()
     stage2_sigs = set()
@@ -484,7 +497,9 @@ def train_final_tft(
 
     os.makedirs(final_dir, exist_ok=True)
 
-    # Pop search best_epoch — informational only, early stopping decides when to stop
+    # best_epoch is search bookkeeping, not a model parameter: early stopping
+    # decides when to stop.  Drop it from a copy so the caller's dict survives.
+    best_params = dict(best_params)
     search_best_epoch = best_params.pop("best_epoch", None)
 
     if primary:
@@ -642,7 +657,7 @@ def predict_tft(
             train=False,
             batch_size=trainer_cfg.batch_size,
             num_workers=get_default_num_workers(),
-            persistent_workers=True,
+            persistent_workers=False,
         )
 
         logging.info("Predicting with TFT model (forecast horizon only)...")

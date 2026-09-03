@@ -40,13 +40,19 @@ def _load_metrics_csv(run_root: str) -> pd.DataFrame:
 
 
 def _epoch_curve(df: pd.DataFrame, column: str):
-    """Collapse a sparsely-logged Lightning CSV column to one value per epoch."""
-    if column not in df.columns:
-        return None
-    sub = df[["epoch", column]].dropna(subset=[column])
-    if sub.empty:
-        return None
-    return sub.groupby("epoch")[column].last()
+    """Collapse a sparsely-logged Lightning CSV column to one value per epoch.
+
+    The LSTM logs ``train_loss``; pytorch_forecasting logs the TFT's as
+    ``train_loss_epoch`` and ``train_loss_step``, so the epoch-level variant
+    is accepted under the plain name.
+    """
+    for name in (column, f"{column}_epoch"):
+        if name not in df.columns:
+            continue
+        sub = df[["epoch", name]].dropna(subset=[name])
+        if not sub.empty:
+            return sub.groupby("epoch")[name].last()
+    return None
 
 
 def main(argv=None):
@@ -89,7 +95,7 @@ def main(argv=None):
     fig.tight_layout()
 
     output_path = args.output or os.path.join(run_root, "plots", "learning_curve.png")
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     print(f"Saved learning curve to {output_path}")
 

@@ -486,11 +486,8 @@ def _train_single_fold(
     rmse = np.sqrt(mean_squared_error(y_flat[mask], pred_flat[mask]))
     logging.info(f"Fold {fold_num} RMSE: {rmse:.4f}")
     
-    try:
-        del regular_model, predictions
-    except:
-        logging.warning("Error cleaning up objects", exc_info=True)
-    
+    del regular_model, predictions
+
     return rmse
 
 
@@ -733,7 +730,7 @@ def hyperparameter_search(
                     overall_best_score = stage_data['score']
                     overall_best_params = stage_data['params'].copy()
         else:
-            logging.error(f"Required checkpoint for Stage {stage_num} not found at {checkpoint_file}", exc_info=True)
+            logging.error("Required checkpoint for Stage %d not found at %s", stage_num, checkpoint_file)
             raise FileNotFoundError(f"Cannot start from stage {start_stage} without completing stage {stage_num}")
     
     try:
@@ -965,6 +962,10 @@ def train_and_save_model(
             model.save_model(model_path)
             logging.info(f"Model saved to {model_path}")
 
-        except Exception as e:
-            logging.error(f"Error during final model training: {str(e)}", exc_info=True)
+        except Exception:
+            # The phase must fail here; otherwise the caller saves the scalers,
+            # reports the training complete, and the missing model surfaces
+            # only when the test phase looks for it.
+            logging.error("Final XGBoost training failed", exc_info=True)
+            raise
             raise

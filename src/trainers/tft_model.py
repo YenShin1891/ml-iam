@@ -214,6 +214,10 @@ def create_final_trainer(
         monitor="val_loss",
         mode="min",
         save_top_k=1,
+        # A re-run train phase must overwrite best.ckpt: with the version
+        # counter on, Lightning writes best-v1.ckpt instead and the test
+        # phase keeps loading the stale weights.
+        enable_version_counter=False,
     )
 
     progress = EpochProgressLogger("TFT final training")

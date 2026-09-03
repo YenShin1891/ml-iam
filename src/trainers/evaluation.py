@@ -186,19 +186,16 @@ def test_xgb_autoregressively(
     if cache is None:
         cache = {}
     
-    # Load scalers if not provided and run_id is available
+    # Load the run's scalers when the caller did not pass them.  Without them
+    # the lag columns would receive y-scaled predictions in x-scaled units, a
+    # wrong-scale feedback loop that yields a plausible but wrong RMSE, so a
+    # missing scaler is an error rather than a warning.
     if y_scaler is None and x_scaler is None and run_id is not None:
-        try:
-            from src.utils.run_store import RunStore
-            store = RunStore(run_id)
-            y_scaler = store.load_artifact("y_scaler.pkl")
-            x_scaler = store.load_artifact("x_scaler.pkl")
-        except Exception:
-            logging.warning("Could not load scalers, falling back to original behavior")
-            y_scaler = None
-            x_scaler = None
-        
-    # group_test_data returns (group_indices_list, group_matrices, [optional lag masks...])
+        from src.utils.run_store import RunStore
+        store = RunStore(run_id)
+        y_scaler = store.load_artifact("y_scaler.pkl")
+        x_scaler = store.load_artifact("x_scaler.pkl")
+
     group_indices_list, group_matrices = group_test_data(X_test_with_index, cache)
     full_preds = np.full(y_test.shape, np.nan, dtype=float)
     
@@ -275,77 +272,89 @@ def _r2(yt, yp):
     return 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
 
 
-def compute_r2_summary(y_true, y_pred, observed_mask=None) -> dict:
-    """Pooled and per-target-average R2/RMSE for one (y_true, y_pred) pair.
+def _pearson(yt, yp):
+    if len(yt) < 2 or np.std(yt) == 0 or np.std(yp) == 0:
+        return np.nan
+    return float(np.corrcoef(yt, yp)[0, 1])
 
-    Mirrors the "Overall" row logic in save_metrics(), factored out so callers
-    that need a quick split-level diagnostic (e.g. train/val/test R2
-    breakdowns) don't have to run the full save_metrics pipeline.
-    """
-    yt_2d = np.asarray(y_true)
-    yp_2d = np.asarray(y_pred)
+
+def _as_2d(y_true, y_pred, observed_mask=None):
+    """(rows, targets) float views of the arrays, and the mask or None."""
+    yt_2d = np.asarray(y_true, dtype=float)
+    yp_2d = np.asarray(y_pred, dtype=float)
     if yt_2d.ndim == 1:
         yt_2d = yt_2d.reshape(-1, 1)
         yp_2d = yp_2d.reshape(-1, 1)
     obs_2d = np.asarray(observed_mask) if observed_mask is not None else None
+    return yt_2d, yp_2d, obs_2d
 
-    target_r2s = []
+
+def _scored_elements(yt_2d, yp_2d, obs_2d=None, col=None):
+    """Flat (y_true, y_pred) over the elements that count: observed and finite.
+
+    *col* selects one target; None pools every target.
+    """
+    if col is None:
+        yt, yp = yt_2d.ravel(), yp_2d.ravel()
+        keep = obs_2d.astype(bool).ravel() if obs_2d is not None else np.ones(yt.shape, dtype=bool)
+    else:
+        yt, yp = yt_2d[:, col], yp_2d[:, col]
+        keep = obs_2d[:, col].astype(bool) if obs_2d is not None else np.ones(yt.shape, dtype=bool)
+    keep &= np.isfinite(yt) & np.isfinite(yp)
+    return yt[keep], yp[keep]
+
+
+def _per_target_r2_average(yt_2d, yp_2d, obs_2d=None):
+    r2s = []
     for col in range(yt_2d.shape[1]):
-        yt_col, yp_col = yt_2d[:, col], yp_2d[:, col]
-        if obs_2d is not None:
-            col_mask = obs_2d[:, col].astype(bool)
-            yt_col, yp_col = yt_col[col_mask], yp_col[col_mask]
-        valid = np.isfinite(yt_col) & np.isfinite(yp_col)
-        if valid.any():
-            target_r2s.append(_r2(yt_col[valid], yp_col[valid]))
-    per_target_r2 = float(np.mean(target_r2s)) if target_r2s else np.nan
+        yt, yp = _scored_elements(yt_2d, yp_2d, obs_2d, col)
+        if len(yt):
+            r2s.append(_r2(yt, yp))
+    return float(np.mean(r2s)) if r2s else np.nan
 
-    yt_flat, yp_flat = yt_2d.flatten(), yp_2d.flatten()
-    if obs_2d is not None:
-        mask = obs_2d.astype(bool).flatten()
-        yt_flat, yp_flat = yt_flat[mask], yp_flat[mask]
-    valid = np.isfinite(yt_flat) & np.isfinite(yp_flat)
-    yt_flat, yp_flat = yt_flat[valid], yp_flat[valid]
+
+def compute_r2_summary(y_true, y_pred, observed_mask=None) -> dict:
+    """Pooled and per-target-average metrics for one (y_true, y_pred) pair.
+
+    This is the "Overall" row of save_metrics(); callers that need a quick
+    split-level diagnostic (e.g. train/val/test R2 breakdowns) use it directly.
+    """
+    yt_2d, yp_2d, obs_2d = _as_2d(y_true, y_pred, observed_mask)
+    yt_flat, yp_flat = _scored_elements(yt_2d, yp_2d, obs_2d)
 
     if len(yt_flat) == 0:
         return {
             "R2 (per-target avg)": np.nan, "R2 (pooled)": np.nan,
-            "RMSE": np.nan, "MAE": np.nan, "Sample Size": 0,
+            "RMSE": np.nan, "MAE": np.nan, "MSE": np.nan, "Pearson": np.nan,
+            "Sample Size": 0,
         }
+    mse = float(mean_squared_error(yt_flat, yp_flat))
     return {
-        "R2 (per-target avg)": per_target_r2,
+        "R2 (per-target avg)": _per_target_r2_average(yt_2d, yp_2d, obs_2d),
         "R2 (pooled)": _r2(yt_flat, yp_flat),
-        "RMSE": float(np.sqrt(mean_squared_error(yt_flat, yp_flat))),
+        "RMSE": float(np.sqrt(mse)),
         "MAE": float(np.mean(np.abs(yt_flat - yp_flat))),
+        "MSE": mse,
+        "Pearson": _pearson(yt_flat, yp_flat),
         "Sample Size": int(len(yt_flat)),
     }
 
 
 def per_target_r2_table(y_true, y_pred, targets, observed_mask=None) -> pd.DataFrame:
     """Per-output-variable R2/RMSE table (rows = targets), for ablation-style reporting."""
-    yt_2d = np.asarray(y_true)
-    yp_2d = np.asarray(y_pred)
-    if yt_2d.ndim == 1:
-        yt_2d = yt_2d.reshape(-1, 1)
-        yp_2d = yp_2d.reshape(-1, 1)
-    obs_2d = np.asarray(observed_mask) if observed_mask is not None else None
+    yt_2d, yp_2d, obs_2d = _as_2d(y_true, y_pred, observed_mask)
 
     rows = []
     for col, target in enumerate(targets):
-        yt_col, yp_col = yt_2d[:, col], yp_2d[:, col]
-        if obs_2d is not None:
-            col_mask = obs_2d[:, col].astype(bool)
-            yt_col, yp_col = yt_col[col_mask], yp_col[col_mask]
-        valid = np.isfinite(yt_col) & np.isfinite(yp_col)
-        yt_col, yp_col = yt_col[valid], yp_col[valid]
-        if len(yt_col) == 0:
+        yt, yp = _scored_elements(yt_2d, yp_2d, obs_2d, col)
+        if len(yt) == 0:
             rows.append({"Output Variable": target, "R2": np.nan, "RMSE": np.nan, "Sample Size": 0})
             continue
         rows.append({
             "Output Variable": target,
-            "R2": _r2(yt_col, yp_col),
-            "RMSE": float(np.sqrt(mean_squared_error(yt_col, yp_col))),
-            "Sample Size": int(len(yt_col)),
+            "R2": _r2(yt, yp),
+            "RMSE": float(np.sqrt(mean_squared_error(yt, yp))),
+            "Sample Size": int(len(yt)),
         })
     return pd.DataFrame(rows)
 
@@ -395,65 +404,20 @@ def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None,
         )
 
     def compute_metrics(y_true_subset, y_pred_subset, subset_name="Overall", obs=None):
-        results = []
-
-        def _metrics(yt, yp, per_target_r2):
-            mse = mean_squared_error(yt, yp)
-            mae = float(np.mean(np.abs(yt - yp)))
-            rmse = float(np.sqrt(mse))
-            r2_pooled = _r2(yt, yp)
-            try:
-                yt_f, yp_f = yt.flatten(), yp.flatten()
-                pearson_corr = float(np.corrcoef(yt_f, yp_f)[0, 1]) if len(yt_f) > 1 else np.nan
-            except Exception:
-                pearson_corr = np.nan
-            return {
-                "Run ID": run_id,
-                "Region Type": subset_name,
-                "Mean Squared Error": mse,
-                "Pearson Correlation": pearson_corr,
-                "R2 Score (per-target avg)": per_target_r2,
-                "R2 Score (pooled)": r2_pooled,
-                "MAE": mae,
-                "RMSE": rmse,
-                "Sample Size": len(yt),
-            }
-
-        yt_2d = np.asarray(y_true_subset)
-        yp_2d = np.asarray(y_pred_subset)
-        if yt_2d.ndim == 1:
-            yt_2d = yt_2d.reshape(-1, 1)
-            yp_2d = yp_2d.reshape(-1, 1)
-        obs_2d = np.asarray(obs) if obs is not None else None
-
-        # Compute per-target R²
-        target_r2s = []
-        for col in range(yt_2d.shape[1]):
-            yt_col = yt_2d[:, col]
-            yp_col = yp_2d[:, col]
-            if obs_2d is not None:
-                col_mask = obs_2d[:, col].astype(bool)
-                yt_col = yt_col[col_mask]
-                yp_col = yp_col[col_mask]
-            valid = np.isfinite(yt_col) & np.isfinite(yp_col)
-            if valid.any():
-                target_r2s.append(_r2(yt_col[valid], yp_col[valid]))
-        per_target_r2 = float(np.mean(target_r2s)) if target_r2s else np.nan
-
-        # Flatten for pooled metrics
-        yt_flat = yt_2d.flatten()
-        yp_flat = yp_2d.flatten()
-
-        if obs_2d is not None:
-            mask = obs_2d.astype(bool).flatten()
-            yt_flat = yt_flat[mask]
-            yp_flat = yp_flat[mask]
-
-        valid = np.isfinite(yt_flat) & np.isfinite(yp_flat)
-        if valid.any():
-            results.append(_metrics(yt_flat[valid], yp_flat[valid], per_target_r2))
-
-        return results
+        summary = compute_r2_summary(y_true_subset, y_pred_subset, observed_mask=obs)
+        if summary["Sample Size"] == 0:
+            return []
+        return [{
+            "Run ID": run_id,
+            "Region Type": subset_name,
+            "Mean Squared Error": summary["MSE"],
+            "Pearson Correlation": summary["Pearson"],
+            "R2 Score (per-target avg)": summary["R2 (per-target avg)"],
+            "R2 Score (pooled)": summary["R2 (pooled)"],
+            "MAE": summary["MAE"],
+            "RMSE": summary["RMSE"],
+            "Sample Size": summary["Sample Size"],
+        }]
 
     # Compute overall metrics
     all_metrics = compute_metrics(y_true, y_pred, "Overall", obs=observed_mask)

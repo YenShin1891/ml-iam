@@ -613,10 +613,14 @@ def create_lstm_model(
 
 def create_lstm_search_trainer(
     config: LSTMTrainerConfig,
-    checkpoint_callback: ModelCheckpoint,
     log_dir: Optional[str] = None,
 ) -> Trainer:
-    """Create trainer for LSTM hyperparameter search with multi-device support."""
+    """Create trainer for LSTM hyperparameter search with multi-device support.
+
+    Trials only rank configurations, so nothing is checkpointed: the final
+    fit retrains the winner from scratch and nothing ever read the per-trial
+    weights.
+    """
     early_stop = EarlyStopping(monitor=config.monitor, patience=config.patience, mode=config.mode)
 
     logger = False
@@ -629,9 +633,10 @@ def create_lstm_search_trainer(
         devices=config.devices,  # Multi-device for search to handle 8 processes per GPU
         strategy="auto",
         gradient_clip_val=config.gradient_clip_val,
-        callbacks=[early_stop, checkpoint_callback],
+        callbacks=[early_stop],
         logger=logger,
         enable_progress_bar=False,
+        enable_checkpointing=False,
     )
 
 
@@ -650,6 +655,10 @@ def create_lstm_final_trainer(
         monitor="val_loss",
         mode="min",
         save_top_k=1,
+        # A re-run train phase must overwrite best.ckpt: with the version
+        # counter on, Lightning writes best-v1.ckpt instead and the test
+        # phase keeps loading the stale weights.
+        enable_version_counter=False,
     )
     progress = EpochProgressLogger("LSTM final training")
 
@@ -745,37 +754,21 @@ def _run_lstm_trial(
     anything about the rest.
     """
     search_cfg = LSTMSearchSpace()
-    defaults = LSTMTrainerConfig()
 
     try:
-        sequence_length = int(params.get("sequence_length", defaults.sequence_length))
+        # The same config the final fit would build from these parameters,
+        # only cut short.
+        config = lstm_config_from_params(
+            params, max_epochs=search_cfg.max_epochs, patience=search_cfg.patience, devices=devices,
+        )
         train_dataset, val_dataset, model_features = create_lstm_datasets(
             train_data, val_data, features, targets,
-            sequence_length=sequence_length,
-            target_offset=defaults.target_offset,
+            sequence_length=config.sequence_length,
+            target_offset=config.target_offset,
             categorical_features=categorical_features,
         )
-
-        batch_size = params.get("batch_size", 32)
         train_loader, val_loader = create_lstm_dataloaders(
-            train_dataset, val_dataset, batch_size=batch_size
-        )
-
-        config = LSTMTrainerConfig(
-            hidden_size=params.get("hidden_size", 64),
-            num_layers=params.get("num_layers", 1),
-            dropout=params.get("dropout", 0.0),
-            bidirectional=params.get("bidirectional", False),
-            dense_hidden_size=params.get("dense_hidden_size", 64),
-            dense_dropout=params.get("dense_dropout", 0.0),
-            learning_rate=params.get("learning_rate", 0.001),
-            batch_size=batch_size,
-            weight_decay=params.get("weight_decay", 0.0),
-            sequence_length=sequence_length,
-            embedding_dim=params.get("embedding_dim", defaults.embedding_dim),
-            max_epochs=search_cfg.max_epochs,
-            patience=search_cfg.patience,
-            devices=devices,
+            train_dataset, val_dataset, batch_size=config.batch_size
         )
 
         model = create_lstm_model(
@@ -784,16 +777,12 @@ def _run_lstm_trial(
         )
 
         trial_dir = os.path.join(get_run_root(run_id), "search", f"trial_{trial_id}")
-        search_checkpoint = ModelCheckpoint(
-            dirpath=trial_dir, filename="best",
-            monitor=config.monitor, mode=config.mode, save_top_k=1,
-        )
-        trainer = create_lstm_search_trainer(
-            config, search_checkpoint, log_dir=os.path.join(trial_dir, "logs")
-        )
+        trainer = create_lstm_search_trainer(config, log_dir=os.path.join(trial_dir, "logs"))
         trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
-        val_loss = trainer.callback_metrics["val_loss"].item()
+        # Rank by the best epoch, as the TFT search does: under early stopping
+        # the last epoch is worse than the best by a trial-dependent amount.
+        val_loss = trainer.early_stopping_callback.best_score.item()
         logging.info("Trial %d val_loss: %.4f", trial_id + 1, val_loss)
         return {**params, "val_loss": val_loss, "trial_id": trial_id}
 

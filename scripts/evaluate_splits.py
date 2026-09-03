@@ -34,7 +34,8 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 
 def _eval_tft_split(splits, run_id, split_name, df, use_two_window):
-    from src.data.preprocess import observed_mask_columns
+    """Score one split; metrics stay in memory so the run's own files are untouched."""
+    from src.data.preprocess import observed_mask_from_frame
 
     targets = splits["targets"]
     safe_name = split_name.replace("+", "_")
@@ -42,48 +43,34 @@ def _eval_tft_split(splits, run_id, split_name, df, use_two_window):
     session_state["test_data"] = df
 
     if use_two_window:
-        # Two-window prediction manages its own metrics internally and does
-        # not currently accept filename overrides, so it writes to the
-        # default performance.csv/prediction_summary.json each call; we only
-        # use its return value + session_state side effects here.
         from src.trainers.tft_two_window_simple import predict_tft_two_window
-        y_pred = predict_tft_two_window(session_state, run_id)
+        y_pred = predict_tft_two_window(session_state, run_id, skip_metrics=True)
     else:
         from src.trainers.tft_trainer import predict_tft
         y_pred = predict_tft(
             session_state,
             run_id,
             skip_metrics=True,
-            metrics_filename=f"performance_split_{safe_name}.csv",
             prediction_summary_filename=f"prediction_summary_split_{safe_name}.json",
         )
 
     y_true = session_state["horizon_y_true"]
     horizon_df = session_state["horizon_df"]
-    obs_cols = observed_mask_columns(targets)
-    obs_mask = horizon_df[obs_cols].values if all(c in horizon_df.columns for c in obs_cols) else None
-    return y_true, y_pred, obs_mask, len(horizon_df)
+    return y_true, y_pred, observed_mask_from_frame(horizon_df, targets), len(horizon_df)
 
 
 def _eval_lstm_split(base_session_state, run_id, split_name, df):
     from src.trainers.lstm_trainer import predict_lstm
-    from src.data.preprocess import observed_mask_columns
+    from src.data.preprocess import observed_mask_from_frame
 
     targets = base_session_state["targets"]
-    safe_name = split_name.replace("+", "_")
     session_state = dict(base_session_state)
     session_state["test_data"] = df
 
-    y_pred = predict_lstm(
-        session_state, run_id,
-        skip_metrics=True,
-        metrics_filename=f"performance_split_{safe_name}.csv",
-    )
+    y_pred = predict_lstm(session_state, run_id, skip_metrics=True)
     y_true = session_state["horizon_y_true"]
     horizon_df = session_state["horizon_df"]
-    obs_cols = observed_mask_columns(targets)
-    obs_mask = horizon_df[obs_cols].values if all(c in horizon_df.columns for c in obs_cols) else None
-    return y_true, y_pred, obs_mask, len(horizon_df)
+    return y_true, y_pred, observed_mask_from_frame(horizon_df, targets), len(horizon_df)
 
 
 # ---------------------------------------------------------------------------
@@ -139,12 +126,22 @@ def main(argv=None):
     from src.utils.utils import setup_logging, get_run_root
     from src.utils.run_store import RunStore
     from src.trainers.evaluation import compute_r2_summary, per_target_r2_table
+    from scripts.train import _load_resolved_config
 
     setup_logging(args.run_id, log_file="evaluate_splits.log")
     store = RunStore(args.run_id)
 
+    # Score the run under the settings it was trained with: keep_partial_targets
+    # decides how derive_splits fills targets and which TFT class loads the
+    # checkpoint, and a two-window run should be scored two-window by default.
+    recorded = _load_resolved_config(args.run_id)
+    if recorded.get("keep_partial_targets") is not None:
+        import configs.data as data_config
+        data_config.KEEP_PARTIAL_TARGETS = recorded["keep_partial_targets"]
+    use_two_window = args.two_window or bool(recorded.get("two_window"))
+
     if args.model == "tft":
-        targets, results = _build_split_results_tft(store, args.run_id, args.two_window)
+        targets, results = _build_split_results_tft(store, args.run_id, use_two_window)
     else:
         targets, results = _build_split_results_lstm(store, args.run_id)
 
@@ -195,7 +192,7 @@ def main(argv=None):
               "limitation rather than a generalization gap.")
 
     output_path = args.output or os.path.join(get_run_root(args.run_id), "metrics", "train_val_test_r2_breakdown.csv")
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     merged = summary_df.merge(
         per_target_df.pivot(index="Split", columns="Output Variable", values="R2").reset_index(),
         on="Split",
