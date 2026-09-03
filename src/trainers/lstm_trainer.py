@@ -1,5 +1,6 @@
 """LSTM trainer with PyTorch Lightning, following TFT patterns."""
 
+from dataclasses import dataclass
 import logging
 import os
 from typing import Dict, List, Optional, Tuple
@@ -12,13 +13,18 @@ import torch.nn.functional as F
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger
-from sklearn.model_selection import ParameterSampler
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset, DataLoader
 
 from src.utils.utils import get_run_root, is_primary_rank
 from src.trainers.progress import EpochProgressLogger
 from configs.models import LSTMTrainerConfig, LSTMSearchSpace
+from .search import (
+    completed_trials,
+    params_signature,
+    select_top_k_signatures,
+    write_search_report,
+)
 
 
 def _infer_non_numeric_feature_columns(df: pd.DataFrame, features: List[str]) -> List[str]:
@@ -734,6 +740,18 @@ def resolve_feature_columns(train_data, targets, features):
     return [col for col in train_data.columns if col not in excluded]
 
 
+def _best_epoch(trainer) -> int:
+    """0-based epoch the early-stopping callback judged best.
+
+    After fit, ``current_epoch`` counts completed epochs, so the last one ran
+    at index ``current_epoch - 1``, and ``wait_count`` epochs have passed
+    since the best.  Matches what the TFT search records, so ``best_epoch``
+    means the same thing in both models' ledgers.
+    """
+    callback = trainer.early_stopping_callback
+    return max(0, int(trainer.current_epoch) - 1 - int(getattr(callback, "wait_count", 0)))
+
+
 def _run_lstm_trial(
     trial_id: int,
     params: Dict,
@@ -746,6 +764,8 @@ def _run_lstm_trial(
     num_model_families: int,
     num_regions: int,
     devices=1,
+    stage: str = "stage1",
+    budget: Optional[Dict] = None,
 ) -> Dict:
     """Train one hyperparameter configuration and return its validation loss.
 
@@ -753,14 +773,11 @@ def _run_lstm_trial(
     search — a single configuration can exhaust GPU memory without saying
     anything about the rest.
     """
-    search_cfg = LSTMSearchSpace()
-
+    budget = dict(budget or {})
     try:
         # The same config the final fit would build from these parameters,
-        # only cut short.
-        config = lstm_config_from_params(
-            params, max_epochs=search_cfg.max_epochs, patience=search_cfg.patience, devices=devices,
-        )
+        # under whatever budget this stage grants.
+        config = lstm_config_from_params(params, devices=devices, **budget)
         train_dataset, val_dataset, model_features = create_lstm_datasets(
             train_data, val_data, features, targets,
             sequence_length=config.sequence_length,
@@ -776,32 +793,62 @@ def _run_lstm_trial(
             num_model_families=num_model_families, num_regions=num_regions,
         )
 
-        trial_dir = os.path.join(get_run_root(run_id), "search", f"trial_{trial_id}")
+        trial_dir = os.path.join(get_run_root(run_id), "search", f"{stage}_trial_{trial_id}")
         trainer = create_lstm_search_trainer(config, log_dir=os.path.join(trial_dir, "logs"))
         trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
         # Rank by the best epoch, as the TFT search does: under early stopping
         # the last epoch is worse than the best by a trial-dependent amount.
         val_loss = trainer.early_stopping_callback.best_score.item()
-        logging.info("Trial %d val_loss: %.4f", trial_id + 1, val_loss)
-        return {**params, "val_loss": val_loss, "trial_id": trial_id}
+        logging.info("[%s] Trial %d val_loss: %.4f", stage, trial_id + 1, val_loss)
+        return {
+            **params,
+            "val_loss": val_loss,
+            "best_epoch": _best_epoch(trainer),
+            "trial_id": trial_id,
+            "stage": stage,
+            "status": "completed",
+        }
 
     except Exception as e:  # noqa: BLE001 - one trial must not end the search
-        logging.error("Trial %d failed: %s", trial_id + 1, e, exc_info=True)
-        return {**params, "val_loss": float("inf"), "trial_id": trial_id, "error": str(e)}
+        logging.error("[%s] Trial %d failed: %s", stage, trial_id + 1, e, exc_info=True)
+        return {
+            **params,
+            "val_loss": float("inf"),
+            "trial_id": trial_id,
+            "stage": stage,
+            "status": "failed",
+            "error": str(e),
+        }
 
 
-def _report_search_results(search_results: List[Dict], run_id: str) -> Dict:
+_TRIAL_BOOKKEEPING_KEYS = ("val_loss", "trial_id", "error", "stage", "status", "best_epoch")
+
+
+def _report_search_results(
+    search_results: List[Dict], run_id: str, space: Optional[LSTMSearchSpace] = None
+) -> Dict:
     """Persist the trial table, log the per-sequence-length winners, return the best params."""
     valid_results = [r for r in search_results if np.isfinite(r["val_loss"])]
     if not valid_results:
         raise RuntimeError("All LSTM hyperparameter trials failed")
 
-    best_result = min(valid_results, key=lambda r: r["val_loss"])
+    # Stage 2 measured its candidates under the full schedule, so it decides
+    # whenever it ran; stage 1 only ranks candidates for it.
+    stage2 = [r for r in valid_results if r.get("stage") == "stage2"]
+    best_result = min(stage2 or valid_results, key=lambda r: r["val_loss"])
     best_score = best_result["val_loss"]
     best_params = {
-        k: v for k, v in best_result.items() if k not in ("val_loss", "trial_id", "error")
+        k: v for k, v in best_result.items() if k not in _TRIAL_BOOKKEEPING_KEYS
     }
+
+    if space is not None:
+        try:
+            write_search_report(
+                os.path.join(get_run_root(run_id), "search"), space, valid_results
+            )
+        except Exception as exc:  # noqa: BLE001 - a report must not sink a search
+            logging.warning("Failed to write LSTM search report: %s", exc)
 
     search_results_df = pd.DataFrame(search_results)
     def _format_param(value):
@@ -834,7 +881,7 @@ def _report_search_results(search_results: List[Dict], run_id: str) -> Dict:
                 score = float(row["val_loss"]) if not pd.isna(row["val_loss"]) else None
                 params_str = ", ".join(
                     f"{k}={_format_param(row[k])}" for k in search_results_df.columns
-                    if k not in ("val_loss", "trial_id", "error") and k in row and not pd.isna(row[k])
+                    if k not in _TRIAL_BOOKKEEPING_KEYS and k in row and not pd.isna(row[k])
                 )
                 logging.info(f"  seq_len={seq}: val_loss={score:.4f} | {params_str}")
 
@@ -842,18 +889,32 @@ def _report_search_results(search_results: List[Dict], run_id: str) -> Dict:
     return best_params
 
 
+@dataclass
+class _TrialInputs:
+    """Everything a trial needs beyond its own hyperparameters.
+
+    Bundled into one picklable object because the parallel search ships it to
+    a spawned worker per GPU, and threading a dozen positional arguments
+    through that hand-off is how they drift apart.
+    """
+
+    train_data: pd.DataFrame
+    val_data: pd.DataFrame
+    features: List[str]
+    targets: List[str]
+    run_id: str
+    categorical_features: List[str]
+    num_model_families: int
+    num_regions: int
+
+
 def _search_worker(
     gpu_id: int,
     assignments: List,
     shared_results,
-    train_data: pd.DataFrame,
-    val_data: pd.DataFrame,
-    features: List[str],
-    targets: List[str],
-    run_id: str,
-    categorical_features: List[str],
-    num_model_families: int,
-    num_regions: int,
+    inputs: "_TrialInputs",
+    stage: str,
+    budget: Dict,
 ) -> None:
     """Run one GPU's share of the trials.
 
@@ -863,40 +924,29 @@ def _search_worker(
     """
     torch.cuda.set_device(gpu_id)
     for trial_id, params in assignments:
-        logging.info("GPU %d - Trial %d: %s", gpu_id, trial_id + 1, params)
+        logging.info("[%s] GPU %d - Trial %d: %s", stage, gpu_id, trial_id + 1, params)
         shared_results.append(_run_lstm_trial(
-            trial_id, params, train_data, val_data, features, targets, run_id,
-            categorical_features, num_model_families, num_regions,
-            devices=[gpu_id],
+            trial_id, params, inputs.train_data, inputs.val_data, inputs.features,
+            inputs.targets, inputs.run_id, inputs.categorical_features,
+            inputs.num_model_families, inputs.num_regions,
+            devices=[gpu_id], stage=stage, budget=budget,
         ))
 
 
-def hyperparameter_search_lstm_parallel(
-    train_data: pd.DataFrame,
-    val_data: pd.DataFrame,
-    targets: List[str],
-    run_id: str,
-    features: List[str] = None,
-    categorical_features: Optional[List[str]] = None,
-    num_model_families: int = 0,
-    num_regions: int = 0,
-) -> Dict:
-    """Hyperparameter search with one worker process per GPU."""
+def _run_lstm_trials_parallel(
+    params_list: List[Dict],
+    inputs: "_TrialInputs",
+    stage: str,
+    budget: Dict,
+) -> List[Dict]:
+    """Run the trials with one worker process per GPU."""
     import torch.multiprocessing as mp
 
-    categorical_features = categorical_features or []
-    features = resolve_feature_columns(train_data, targets, features)
-    search_cfg = LSTMSearchSpace()
-
-    param_list = list(ParameterSampler(
-        search_cfg.param_dist, n_iter=search_cfg.search_iter_n, random_state=0
-    ))
-
     num_gpus = torch.cuda.device_count()
-    logging.info(f"Using {num_gpus} GPUs for parallel hyperparameter search")
+    logging.info("[%s] Using %d GPUs for %d trials", stage, num_gpus, len(params_list))
 
     param_groups = [[] for _ in range(num_gpus)]
-    for i, params in enumerate(param_list):
+    for i, params in enumerate(params_list):
         param_groups[i % num_gpus].append((i, params))
 
     # Spawn, not the platform default: the CUDA runtime cannot be re-initialised
@@ -916,9 +966,7 @@ def hyperparameter_search_lstm_parallel(
                 continue
             process = ctx.Process(
                 target=_search_worker,
-                args=(gpu_id, assignments, shared_results, train_data, val_data,
-                      features, targets, run_id, categorical_features,
-                      num_model_families, num_regions),
+                args=(gpu_id, assignments, shared_results, inputs, stage, budget),
             )
             process.start()
             processes.append(process)
@@ -935,37 +983,43 @@ def hyperparameter_search_lstm_parallel(
                 + ", ".join(f"pid={p.pid} exitcode={p.exitcode}" for p in crashed)
             )
 
-        search_results = list(shared_results)
-
-    return _report_search_results(search_results, run_id)
+        return list(shared_results)
 
 
-def hyperparameter_search_lstm_sequential(
-    train_data: pd.DataFrame,
-    val_data: pd.DataFrame,
-    targets: List[str],
-    run_id: str,
-    features: List[str] = None,
-    categorical_features: Optional[List[str]] = None,
-    num_model_families: int = 0,
-    num_regions: int = 0,
-) -> Dict:
-    """Hyperparameter search running one trial at a time."""
-    categorical_features = categorical_features or []
-    features = resolve_feature_columns(train_data, targets, features)
-    search_cfg = LSTMSearchSpace()
-
-    search_results = []
-    for i, params in enumerate(ParameterSampler(
-        search_cfg.param_dist, n_iter=search_cfg.search_iter_n, random_state=0
-    )):
-        logging.info(f"LSTM Search Iteration {i + 1}/{search_cfg.search_iter_n} - Params: {params}")
-        search_results.append(_run_lstm_trial(
-            i, params, train_data, val_data, features, targets, run_id,
-            categorical_features, num_model_families, num_regions,
+def _run_lstm_trials_sequential(
+    params_list: List[Dict],
+    inputs: "_TrialInputs",
+    stage: str,
+    budget: Dict,
+) -> List[Dict]:
+    """Run the trials one at a time."""
+    results = []
+    for i, params in enumerate(params_list):
+        logging.info("[%s] Trial %d/%d - Params: %s", stage, i + 1, len(params_list), params)
+        results.append(_run_lstm_trial(
+            i, params, inputs.train_data, inputs.val_data, inputs.features,
+            inputs.targets, inputs.run_id, inputs.categorical_features,
+            inputs.num_model_families, inputs.num_regions,
+            stage=stage, budget=budget,
         ))
+    return results
 
-    return _report_search_results(search_results, run_id)
+
+def _run_lstm_trials(
+    params_list: List[Dict],
+    inputs: "_TrialInputs",
+    stage: str,
+    budget: Dict,
+) -> List[Dict]:
+    """Run one stage of trials, fanning out over GPUs when there are several."""
+    if not params_list:
+        return []
+    runner = (
+        _run_lstm_trials_parallel if torch.cuda.device_count() > 1
+        else _run_lstm_trials_sequential
+    )
+    logging.info("[%s] Using %s LSTM trial execution", stage, runner.__name__.rsplit("_", 1)[-1])
+    return runner(params_list, inputs, stage, budget)
 
 
 def hyperparameter_search_lstm(
@@ -978,17 +1032,50 @@ def hyperparameter_search_lstm(
     num_model_families: int = 0,
     num_regions: int = 0,
 ) -> Dict:
-    """Search hyperparameters, fanning out over GPUs when there is more than one."""
-    search = (
-        hyperparameter_search_lstm_parallel if torch.cuda.device_count() > 1
-        else hyperparameter_search_lstm_sequential
+    """Two-stage random search, the same protocol the TFT and XGB searches run.
+
+    Stage 1 ranks every sampled configuration under a shortened schedule;
+    stage 2 refits the leaders under the full schedule, because a
+    configuration that looks good after 20 epochs is not necessarily the one
+    that is best after 100.
+    """
+    space = LSTMSearchSpace()
+    inputs = _TrialInputs(
+        train_data=train_data,
+        val_data=val_data,
+        features=resolve_feature_columns(train_data, targets, features),
+        targets=targets,
+        run_id=run_id,
+        categorical_features=categorical_features or [],
+        num_model_families=num_model_families,
+        num_regions=num_regions,
     )
-    logging.info("Using %s LSTM hyperparameter search", search.__name__.rsplit("_", 1)[-1])
-    return search(
-        train_data, val_data, targets, run_id, features,
-        categorical_features=categorical_features,
-        num_model_families=num_model_families, num_regions=num_regions,
+    logging.info("LSTM search space: %s", space.summary())
+
+    all_params = space.sample()
+    stage1_rows = _run_lstm_trials(all_params, inputs, "stage1", space.stage1_budget)
+
+    stage1_done = completed_trials(stage1_rows, space.param_keys)
+    if not stage1_done:
+        raise RuntimeError("All LSTM stage-1 hyperparameter trials failed")
+
+    signature_to_params = {params_signature(p, space.param_keys): p for p in all_params}
+    stage2_params = [
+        signature_to_params[sig]
+        for sig in select_top_k_signatures(stage1_done, space.stage2_top_k, space.param_keys)
+        if sig in signature_to_params
+    ]
+    logging.info(
+        "LSTM stage2: refitting the top %d of %d completed stage-1 trials at full budget",
+        len(stage2_params), len(stage1_done),
     )
+    # Full budget: no overrides, so lstm_config_from_params falls back to
+    # LSTMTrainerConfig's max_epochs, with the patience the final fit uses.
+    stage2_rows = _run_lstm_trials(
+        stage2_params, inputs, "stage2", {"patience": LSTMTrainerConfig().final_patience},
+    )
+
+    return _report_search_results(stage1_rows + stage2_rows, run_id, space)
 
 
 def train_final_lstm(

@@ -9,7 +9,7 @@ import src.trainers.lstm_trainer as lstm_trainer
 from src.trainers.lstm_trainer import (
     _report_search_results,
     resolve_feature_columns,
-    hyperparameter_search_lstm_sequential,
+    hyperparameter_search_lstm,
 )
 
 TARGETS = ["A", "B"]
@@ -34,15 +34,19 @@ def run(tmp_path, monkeypatch):
 
 @pytest.fixture
 def three_trials(monkeypatch):
-    """Shrink the search space; the field default lives in __init__, not the class."""
+    """Shrink the search to three stage-1 trials and one stage-2 refit.
+
+    Also pins execution to the sequential path: the search fans out over every
+    visible GPU otherwise, and a test that spawns eight worker processes tests
+    the scheduler rather than the search.
+    """
     real_space = lstm_trainer.LSTMSearchSpace
 
     def _space():
-        space = real_space()
-        space.search_iter_n = 3
-        return space
+        return real_space(n_trials=3, stage2_top_k=1)
 
     monkeypatch.setattr(lstm_trainer, "LSTMSearchSpace", _space)
+    monkeypatch.setattr(lstm_trainer.torch.cuda, "device_count", lambda: 1)
 
 
 # ── feature resolution ────────────────────────────────────────────────────
@@ -129,8 +133,8 @@ def test_one_failing_trial_does_not_abort_the_search(run, frame, monkeypatch, th
 
     monkeypatch.setattr(lstm_trainer, "create_lstm_datasets", fake_datasets)
 
-    with pytest.raises(RuntimeError, match="All LSTM hyperparameter trials failed"):
-        hyperparameter_search_lstm_sequential(frame, frame, TARGETS, run_id, ["feat"])
+    with pytest.raises(RuntimeError, match="All LSTM stage-1 hyperparameter trials failed"):
+        hyperparameter_search_lstm(frame, frame, TARGETS, run_id, ["feat"])
 
     assert len(calls) == 3, "every trial should have been attempted"
 
@@ -139,18 +143,20 @@ def test_a_surviving_trial_wins_over_failures(run, frame, monkeypatch, three_tri
     run_id, _ = run
     attempts = {"n": 0}
 
-    def fake_run_trial(trial_id, params, *args, **kwargs):
+    def fake_run_trial(trial_id, params, *args, stage="stage1", **kwargs):
         attempts["n"] += 1
-        if trial_id == 1:
-            return {**params, "val_loss": 0.25, "trial_id": trial_id}
-        return {**params, "val_loss": float("inf"), "trial_id": trial_id, "error": "boom"}
+        row = {**params, "trial_id": trial_id, "stage": stage}
+        if trial_id == 1 or stage == "stage2":
+            return {**row, "val_loss": 0.25, "status": "completed"}
+        return {**row, "val_loss": float("inf"), "status": "failed", "error": "boom"}
 
     monkeypatch.setattr(lstm_trainer, "_run_lstm_trial", fake_run_trial)
 
-    best = hyperparameter_search_lstm_sequential(frame, frame, TARGETS, run_id, ["feat"])
+    best = hyperparameter_search_lstm(frame, frame, TARGETS, run_id, ["feat"])
 
-    assert attempts["n"] == 3
-    assert "val_loss" not in best
+    # Three stage-1 trials, then the single survivor refit in stage 2.
+    assert attempts["n"] == 4
+    assert "val_loss" not in best and "stage" not in best
 
 
 # ── shared config construction ────────────────────────────────────────────

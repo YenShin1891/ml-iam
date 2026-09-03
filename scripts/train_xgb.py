@@ -88,7 +88,7 @@ def search_xgb(store):
 
     best_params, all_results = hyperparameter_search(
         X_train, y_train, X_train_with_index, train_groups,
-        targets, store.run_id, start_stage=1, use_cv=False,
+        targets, store.run_id, use_cv=False,
         X_val=X_val, y_val=y_val, X_val_with_index=X_val_with_index, val_groups=val_groups,
         obs_train=splits.get("obs_train"), obs_val=splits.get("obs_val"),
     )

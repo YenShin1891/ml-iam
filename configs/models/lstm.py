@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Union, Optional
 
+from src.trainers.search import Choice, IntLogUniform, LogUniform, SearchSpace, Uniform
+
 
 @dataclass
 class LSTMTrainerConfig:
@@ -49,52 +51,41 @@ class LSTMTrainerConfig:
     mode: str = "min"
 
 
-@dataclass
-class LSTMSearchSpace:
-    """Hyperparameter search space for LSTM model."""
+class LSTMSearchSpace(SearchSpace):
+    """LSTM search space.
 
-    # Model architecture search space - heavily reduced for better coverage
-    hidden_size: List[int] = field(default_factory=lambda: [64, 128])
-    num_layers: List[int] = field(default_factory=lambda: [2, 3])
-    dropout: List[float] = field(default_factory=lambda: [0.1, 0.2])
+    The widest of the three -- an LSTM trial costs seconds, so there is no
+    reason to search fewer knobs than the architecture actually has.  It runs
+    the same two-stage protocol as the others: stage-1 trials are cut to 20
+    epochs to rank them, the top 10 are refit under
+    ``LSTMTrainerConfig.max_epochs`` / ``final_patience``.
+    """
 
-    # Dense layers
-    dense_hidden_size: List[int] = field(default_factory=lambda: [64, 128])
-    dense_dropout: List[float] = field(default_factory=lambda: [0.0, 0.1])
-
-    # Training parameters - focused around optimal TFT values
-    learning_rate: List[float] = field(default_factory=lambda: [0.01, 0.02])
-    batch_size: List[int] = field(default_factory=lambda: [64, 128])
-    weight_decay: List[float] = field(default_factory=lambda: [0.0, 1e-5])
-
-    # Categorical embedding dimension
-    embedding_dim: List[int] = field(default_factory=lambda: [4, 8, 16, 32])
-
-    # Sequence length to search (reintroduced)
-    sequence_length: List[int] = field(default_factory=lambda: [1, 2, 3, 4])
-
-    # Search configuration
-    search_iter_n: int = 48
-    # Trials are cut short: the search ranks configurations, the final fit
-    # (LSTMTrainerConfig.max_epochs / final_patience) trains them properly.
-    max_epochs: int = 20
-    patience: int = 3
-
-    @property
-    def param_dist(self) -> Dict[str, List]:
-        """Get parameter distribution for sklearn ParameterSampler."""
-        return {
-            "hidden_size": self.hidden_size,
-            "num_layers": self.num_layers,
-            "dropout": self.dropout,
-            "dense_hidden_size": self.dense_hidden_size,
-            "dense_dropout": self.dense_dropout,
-            "learning_rate": self.learning_rate,
-            "batch_size": self.batch_size,
-            "weight_decay": self.weight_decay,
-            "embedding_dim": self.embedding_dim,
-            "sequence_length": self.sequence_length,
-        }
+    def __init__(self, **overrides):
+        defaults = dict(
+            distributions={
+                "hidden_size": IntLogUniform(32, 512, multiple_of=8),
+                "num_layers": Choice([1, 2, 3]),
+                "dropout": Uniform(0.0, 0.4),
+                "dense_hidden_size": IntLogUniform(32, 256, multiple_of=8),
+                "dense_dropout": Uniform(0.0, 0.3),
+                "learning_rate": LogUniform(1e-4, 5e-2),
+                "batch_size": Choice([32, 64, 128, 256]),
+                # 1e-8 stands in for "off": log-uniform cannot reach 0, and at
+                # this scale the penalty is numerically indistinguishable from
+                # no penalty at all.
+                "weight_decay": LogUniform(1e-8, 1e-3),
+                "embedding_dim": IntLogUniform(4, 64, multiple_of=4),
+                # Structural, and only a handful of settings are meaningful.
+                "sequence_length": Choice([1, 2, 3, 4]),
+            },
+            n_trials=50,
+            stage1_budget={"max_epochs": 20, "patience": 3},
+            stage2_top_k=10,
+            seed=0,
+        )
+        defaults.update(overrides)
+        super().__init__(**defaults)
 
 
 __all__ = [

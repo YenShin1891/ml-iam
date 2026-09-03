@@ -3,7 +3,6 @@
 import hashlib
 import json
 import logging
-import math
 import os
 import queue
 from typing import Dict, List, Optional
@@ -12,9 +11,18 @@ import numpy as np
 import pandas as pd
 import torch
 from lightning.pytorch.callbacks import EarlyStopping
-from sklearn.model_selection import ParameterSampler
 
 from configs.models import TFTSearchSpace, TFTTrainerConfig
+from .search import (
+    best_trial,
+    canonicalize_params,
+    completed_trials,
+    is_completed_trial,
+    params_signature,
+    plan_two_stage_search,
+    select_top_k_signatures,
+    write_search_report,
+)
 from src.utils.utils import get_run_root, is_primary_rank
 from .tft_dataset import (
     build_datasets,
@@ -32,49 +40,22 @@ from .tft_model import (
 from .tft_utils import get_default_num_workers, single_gpu_env, teardown_distributed
 
 
-_SEARCH_PARAM_KEYS = ("hidden_size", "lstm_layers", "dropout", "learning_rate")
+_SEARCH_PARAM_KEYS = tuple(TFTSearchSpace().param_keys)
 
 
 def _is_completed_trial_row(row: Dict) -> bool:
     """True only for rows usable for dedup and best-param selection."""
-    if not isinstance(row, dict):
-        return False
-    # Explicit completion marker is required to avoid counting partial trials.
-    if row.get("status") != "completed":
-        return False
-    if not all(k in row for k in _SEARCH_PARAM_KEYS):
-        return False
-    try:
-        val_loss = float(row["val_loss"])
-    except Exception:
-        return False
-    if not math.isfinite(val_loss):
-        return False
-    return True
+    return is_completed_trial(row, _SEARCH_PARAM_KEYS)
 
 
 def _canonicalize_search_params(params: Dict) -> Dict:
     """Return canonical params dict for stable signatures / comparisons."""
-    canonical = {}
-    for k in _SEARCH_PARAM_KEYS:
-        if k not in params:
-            continue
-        v = params[k]
-        if isinstance(v, float):
-            canonical[k] = float(format(v, ".12g"))
-        else:
-            canonical[k] = v
-    return canonical
+    return canonicalize_params(params, _SEARCH_PARAM_KEYS)
 
 
 def _params_signature(params: Dict) -> str:
     """Stable signature for a parameter set (only search-relevant keys)."""
-    canonical = _canonicalize_search_params(params)
-    # Ensure all expected keys are present for a unique signature
-    missing = [k for k in _SEARCH_PARAM_KEYS if k not in canonical]
-    if missing:
-        raise ValueError(f"Missing search params for signature: {missing}. Got keys={list(params.keys())}")
-    return json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+    return params_signature(params, _SEARCH_PARAM_KEYS)
 
 
 def _trial_dirname_from_params(params: Dict) -> str:
@@ -341,121 +322,90 @@ def hyperparameter_search_tft(
     in parallel (one trial per GPU at a time, each GPU runs its share
     sequentially).  Falls back to sequential search on a single GPU.
     """
-    search_cfg = TFTSearchSpace()
+    space = TFTSearchSpace()
     trainer_cfg = TFTTrainerConfig()
     n_targets = len(targets)
+    logging.info("TFT search space: %s", space.summary())
 
-    # Resume/dedup now uses only the append-only trials ledger.
+    # Resume/dedup uses only the append-only trials ledger.
     existing_ledger_rows = _read_trials_ledger(run_id)
-    completed_ledger_rows = [r for r in existing_ledger_rows if _is_completed_trial_row(r)]
-    skipped_rows = len(existing_ledger_rows) - len(completed_ledger_rows)
+    skipped_rows = len(existing_ledger_rows) - len(completed_trials(existing_ledger_rows, _SEARCH_PARAM_KEYS))
     if skipped_rows > 0:
         logging.warning(
             "Ignoring %d row(s) in search/trials.jsonl that are missing completed status or valid metrics.",
             skipped_rows,
         )
 
-    all_params = list(
-        ParameterSampler(
-            search_cfg.param_dist,
-            n_iter=search_cfg.search_iter_n,
-            random_state=0,
-        )
-    )
-
-    sig_to_params = {_params_signature(p): p for p in all_params}
-
-    stage1_epochs = int(search_cfg.stage1_max_epochs)
-    stage2_top_k = int(search_cfg.stage2_top_k)
-
-    stage1_sigs = set()
-    stage2_sigs = set()
-    for r in completed_ledger_rows:
-        sig = r.get("signature") or _params_signature(r)
-        stage = r.get("stage", "stage1")
-        if stage == "stage2":
-            stage2_sigs.add(sig)
-        else:
-            stage1_sigs.add(sig)
-
-    # If stage2 is completed for a signature, treat stage1 as done too.
-    explored_sigs = stage1_sigs | stage2_sigs
-    stage1_remaining = [p for sig, p in sig_to_params.items() if sig not in explored_sigs]
-
-    if explored_sigs:
+    plan = plan_two_stage_search(space, existing_ledger_rows)
+    if plan.stage1_done or plan.stage2_done:
         logging.info(
-            "TFT resume: %d signature(s) already explored; %d/%d remain for stage1.",
-            len(explored_sigs), len(stage1_remaining), len(sig_to_params),
+            "TFT resume: %d stage-1 and %d stage-2 trial(s) already on disk; %d/%d remain for stage 1.",
+            plan.stage1_done, plan.stage2_done, len(plan.stage1_pending), len(plan.all_params),
         )
     else:
         logging.info("No prior completed TFT trials detected; starting two-stage search.")
 
-    # Stage 1: cheap exploration
+    # Stage 1: cheap exploration under the reduced budget.
     stage1_cfg = TFTTrainerConfig()
-    stage1_cfg.max_epochs = stage1_epochs
-    stage1_cfg.batch_size = trainer_cfg.batch_size
-    stage1_cfg.gradient_clip_val = trainer_cfg.gradient_clip_val
-    stage1_cfg.patience = min(trainer_cfg.patience, max(1, stage1_epochs // 4))
-    stage1_cfg.devices = trainer_cfg.devices
+    for attribute, value in space.stage1_budget.items():
+        setattr(stage1_cfg, attribute, value)
+    # Patience scales with the shortened schedule, or a trial would never stop
+    # early inside it.
+    stage1_cfg.patience = min(trainer_cfg.patience, max(1, stage1_cfg.max_epochs // 4))
 
-    stage1_new_results = _run_trials_once(
+    stage1_new = _run_trials_once(
         train_dataset, val_dataset, n_targets,
-        stage1_remaining, stage1_cfg, run_id, stage="stage1",
+        plan.stage1_pending, stage1_cfg, run_id, stage="stage1",
     )
 
-    # Build stage1 pool from completed rows (legacy rows without stage count as stage1)
     stage1_pool = [
-        r for r in completed_ledger_rows
-        if r.get("stage", "stage1") != "stage2"
+        row for row in completed_trials(list(existing_ledger_rows) + stage1_new, _SEARCH_PARAM_KEYS)
+        if row.get("stage") != "stage2"
     ]
-    stage1_pool.extend([r for r in stage1_new_results if _is_completed_trial_row(r)])
-
     if not stage1_pool:
         raise RuntimeError("TFT stage1 produced no completed trials.")
 
-    # Stage 2: deeper rerank on top-K stage1 candidates
-    ranked_stage1 = sorted(stage1_pool, key=lambda r: float(r["val_loss"]))
-    top_signatures = []
-    seen = set()
-    for r in ranked_stage1:
-        sig = r.get("signature") or _params_signature(r)
-        if sig in seen:
-            continue
-        seen.add(sig)
-        top_signatures.append(sig)
-        if len(top_signatures) >= max(1, stage2_top_k):
-            break
-
-    stage2_remaining = [
-        sig_to_params[sig]
-        for sig in top_signatures
-        if sig in sig_to_params and sig not in stage2_sigs
+    # Stage 2: refit the stage-1 leaders under the full budget.
+    sig_to_params = plan.signature_to_params
+    already_stage2 = {
+        row.get("signature") or _params_signature(row)
+        for row in completed_trials(existing_ledger_rows, _SEARCH_PARAM_KEYS)
+        if row.get("stage") == "stage2"
+    }
+    stage2_signatures = select_top_k_signatures(
+        stage1_pool, space.stage2_top_k, _SEARCH_PARAM_KEYS
+    )
+    stage2_pending = [
+        sig_to_params[sig] for sig in stage2_signatures
+        if sig in sig_to_params and sig not in already_stage2
     ]
-
     logging.info(
-        "TFT stage2 candidate signatures: %d (top_k=%d), remaining to run: %d",
-        len(top_signatures), stage2_top_k, len(stage2_remaining),
+        "TFT stage2 candidates: %d (top_k=%d), remaining to run: %d",
+        len(stage2_signatures), space.stage2_top_k, len(stage2_pending),
     )
 
-    stage2_new_results = _run_trials_once(
+    stage2_new = _run_trials_once(
         train_dataset, val_dataset, n_targets,
-        stage2_remaining, trainer_cfg, run_id, stage="stage2",
+        stage2_pending, trainer_cfg, run_id, stage="stage2",
     )
 
-    # Final best: prefer stage2-completed rows; fallback to stage1-completed rows.
-    combined_completed = list(completed_ledger_rows)
-    combined_completed.extend([r for r in stage1_new_results if _is_completed_trial_row(r)])
-    combined_completed.extend([r for r in stage2_new_results if _is_completed_trial_row(r)])
-
-    stage2_completed = [r for r in combined_completed if r.get("stage") == "stage2"]
-    best_pool = stage2_completed if stage2_completed else [
-        r for r in combined_completed if r.get("stage", "stage1") != "stage2"
-    ]
-
+    all_completed = completed_trials(
+        list(existing_ledger_rows) + stage1_new + stage2_new, _SEARCH_PARAM_KEYS
+    )
+    stage2_completed = [row for row in all_completed if row.get("stage") == "stage2"]
+    # Stage 2 measures each candidate under the full schedule, so it decides
+    # whenever it ran at all; stage 1 is only a fallback for a search that
+    # never reached it.
+    best_pool = stage2_completed or [row for row in all_completed if row.get("stage") != "stage2"]
     if not best_pool:
         raise RuntimeError("No completed TFT trials available to select best parameters.")
 
-    best = min(best_pool, key=lambda r: float(r["val_loss"]))
+    try:
+        write_search_report(os.path.join(get_run_root(run_id), "search"), space, all_completed)
+    except Exception as exc:  # noqa: BLE001 - a report must not sink a search
+        logging.warning("Failed to write TFT search report: %s", exc)
+
+    best = best_trial(best_pool)
     best_score = float(best["val_loss"])
     best_epoch = int(best.get("best_epoch", 0))
     best_params = {k: best[k] for k in _SEARCH_PARAM_KEYS}

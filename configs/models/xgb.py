@@ -16,6 +16,10 @@ class XGBTrainerConfig:
     # Training loop controls
     early_stopping_rounds: int = 15
     n_folds: int = 5
+    # Full-budget ceiling on boosting rounds.  A budget, not a hyperparameter:
+    # early stopping on the validation set picks the round count the final
+    # model is trained for, the same way it picks best_epoch for LSTM and TFT.
+    num_boost_round: int = 1500
 
     # Diagnostics
     # When True, show tqdm progress bars inside autoregressive validation during search.
