@@ -130,16 +130,17 @@ def recorded_stages(tmp_path, monkeypatch):
 
     stages = []
 
-    def fake_run_trials(params_list, inputs, stage, num_boost_round, gpu_pool,
+    def fake_run_trials(params_list, inputs_by_n_lags, stage, num_boost_round, gpu_pool,
                         use_autoregressive_eval=False):
         stages.append({
             "stage": stage,
             "rounds": num_boost_round,
             "autoregressive": use_autoregressive_eval,
             "n": len(params_list),
+            "lag_counts": sorted({p["n_lags"] for p in params_list}),
         })
         return [
-            {**params, inputs.score_key: -float(i + 1), "best_iteration": 7,
+            {**params, "val_score": -float(i + 1), "best_iteration": 7,
              "stage": stage, "status": "completed", "trial": i}
             for i, params in enumerate(params_list)
         ]
@@ -148,14 +149,24 @@ def recorded_stages(tmp_path, monkeypatch):
     return space, stages
 
 
-def _run_search():
+def _splits():
     import numpy as np
     import pandas as pd
 
     frame = pd.DataFrame({"f": [0.0]})
+    return {
+        "X_train": frame, "y_train": np.zeros((1, 1)), "X_train_with_index": frame,
+        "train_groups": np.zeros(1), "targets": ["A"],
+        "X_val": frame, "y_val": np.zeros((1, 1)), "X_val_with_index": frame,
+        "obs_train": None, "obs_val": None,
+    }
+
+
+def _run_search():
+    from configs.data import CONTEXT_LENGTHS
+
     return xgb_trainer.hyperparameter_search(
-        frame, np.zeros((1, 1)), frame, np.zeros(1), ["A"], "xgb_01",
-        use_cv=False, X_val=frame, y_val=np.zeros((1, 1)), X_val_with_index=frame,
+        {n: _splits() for n in CONTEXT_LENGTHS}, "xgb_01", use_cv=False,
     )
 
 
@@ -202,3 +213,28 @@ def test_the_final_round_count_comes_from_early_stopping(recorded_stages):
 
     assert best["num_boost_round"] == 8
     assert "best_iteration" not in best
+
+
+def test_the_winning_lag_count_is_reported_with_the_parameters(recorded_stages):
+    """Later phases rebuild the features from it, so it must survive."""
+    from configs.data import CONTEXT_LENGTHS
+
+    best, _ = _run_search()
+
+    assert best["n_lags"] in CONTEXT_LENGTHS
+
+
+def test_both_context_lengths_are_explored_in_stage_one(recorded_stages):
+    from configs.data import CONTEXT_LENGTHS
+    _, stages = recorded_stages
+
+    _run_search()
+
+    stage1 = next(s for s in stages if s["stage"] == "stage1")
+    assert stage1["lag_counts"] == sorted(CONTEXT_LENGTHS)
+
+
+def test_a_lag_count_with_no_prepared_splits_is_refused(recorded_stages):
+    """Silently skipping it would shrink the search without saying so."""
+    with pytest.raises(ValueError, match="no splits were prepared"):
+        xgb_trainer.hyperparameter_search({2: _splits()}, "xgb_01", use_cv=False)

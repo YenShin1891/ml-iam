@@ -19,6 +19,7 @@ from configs.models import (
     XGBTrainerConfig,
     XGBSearchSpace,
 )
+from configs.data import N_LAG_FEATURES
 from src.trainers.evaluation import test_xgb_autoregressively
 from .search import (
     best_trial,
@@ -270,10 +271,17 @@ def _cap_search_cpu_threads() -> None:
     os.environ['VECLIB_MAXIMUM_THREADS'] = '1'
 
 
+# Searched settings that select or shape the data rather than the booster.
+# They ride along in the params dict so they reach the trial row and
+# best_params, but XGBRegressor must never see them.
+_NON_BOOSTER_PARAMS = ("n_lags",)
+
+
 def get_xgb_params(base_params: dict, trainer_cfg: Optional[XGBTrainerConfig] = None) -> dict:
     """Compose final XGBoost params from base hyperparams and trainer defaults."""
     if trainer_cfg is None:
         trainer_cfg = XGBTrainerConfig()
+    base_params = {k: v for k, v in base_params.items() if k not in _NON_BOOSTER_PARAMS}
     return {
         'tree_method': trainer_cfg.tree_method,
         'device': trainer_cfg.device,
@@ -485,6 +493,7 @@ def _train_single_fold(
             disable_progress=(not show_autoreg_progress),
             max_workers=1,
             cache=cache,
+            n_lags=int(params.get('n_lags', N_LAG_FEATURES)),
         )
         ar_dt = time.perf_counter() - ar_t0
         logging.info(
@@ -676,7 +685,7 @@ class _XGBTrialInputs:
         return 'mean_test_score' if self.use_cv else 'val_score'
 
 
-def _run_xgb_trials(
+def _run_xgb_trials_for_inputs(
     params_list: List[Dict],
     inputs: _XGBTrialInputs,
     stage: str,
@@ -812,49 +821,66 @@ def _run_xgb_trials(
     return stage_results
 
 
+def _run_xgb_trials(
+    params_list: List[Dict],
+    inputs_by_n_lags: Dict[int, _XGBTrialInputs],
+    stage: str,
+    num_boost_round: int,
+    gpu_pool: Sequence[str],
+    use_autoregressive_eval: bool = False,
+) -> List[Dict]:
+    """Run one stage, one lag count at a time.
+
+    Lag count decides which feature frame a trial trains on, so trials that
+    disagree about it cannot share a batch: the multi-GPU workers are handed
+    one set of frames each.  Grouping here keeps that hand-off unchanged and
+    costs nothing, since the groups run back to back either way.
+    """
+    if not params_list:
+        return []
+
+    results: List[Dict] = []
+    for n_lags in sorted({int(p.get("n_lags", N_LAG_FEATURES)) for p in params_list}):
+        batch = [p for p in params_list if int(p.get("n_lags", N_LAG_FEATURES)) == n_lags]
+        inputs = inputs_by_n_lags.get(n_lags)
+        if inputs is None:
+            raise KeyError(
+                f"No prepared data for n_lags={n_lags}; have {sorted(inputs_by_n_lags)}."
+            )
+        logging.info("[%s] %d trial(s) at n_lags=%d", stage, len(batch), n_lags)
+        results.extend(_run_xgb_trials_for_inputs(
+            batch, inputs, stage, num_boost_round, gpu_pool, use_autoregressive_eval,
+        ))
+    return results
+
+
 def hyperparameter_search(
-    X_train: pd.DataFrame,
-    y_train: np.array,
-    X_train_with_index: pd.DataFrame,
-    train_groups: np.array,
-    targets: List[str],
+    splits_by_n_lags: Dict[int, Dict],
     run_id: str,
     use_cv: bool = True,
-    X_val: Optional[pd.DataFrame] = None,
-    y_val: Optional[np.array] = None,
-    X_val_with_index: Optional[pd.DataFrame] = None,
-    val_groups: Optional[np.array] = None,
-    obs_train: Optional[np.ndarray] = None,
-    obs_val: Optional[np.ndarray] = None,
 ) -> Tuple[Dict, Dict]:
     """Two-stage random search, the same protocol the LSTM and TFT searches run.
 
     Stage 1 ranks every sampled configuration under a shortened boosting
-    budget; stage 2 refits the leaders at the full budget and picks the
-    winner.  This replaces three sequential stages that each swept a small
+    budget, scored on one-step predictions; stage 2 refits the leaders at the
+    full budget and scores them on the autoregressive rollout the test phase
+    reports.  This replaces three sequential stages that each swept a small
     grid exhaustively while holding the other parameters fixed -- coordinate
     descent, which cannot see interactions between parameters and made "a
     trial" mean something different here than for the other two models.
 
-    Parameters
-    ----------
-    use_cv : bool, default=True
-        If True, k-fold cross-validation on merged train+val data; if False,
-        train on *X_train* and validate on *X_val*.
-    val_groups : np.array, optional
-        Accepted for call-site symmetry; the split is already made by then.
+    *splits_by_n_lags* maps each searched lag count to the splits prepared at
+    that lag count -- XGBoost's context length, the counterpart of the LSTM's
+    sequence_length and the TFT's encoder length.  Every variant drops the
+    same leading rows, so the lag counts are scored on the same elements.
 
     Returns
     -------
     Tuple[Dict, Dict]
-        The winning hyperparameters -- including the ``num_boost_round`` that
-        early stopping settled on, which the final fit trains for -- and the
-        per-stage trial rows.
+        The winning hyperparameters -- including ``n_lags`` and the
+        ``num_boost_round`` early stopping settled on, which the final fit
+        trains for -- and the per-stage trial rows.
     """
-    if not use_cv:
-        if X_val is None or y_val is None or X_val_with_index is None:
-            raise ValueError("X_val, y_val, and X_val_with_index must be provided when use_cv=False")
-
     space = XGBSearchSpace()
     trainer_cfg = XGBTrainerConfig()
     gpu_pool = _visible_gpu_pool()
@@ -864,26 +890,40 @@ def hyperparameter_search(
         gpu_pool, os.environ.get('CUDA_VISIBLE_DEVICES'),
     )
 
-    inputs = _XGBTrialInputs(
-        X_train=X_train,
-        y_train=y_train,
-        X_train_with_index=X_train_with_index,
-        train_groups=train_groups,
-        targets=targets,
-        use_cv=use_cv,
-        X_val=X_val,
-        y_val=y_val,
-        X_val_with_index=X_val_with_index,
-        trainer_cfg=trainer_cfg,
-        obs_train=obs_train,
-        obs_val=obs_val,
-    )
-    score_key = inputs.score_key
+    searched_lags = set(getattr(space.distributions.get("n_lags"), "values", (N_LAG_FEATURES,)))
+    missing = searched_lags - set(splits_by_n_lags)
+    if missing:
+        raise ValueError(
+            f"The search covers n_lags={sorted(searched_lags)} but no splits were "
+            f"prepared for {sorted(missing)}."
+        )
+
+    inputs_by_n_lags: Dict[int, _XGBTrialInputs] = {}
+    for n_lags, splits in splits_by_n_lags.items():
+        if not use_cv:
+            missing_val = [k for k in ("X_val", "y_val", "X_val_with_index") if splits.get(k) is None]
+            if missing_val:
+                raise ValueError(f"n_lags={n_lags} splits lack {missing_val} and use_cv=False")
+        inputs_by_n_lags[int(n_lags)] = _XGBTrialInputs(
+            X_train=splits["X_train"],
+            y_train=splits["y_train"],
+            X_train_with_index=splits["X_train_with_index"],
+            train_groups=splits["train_groups"],
+            targets=splits["targets"],
+            use_cv=use_cv,
+            X_val=splits.get("X_val"),
+            y_val=splits.get("y_val"),
+            X_val_with_index=splits.get("X_val_with_index"),
+            trainer_cfg=trainer_cfg,
+            obs_train=splits.get("obs_train"),
+            obs_val=splits.get("obs_val"),
+        )
+    score_key = next(iter(inputs_by_n_lags.values())).score_key
 
     all_params = space.sample()
     stage1_started = time.monotonic()
     stage1_rows = _run_xgb_trials(
-        all_params, inputs, "stage1",
+        all_params, inputs_by_n_lags, "stage1",
         int(space.stage1_budget["num_boost_round"]), gpu_pool,
     )
     logging.info(
@@ -899,7 +939,8 @@ def hyperparameter_search(
     stage2_params = [
         signature_to_params[sig]
         for sig in select_top_k_signatures(
-            stage1_done, space.stage2_top_k, space.param_keys, metric=score_key, mode="max"
+            stage1_done, space.stage2_top_k, space.param_keys, metric=score_key, mode="max",
+            stratify_by=space.stage2_stratify_by,
         )
         if sig in signature_to_params
     ]
@@ -911,7 +952,7 @@ def hyperparameter_search(
     )
     stage2_started = time.monotonic()
     stage2_rows = _run_xgb_trials(
-        stage2_params, inputs, "stage2", trainer_cfg.num_boost_round, gpu_pool,
+        stage2_params, inputs_by_n_lags, "stage2", trainer_cfg.num_boost_round, gpu_pool,
         use_autoregressive_eval=trainer_cfg.search_autoregressive_stage2,
     )
     logging.info(

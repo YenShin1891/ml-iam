@@ -8,6 +8,7 @@ from sklearn.preprocessing import StandardScaler
 from configs.paths import DATA_PATH
 from configs.data import (
     DEFAULT_DATASET,
+    MAX_CONTEXT_LENGTH,
     N_LAG_FEATURES,
     OUTPUT_VARIABLES,
     INDEX_COLUMNS,
@@ -819,10 +820,18 @@ def add_lag_features(
     output_variables: list,
     n_lags: int = N_LAG_FEATURES,
     lag_required: bool = True,
+    min_history: Optional[int] = None,
 ) -> pd.DataFrame:
     """Add lagged target features using vectorized groupby.shift().
 
     ~250x faster than the per-group .apply() approach on 23k groups.
+
+    *min_history* is how many leading rows of each series are dropped when
+    *lag_required*; it defaults to *n_lags*, which is the least that gives
+    every retained row a full lag history.  Pass the longest lag count under
+    comparison to make two lag settings score the same rows -- otherwise the
+    shorter one keeps extra early rows and wins on an easier evaluation set
+    rather than on its shorter memory.
     """
     prepared = data.sort_values(group_cols + ['Year']).copy()
 
@@ -833,22 +842,32 @@ def add_lag_features(
             prepared[f'{prefix}{col}'] = shifted[col]
 
     if lag_required:
+        dropped = n_lags if min_history is None else max(int(min_history), n_lags)
         row_num = prepared.groupby(group_cols, sort=False).cumcount()
-        prepared = prepared[row_num >= n_lags].reset_index(drop=True)
+        prepared = prepared[row_num >= dropped].reset_index(drop=True)
 
     return cast(pd.DataFrame, prepared)
 
 
-def prepare_features_and_targets(data: pd.DataFrame, lag_required: bool = True) -> tuple:
+def prepare_features_and_targets(
+    data: pd.DataFrame,
+    lag_required: bool = True,
+    n_lags: int = N_LAG_FEATURES,
+) -> tuple:
     """
     Prepare features and targets for XGBoost model.
 
     Args:
         data: Input data DataFrame
         lag_required: When True, drop rows without a full history of lag features.
+        n_lags: How many past steps the model may see -- XGBoost's context
+            length, the counterpart of the LSTM's sequence_length and the
+            TFT's encoder length.  Every setting drops the same leading rows
+            (MAX_CONTEXT_LENGTH) so the settings are scored alike.
     """
     logging.info(
-        "Preparing features and targets for XGBoost (lag_required=%s)...",
+        "Preparing features and targets for XGBoost (n_lags=%d, lag_required=%s)...",
+        n_lags,
         lag_required,
     )
 
@@ -867,7 +886,10 @@ def prepare_features_and_targets(data: pd.DataFrame, lag_required: bool = True) 
     if _data_flag("INTERPOLATE_TARGETS"):
         data = interpolate_targets(data, INDEX_COLUMNS, OUTPUT_VARIABLES)
 
-    prepared = add_lag_features(data, INDEX_COLUMNS, OUTPUT_VARIABLES, lag_required=lag_required)
+    prepared = add_lag_features(
+        data, INDEX_COLUMNS, OUTPUT_VARIABLES,
+        n_lags=n_lags, lag_required=lag_required, min_history=MAX_CONTEXT_LENGTH,
+    )
     prepared['Year'] = prepared['Year'].astype(int)
 
     targets = OUTPUT_VARIABLES

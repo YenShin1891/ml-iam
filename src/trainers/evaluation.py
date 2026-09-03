@@ -60,12 +60,15 @@ def group_test_data(X_test_with_index, cache=None):
     return result
 
 
-def autoregressive_predictions(model, group_indices, group_matrix, start_pos, y_scaler=None, x_scaler=None, feature_columns=None):
+def autoregressive_predictions(model, group_indices, group_matrix, start_pos, y_scaler=None, x_scaler=None, feature_columns=None, n_lags: int = N_LAG_FEATURES):
     """
     Generate autoregressive predictions for a single grouped series.
 
     Notes:
-    - Supports arbitrary N_LAG_FEATURES based on configs.data.N_LAG_FEATURES.
+    - *n_lags* is how many past steps feed back into the features; it must
+      match the lag count the model was trained with, or the rollout writes
+      predictions into columns the model does not read (or leaves ones it
+      does read at their ground-truth values).
     - Locates lagged feature columns by name: prev_<var> or prev{lag}_<var>.
     - Assumes model.predict returns a vector of targets aligned with
       OUTPUT_VARIABLES[:num_targets].
@@ -90,7 +93,7 @@ def autoregressive_predictions(model, group_indices, group_matrix, start_pos, y_
     if feature_columns is None:
         # If not provided, derive from matrix width assuming caller aligned order with X_test_with_index
         feature_columns = []
-    for lag in range(1, N_LAG_FEATURES + 1):
+    for lag in range(1, n_lags + 1):
         cols_for_lag = []
         for var in out_vars:
             col_name = (f"prev_{var}" if lag == 1 else f"prev{lag}_{var}")
@@ -142,7 +145,7 @@ def autoregressive_predictions(model, group_indices, group_matrix, start_pos, y_
         X_test_curr = group_matrix[t].copy()
 
         # Update lagged features using previous predictions
-        for lag in range(1, N_LAG_FEATURES + 1):
+        for lag in range(1, n_lags + 1):
             src_t = t - lag
             if src_t < start_pos:
                 continue
@@ -176,6 +179,7 @@ def test_xgb_autoregressively(
     y_scaler=None,
     x_scaler=None,
     max_workers: Optional[int] = None,
+    n_lags: int = N_LAG_FEATURES,
 ):
     """Test the model autoregressively on the test set.
 
@@ -215,7 +219,10 @@ def test_xgb_autoregressively(
         group_indices, group_matrix = args
         # With no nan values in y_test, we always use the first instance as seed.
         start_pos = 0
-        preds_target = autoregressive_predictions(model, group_indices, group_matrix, start_pos, y_scaler, x_scaler, feature_columns)
+        preds_target = autoregressive_predictions(
+            model, group_indices, group_matrix, start_pos, y_scaler, x_scaler,
+            feature_columns, n_lags=n_lags,
+        )
         return group_indices, preds_target
 
     index_to_pos = {idx: pos for pos, idx in enumerate(X_test_with_index.index)}

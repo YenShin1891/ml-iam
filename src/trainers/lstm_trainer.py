@@ -18,6 +18,7 @@ from torch.utils.data import Dataset, DataLoader
 
 from src.utils.utils import get_run_root, is_primary_rank
 from src.trainers.progress import EpochProgressLogger
+from configs.data import MAX_CONTEXT_LENGTH
 from configs.models import LSTMTrainerConfig, LSTMSearchSpace
 from .search import (
     completed_trials,
@@ -200,7 +201,16 @@ class LSTMDataset(Dataset):
                 # Not enough data in this group for a single sequence with given offset; skip
                 continue
 
-            for i in range(max_start):
+            # A short context fits more windows into the same series, and the
+            # extra ones sit at the start, where the series is easiest.  Skip
+            # them so every context length predicts the same target rows:
+            # otherwise a comparison between context lengths measures which
+            # rows each was scored on rather than how much history helped.
+            first_start = max(0, MAX_CONTEXT_LENGTH - sequence_length)
+            if first_start >= max_start:
+                continue
+
+            for i in range(first_start, max_start):
                 start_idx = group_indices[i]
                 target_idx = group_indices[i + sequence_length - 1 + target_offset]
 

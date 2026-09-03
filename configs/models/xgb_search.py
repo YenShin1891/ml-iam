@@ -1,7 +1,15 @@
 from dataclasses import dataclass
 from typing import Any, Dict
 
-from src.trainers.search import IntLogUniform, IntUniform, LogUniform, SearchSpace, Uniform
+from configs.data import CONTEXT_LENGTHS
+from src.trainers.search import (
+    Choice,
+    IntLogUniform,
+    IntUniform,
+    LogUniform,
+    SearchSpace,
+    Uniform,
+)
 
 
 @dataclass
@@ -41,6 +49,10 @@ class XGBSearchSpace(SearchSpace):
     something different here than for the other two models.  This is the
     same one-shot random search they run.
 
+    ``n_lags`` is searched but is not a booster argument -- it selects which
+    prepared feature frame a trial trains on, and is stripped before the
+    parameters reach XGBRegressor.
+
     ``num_boost_round`` is deliberately absent.  It is a *budget*, not a
     hyperparameter -- early stopping on the validation set picks the round
     count, exactly as early stopping picks ``best_epoch`` for LSTM and TFT --
@@ -59,6 +71,10 @@ class XGBSearchSpace(SearchSpace):
                 "reg_lambda": LogUniform(1e-2, 100.0),
                 "subsample": Uniform(0.6, 1.0),
                 "colsample_bytree": Uniform(0.6, 1.0),
+                # Context length: how many past steps the lag features carry.
+                # The counterpart of the LSTM's sequence_length and the TFT's
+                # encoder length, held to the same two settings.
+                "n_lags": Choice(CONTEXT_LENGTHS),
             },
             n_trials=50,
             stage1_budget={"num_boost_round": 300},

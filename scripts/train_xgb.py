@@ -7,25 +7,33 @@ All heavy imports are lazy to avoid pulling in unnecessary dependencies.
 import logging
 
 
-def derive_splits(data, store=None):
+def derive_splits(data, store=None, n_lags=None):
     """From cached processed_data, derive all XGB splits. Takes seconds.
 
     Returns the ephemeral dict that phase functions and trainers expect.
     *store* supplies the run's category vocabularies so codes stay identical
-    across phases and models.
+    across phases and models.  *n_lags* is the context length -- how many past
+    steps the lag features carry -- and defaults to configs.data's setting.
     """
+    import pandas as pd
+
+    from configs.data import N_LAG_FEATURES
     from src.data.preprocess import (
         build_categorical_vocabularies,
         prepare_data,
         prepare_features_and_targets,
     )
 
+    n_lags = int(N_LAG_FEATURES if n_lags is None else n_lags)
+
     categories = (
         store.categories_for(data) if store is not None
         else build_categorical_vocabularies(data)
     )
     split_assignment = store.splits_for(data) if store is not None else None
-    prepared, features, targets = prepare_features_and_targets(data, lag_required=True)
+    prepared, features, targets = prepare_features_and_targets(
+        data, lag_required=True, n_lags=n_lags,
+    )
     (
         X_train, y_train, X_train_index_columns,
         X_val, y_val, X_val_index_columns,
@@ -41,8 +49,13 @@ def derive_splits(data, store=None):
     )
 
     return {
+        "n_lags": n_lags,
         "features": features,
         "targets": targets,
+        # The trainers want features and index columns in one frame; building
+        # them here keeps every caller from re-deriving the same concat.
+        "X_train_with_index": pd.concat([X_train, X_train_index_columns], axis=1),
+        "X_val_with_index": pd.concat([X_val, X_val_index_columns], axis=1),
         "X_train": X_train,
         "y_train": y_train,
         "X_train_index_columns": X_train_index_columns,
@@ -65,35 +78,32 @@ def derive_splits(data, store=None):
 
 def search_xgb(store):
     """Run hyperparameter search and save best_params."""
-    import pandas as pd
+    from configs.data import CONTEXT_LENGTHS
+    from src.trainers.xgb_trainer import hyperparameter_search
 
     logging.info("Starting hyperparameter search for XGBoost...")
     data = store.load_processed_data()
-    splits = derive_splits(data, store)
 
-    from src.trainers.xgb_trainer import hyperparameter_search
+    # One set of splits per searched context length.  They differ only in how
+    # many prev_ columns the features carry -- every variant drops the same
+    # leading rows -- so the lag counts are scored on the same elements.
+    splits_by_n_lags = {
+        n_lags: derive_splits(data, store, n_lags=n_lags)
+        for n_lags in CONTEXT_LENGTHS
+    }
+    for n_lags, splits in splits_by_n_lags.items():
+        logging.info(
+            "Prepared n_lags=%d splits: %d train / %d val rows, %d features",
+            n_lags, len(splits["X_train"]), len(splits["X_val"]), len(splits["features"]),
+        )
 
-    X_train = splits["X_train"]
-    y_train = splits["y_train"]
-    X_train_index_columns = splits["X_train_index_columns"]
-    train_groups = splits["train_groups"]
-    X_val = splits["X_val"]
-    y_val = splits["y_val"]
-    X_val_index_columns = splits["X_val_index_columns"]
-    val_groups = splits["val_groups"]
-    targets = splits["targets"]
+    best_params, _ = hyperparameter_search(splits_by_n_lags, store.run_id, use_cv=False)
 
-    X_train_with_index = pd.concat([X_train, X_train_index_columns], axis=1)
-    X_val_with_index = pd.concat([X_val, X_val_index_columns], axis=1)
-
-    best_params, all_results = hyperparameter_search(
-        X_train, y_train, X_train_with_index, train_groups,
-        targets, store.run_id, use_cv=False,
-        X_val=X_val, y_val=y_val, X_val_with_index=X_val_with_index, val_groups=val_groups,
-        obs_train=splits.get("obs_train"), obs_val=splits.get("obs_val"),
-    )
     store.save_best_params(best_params)
-    store.save_features(splits["features"], splits["targets"])
+    # The winning lag count decides the feature set the later phases rebuild,
+    # so save that variant's features, not an arbitrary one.
+    winner = splits_by_n_lags[int(best_params["n_lags"])]
+    store.save_features(winner["features"], winner["targets"])
     # The searcher already logged the winning parameters, and the phase banner
     # marks the end of the phase; repeating both here said nothing new.
     return best_params
@@ -106,10 +116,11 @@ def train_xgb(store):
     from src.trainers.xgb_trainer import train_and_save_model
 
     logging.info("Starting final XGBoost training...")
-    data = store.load_processed_data()
-    splits = derive_splits(data, store)
-
     best_params = store.load_best_params()
+    data = store.load_processed_data()
+    # The lag count is part of the winning configuration, so the final fit has
+    # to see the same feature set the winning trial did.
+    splits = derive_splits(data, store, n_lags=best_params.get("n_lags"))
 
     logging.info("Training with best params: %s", best_params)
 
@@ -139,8 +150,10 @@ def train_xgb(store):
 def test_xgb(store):
     """Test XGBoost model autoregressively."""
     logging.info("Testing the model...")
+    best_params = store.load_best_params()
+    n_lags = best_params.get("n_lags")
     data = store.load_processed_data()
-    splits = derive_splits(data, store)
+    splits = derive_splits(data, store, n_lags=n_lags)
 
     X_test_with_index = splits["X_test_with_index"]
     y_test_scaled = splits["y_test"]
@@ -152,7 +165,9 @@ def test_xgb(store):
     from src.data.preprocess import denormalize_by_population, observed_mask_from_frame
     from configs.data import POPULATION_COLUMN
 
-    preds_scaled = test_xgb_autoregressively(X_test_with_index, y_test_scaled, store.run_id)
+    preds_scaled = test_xgb_autoregressively(
+        X_test_with_index, y_test_scaled, store.run_id, n_lags=splits["n_lags"],
+    )
 
     # Undo the target scaling; denormalize_by_population then restores absolute
     # units when the run predicts per-capita targets (and is a no-op otherwise).
@@ -176,7 +191,9 @@ def plot_xgb(store):
     from src.visualization import plot_scatter, plot_xgb_shap
 
     data = store.load_processed_data()
-    splits = derive_splits(data, store)
+    # Same lag count as training and test, or the SHAP frame would carry a
+    # different feature set than the model was fitted on.
+    splits = derive_splits(data, store, n_lags=store.load_best_params().get("n_lags"))
     pred_bundle = store.load_predictions()
     preds = pred_bundle["preds"]
 
