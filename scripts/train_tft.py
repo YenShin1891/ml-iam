@@ -178,7 +178,6 @@ def plot_tft(store):
     if horizon_df is not None and horizon_y_true is not None:
         logging.info("Using forecast horizon subset (%d rows) for plotting.", len(horizon_df))
         plot_scatter(store.run_id, horizon_df, horizon_y_true, preds, targets, model_name="TFT")
-        test_data_for_shap = horizon_df
     else:
         from src.data.preprocess import denormalize_by_population
         from configs.data import POPULATION_COLUMN
@@ -187,17 +186,7 @@ def plot_tft(store):
             test_data[targets].values, test_data[POPULATION_COLUMN].values
         )
         plot_scatter(store.run_id, test_data, test_targets, preds, targets, model_name="TFT")
-        test_data_for_shap = test_data
 
-    # Use full test data for SHAP (needs sufficient sequence length)
-    test_data_for_shap = splits["test_data"]
-    if test_data_for_shap is not None:
-        from configs.models.tft import TFTDatasetConfig
-        max_encoder_length = splits.get("tft_max_encoder_length", TFTDatasetConfig().max_encoder_length)
-        try:
-            plot_tft_shap(store.run_id, test_data_for_shap, features, targets, max_encoder_length=max_encoder_length)
-        except Exception as e:
-            logging.warning("TFT SHAP analysis failed: %s", e)
-            logging.info("SHAP analysis will be skipped.")
-    else:
-        logging.warning("No test data available for SHAP analysis")
+    # SHAP explains whole encoder windows, so it reads the full test split
+    # rather than the horizon rows; it reports its own failures.
+    plot_tft_shap(store.run_id, splits["test_data"], features, targets)

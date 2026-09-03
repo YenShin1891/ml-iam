@@ -1,8 +1,15 @@
-# XGBoost SHAP plotting (migrated from utils.plot_shap_xgb)
-import os, logging, numpy as np, pandas as pd, shap
-from typing import List, Optional, Dict
+"""SHAP plots for the XGBoost models."""
+import json
+import logging
+import os
+from typing import Dict, List, Optional
+
+import numpy as np
+import pandas as pd
+import shap
+
 from src.utils.utils import get_run_root
-from configs.data import NON_FEATURE_COLUMNS, OUTPUT_UNITS, CATEGORICAL_COLUMNS
+from configs.data import NON_FEATURE_COLUMNS, CATEGORICAL_COLUMNS
 from src.data.preprocess import encode_categorical_columns
 from configs.visualization import (
     DEFAULT_REGION,
@@ -14,6 +21,7 @@ from configs.visualization import (
 )
 from .helpers import (
     make_grid,
+    output_unit,
     render_external_plot,
     build_feature_display_names,
     draw_shap_beeswarm,
@@ -21,11 +29,17 @@ from .helpers import (
     sample_scenario_groups,
 )
 
-__all__ = ['get_shap_values','transform_outputs_to_former_inputs','draw_shap_plot','plot_shap']
+__all__ = ['get_shap_values', 'transform_outputs_to_former_inputs', 'draw_shap_plot', 'plot_xgb_shap']
 
-# Original content (verbatim, minimal edits only for path):
+# How far down a target's importance ranking lagged other-target features are
+# re-attributed, and how far down the source target's ranking the input that
+# stands in for them is looked for.
+_REATTRIBUTION_DEPTH = 20
+_SOURCE_INPUT_DEPTH = 10
 
-def get_shap_values(run_id, X_test: pd.DataFrame, targets: Optional[List[str]] = None):
+
+def get_shap_values(run_id, X_test: pd.DataFrame, targets: Optional[List[str]] = None) -> np.ndarray:
+    """SHAP values shaped (rows, features, targets), also saved to plots/shap_values.npy."""
     from src.trainers.xgb_trainer import load_final_xgb_model
 
     logging.info("Loading XGBoost model...")
@@ -51,41 +65,72 @@ def get_shap_values(run_id, X_test: pd.DataFrame, targets: Optional[List[str]] =
     os.makedirs(os.path.join(get_run_root(run_id), "plots"), exist_ok=True)
     np.save(os.path.join(get_run_root(run_id), "plots", "shap_values.npy"), shap_values)
     logging.info("SHAP values saved to shap_values.npy: shape %s", np.shape(shap_values))
+    return shap_values
+
 
 def transform_outputs_to_former_inputs(run_id: str, shap_values: np.ndarray, targets: List[str], features: List[str]) -> np.ndarray:
-    import pandas as pd, json
-    sorted_df_list = []
+    """Re-attribute lagged other-target features to the inputs behind them.
+
+    SHAP values are first normalised per target by the sum of mean |SHAP|, so
+    targets of different magnitude compare, and each target's ranking is
+    written to plots/csv/shap<i>_<target>.csv.  Then, for target i, a lagged
+    column of another target j (``prev_<j>``) among i's top features is
+    replaced by its own attribution times the attribution of j's most
+    important non-lag input; the substitutions go to
+    plots/csv/feature_renaming.json.  Returns a new array.
+    """
+    shap_values = np.array(shap_values, dtype=float)  # a copy: normalised in place below
+    csv_dir = os.path.join(get_run_root(run_id), "plots", "csv")
+    os.makedirs(csv_dir, exist_ok=True)
+
+    rankings = []
     for i, target in enumerate(targets):
-        target_shap_values = np.abs(shap_values[:, :, i])
-        mean_shap_values = np.mean(target_shap_values, axis=0)
-        target_value = np.sum(mean_shap_values)
-        importance = mean_shap_values / target_value
-        sorted_df = pd.DataFrame({"Feature": features, "Importance": importance}).sort_values(by="Importance", ascending=False)
-        sorted_df_list.append(sorted_df)
-        os.makedirs(os.path.join(get_run_root(run_id), "plots", "csv"), exist_ok=True)
-        sorted_df.to_csv(os.path.join(get_run_root(run_id), "plots", "csv", f"shap{i+1}_{target}.csv"), index=False)
-        shap_values[:, :, i] = shap_values[:, :, i] / target_value
+        mean_abs = np.mean(np.abs(shap_values[:, :, i]), axis=0)
+        total = float(np.sum(mean_abs))
+        if total > 0:
+            shap_values[:, :, i] /= total
+            mean_abs = mean_abs / total
+        ranking = pd.DataFrame({"Feature": features, "Importance": mean_abs}).sort_values(
+            by="Importance", ascending=False
+        )
+        ranking.to_csv(os.path.join(csv_dir, f"shap{i+1}_{target}.csv"), index=False)
+        rankings.append(ranking)
+
     input_only = shap_values.copy()
     feature_renaming = {}
     for i, target in enumerate(targets):
         feature_renaming[target] = {}
-        for j in range(20):
-            output = sorted_df_list[i].iloc[j]["Feature"]
-            if output.startswith("prev") and not output.endswith(target):
-                num, output_name = output.split("_", 1)
-                num = 1 if num == "prev" else int(num[4:])
-                output_index = targets.index(output_name)
-                old_feature = shap_values[:, j, i]
-                for k in range(10):
-                    new_input = sorted_df_list[output_index].iloc[k]["Feature"]
-                    if not new_input.startswith("prev"):
-                        new_features = shap_values[:, features.index(new_input), output_index] * old_feature
-                        input_only[:, j, i] = new_features
-                        feature_renaming[target][output] = ("prev_" if num == 1 else f"prev{num}_") + new_input
-                        break
-    with open(os.path.join(get_run_root(run_id), "plots", "csv", "feature_renaming.json"), 'w') as json_file:
+        for lagged in rankings[i]["Feature"].head(_REATTRIBUTION_DEPTH):
+            if not lagged.startswith("prev") or lagged.endswith(target):
+                continue
+            prefix, source_name = lagged.split("_", 1)
+            if source_name not in targets:
+                continue
+            source_index = targets.index(source_name)
+            # The column the ranking names, not its rank: the two agree only
+            # when the features happen to be listed in importance order.
+            column = features.index(lagged)
+            for candidate in rankings[source_index]["Feature"].head(_SOURCE_INPUT_DEPTH):
+                if candidate.startswith("prev"):
+                    continue
+                input_only[:, column, i] = (
+                    shap_values[:, features.index(candidate), source_index] * shap_values[:, column, i]
+                )
+                feature_renaming[target][lagged] = f"{prefix}_{candidate}"
+                break
+    with open(os.path.join(csv_dir, "feature_renaming.json"), 'w') as json_file:
         json.dump(feature_renaming, json_file, indent=4)
     return input_only
+
+
+def _feature_subset(target_shap: np.ndarray, exclude_top: bool) -> np.ndarray:
+    """Column indices to plot: all, or all but the one with the largest mean |SHAP|."""
+    indices = np.arange(target_shap.shape[1])
+    if exclude_top:
+        top_idx = int(np.argmax(np.abs(target_shap).mean(axis=0)))
+        indices = indices[indices != top_idx]
+    return indices
+
 
 def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, model_prefix="", xlim_range: Optional[tuple] = None, categories: Optional[Dict[str, list]] = None):
     n_display = SHAP_MAX_DISPLAY_EXCLUDE_TOP if exclude_top else SHAP_MAX_DISPLAY
@@ -93,6 +138,7 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=F
     plt.rcParams.update({'font.size': SHAP_FONT_SIZE})
     num_targets = len(targets)
     fig, axes = make_grid(num_targets, base_figsize=SHAP_GRID_FIGSIZE)
+    display_names_all = build_feature_display_names(features)
     X_proc = X_test.copy()
     # Feature values only drive the beeswarm colour axis.  They normally arrive
     # already encoded and scaled, in which case re-encoding them against the
@@ -110,26 +156,19 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=F
     indiv_plots_dir = os.path.join(get_run_root(run_id), 'plots', 'indiv_plots', 'shap')
     os.makedirs(indiv_plots_dir, exist_ok=True)
 
+    title_suffix = " (excluding top feature)" if exclude_top else ""
     for i, ax in enumerate(axes):
         if i >= num_targets:
             ax.axis('off')
             continue
+        target_shap = shap_values[:, :, i]  # [samples, features]
+        indices = _feature_subset(target_shap, exclude_top)
+        display_subset = [display_names_all[int(j)] for j in indices]
+        target_subset = target_shap[:, indices]
+        X_subset = X_values[:, indices]
+        title = f"Impact on {targets[i]} ({output_unit(targets[i])}){title_suffix}"
+
         def _plot(fig_local):
-            # Prepare SHAP matrix for this target
-            target_shap = shap_values[:, :, i]  # [samples, features]
-
-            # Optionally exclude the single top feature by |SHAP|
-            indices = np.arange(target_shap.shape[1])
-            if exclude_top:
-                mean_abs = np.abs(target_shap).mean(axis=0)
-                top_idx = int(np.argmax(mean_abs))
-                indices = indices[indices != top_idx]
-
-            display_names_all = build_feature_display_names(features)
-            display_subset = [display_names_all[int(j)] for j in indices]
-            target_subset = target_shap[:, indices]
-            X_subset = X_values[:, indices]
-
             ax_local = fig_local.add_subplot(111)
             draw_shap_beeswarm(
                 ax_local,
@@ -141,33 +180,21 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=F
             )
             fig_local.tight_layout()
         render_external_plot(ax, _plot)
-        title_suffix = " (excluding top feature)" if exclude_top else ""
-        ax.set_title(f"Impact on {targets[i]} ({OUTPUT_UNITS[i]}){title_suffix}")
+        ax.set_title(title)
 
         # Save individual plot for this target
         fig_indiv = plt.figure(figsize=SHAP_INDIVIDUAL_FIGSIZE)
-        target_shap = shap_values[:, :, i]
-        indices = np.arange(target_shap.shape[1])
-        if exclude_top:
-            mean_abs = np.abs(target_shap).mean(axis=0)
-            top_idx = int(np.argmax(mean_abs))
-            indices = indices[indices != top_idx]
-
-        display_names_all = build_feature_display_names(features)
-        display_subset = [display_names_all[int(j)] for j in indices]
-        target_subset = target_shap[:, indices]
-
         ax_indiv = fig_indiv.add_subplot(111)
         draw_shap_beeswarm(
             ax_indiv,
             target_subset,
-            X_values[:, indices],
+            X_subset,
             display_subset,
             max_display=n_display,
             xlim_range=xlim_range,
         )
-        plt.title(f"Impact on {targets[i]} ({OUTPUT_UNITS[i]}){title_suffix}")
-        plt.tight_layout()
+        ax_indiv.set_title(title)
+        fig_indiv.tight_layout()
         indiv_filename = f"{targets[i]}_no_top.png" if exclude_top else f"{targets[i]}.png"
         fig_indiv.savefig(os.path.join(indiv_plots_dir, indiv_filename), dpi=300, bbox_inches='tight')
         plt.close(fig_indiv)
@@ -198,30 +225,26 @@ def plot_xgb_shap(
             os.path.join(get_run_root(run_id), "checkpoints"),
         )
         return
-    # Optional region filter (robust, supports prefix matching like "R10" -> "R10*").
-    # If index_region is provided, it is treated as the raw Region labels aligned to rows.
-    if region is not None and (index_region is not None or (isinstance(X_test_with_index, pd.DataFrame) and "Region" in X_test_with_index.columns)):
-        try:
-            X_test_with_index, idx, pre_rows, post_rows, matched_values, mode = filter_index_frame_by_region(
-                X_test_with_index,
-                region,
-                log_prefix="XGB SHAP region filter",
-                region_series=index_region,
-            )
-            if idx is not None and index_region is not None:
-                index_region = index_region.reset_index(drop=True).iloc[idx].reset_index(drop=True)
-            if matched_values:
-                logging.info(
-                    "Applied region filter '%s' (%s): %d -> %d rows",
-                    region,
-                    mode,
-                    pre_rows,
-                    post_rows,
-                )
-        except Exception as e:
-            logging.warning("Failed region filter using raw labels due to: %s; proceeding without filter", e)
+    # Optional region filter (prefix matching like "R10" -> "R10*").  The
+    # frame's Region column is scaled for the model, so callers pass the raw
+    # labels aligned to its rows as *index_region*.
+    X_filtered, _, pre_rows, post_rows, matched_values, mode = filter_index_frame_by_region(
+        X_test_with_index,
+        region,
+        log_prefix="XGB SHAP region filter",
+        region_series=index_region,
+    )
+    if region is not None and not matched_values:
+        # Same guard as the sequence models: plotting every region under a
+        # filename that names one is worse than plotting nothing.
+        logging.error(
+            "Skipping XGB SHAP plots: region filter %r matched no rows of %d.",
+            region, pre_rows,
+        )
+        return
+    if matched_values:
+        logging.info("Applied region filter '%s' (%s): %d -> %d rows", region, mode, pre_rows, post_rows)
     # Scenario-based sampling on the full index frame (Model/Scenario as group keys)
-    X_filtered = X_test_with_index
     group_keys, total_groups, used_groups, group_cols = sample_scenario_groups(
         X_filtered,
         log_prefix="XGB SHAP",
@@ -241,12 +264,8 @@ def plot_xgb_shap(
         used_groups,
         ",".join(group_cols) if group_cols else "<none>",
     )
-    get_shap_values(run_id, X_test, targets=targets)
-    shap_values = np.load(os.path.join(get_run_root(run_id), "plots", "shap_values.npy"), allow_pickle=True)
+    shap_values = get_shap_values(run_id, X_test, targets=targets)
     shap_values = transform_outputs_to_former_inputs(run_id, shap_values, targets, features)
     draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, xlim_range=xlim_range, categories=categories)
     draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=True, xlim_range=xlim_range, categories=categories)
 
-# Backward-compatible alias
-def plot_shap(run_id, X_test_with_index, features, targets, xlim_range: Optional[tuple] = None, region: Optional[str] = DEFAULT_REGION, index_region: Optional[pd.Series] = None):
-    return plot_xgb_shap(run_id, X_test_with_index, features, targets, xlim_range, region=region, index_region=index_region)

@@ -1,24 +1,33 @@
-# Shared plotting helpers (migrated from utils.plot_helpers)
+"""Shared plotting helpers."""
 import io
-import numpy as np
-from typing import Callable, List, Optional, Sequence, Tuple
 import logging
+import re
+from typing import Callable, List, Optional, Sequence, Tuple
+
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 from matplotlib.figure import Figure
 from PIL import Image
-import pandas as pd
 
-from configs.data import SPLIT_SEED
+from configs.data import SPLIT_SEED, UNITS_BY_OUTPUT
 from configs.visualization import DEFAULT_REGION, SHAP_MAX_SCENARIO_GROUPS, SHAP_GRID_FIGSIZE
 
 __all__ = [
     'make_grid',
     'render_external_plot',
+    'output_unit',
     'build_feature_display_names',
+    'draw_shap_beeswarm',
     'filter_by_region',
     'filter_index_frame_by_region',
     'sample_scenario_groups',
 ]
+
+
+def output_unit(target: str) -> str:
+    """Display unit of an output variable, "" when it has none configured."""
+    return UNITS_BY_OUTPUT.get(target, "")
 
 def make_grid(
     n_items: int,
@@ -52,8 +61,7 @@ def render_external_plot(ax, plot_fn: Callable[[Figure], None]):
         plt.close(fig)
 
 def _make_display_name(feature: str) -> str:
-    import re
-
+    """"prev2_X_is_missing" -> "X (last 10y) N/A", "X" -> "X (current)"."""
     missing_suffix = False
     base = feature
 
@@ -62,24 +70,13 @@ def _make_display_name(feature: str) -> str:
         missing_suffix = True
         base = base[:-len('_is_missing')]
 
-    timestep = None
-    m_timestep = re.match(r'^timestep_(\d+)_(.+)$', base)
-    if m_timestep:
-        timestep = int(m_timestep.group(1))
-        base = m_timestep.group(2)
-
     lag_years = None
     m_prev = re.match(r'^prev(\d*)_(.+)$', base)
     if m_prev:
         lag_str, base = m_prev.group(1), m_prev.group(2)
         lag_years = 5 if lag_str == '' else int(lag_str) * 5
 
-    if lag_years is not None:
-        descriptor = f" (last {lag_years}y)"
-    elif timestep is not None:
-        descriptor = " (current)" if timestep == 0 else f" (last {timestep * 5}y)"
-    else:
-        descriptor = " (current)"
+    descriptor = f" (last {lag_years}y)" if lag_years is not None else " (current)"
 
     display = f"{base}{descriptor}"
     if missing_suffix:
@@ -110,12 +107,11 @@ def draw_shap_beeswarm(
     - max_display: top features to display
     - xlim_range: optional (min, max) for x-axis
     """
-    import numpy as _np
     import shap as _shap
     import matplotlib.pyplot as _plt
 
-    shap_arr = _np.asarray(shap_matrix)
-    X_arr = _np.asarray(X_matrix)
+    shap_arr = np.asarray(shap_matrix)
+    X_arr = np.asarray(X_matrix)
     if shap_arr.shape != X_arr.shape:
         raise ValueError("shap_matrix and X_matrix must have the same shape")
     if len(feature_display_names) != shap_arr.shape[1]:
@@ -141,7 +137,7 @@ def draw_shap_beeswarm(
         # generator explicitly keeps that jitter reproducible under a coming
         # shap release that stops reading the global RNG -- which is what its
         # FutureWarning, one per plot, was about.
-        rng=_np.random.default_rng(SPLIT_SEED),
+        rng=np.random.default_rng(SPLIT_SEED),
     )
     # Reduce dot size by adjusting PathCollections on the target axes
     try:
@@ -149,7 +145,7 @@ def draw_shap_beeswarm(
             try:
                 sizes = coll.get_sizes()
                 if sizes is not None and len(sizes) > 0:
-                    coll.set_sizes(_np.full_like(sizes, point_size, dtype=float))
+                    coll.set_sizes(np.full_like(sizes, point_size, dtype=float))
                 else:
                     coll.set_sizes([point_size])
             except Exception:
@@ -186,13 +182,7 @@ def filter_by_region(
 
     Returns (filtered_df, pre_rows, post_rows, matched_values).
     """
-    try:
-        import pandas as _pd  # local import to avoid hard dep at module import time
-    except Exception:  # pragma: no cover
-        # If pandas missing, just return unchanged
-        return df, len(df) if hasattr(df, '__len__') else 0, len(df) if hasattr(df, '__len__') else 0, []
-
-    if region is None or not isinstance(df, _pd.DataFrame) or 'Region' not in df.columns:
+    if region is None or not isinstance(df, pd.DataFrame) or 'Region' not in df.columns:
         return df, len(df), len(df), []
 
     pre_rows = len(df)
@@ -200,21 +190,18 @@ def filter_by_region(
     s_lower = s.str.lower()
     target = str(region).strip().lower()
 
-    import logging as _logging
-
     if mode == "prefix":
         # Case-insensitive "starts with" match, aligned with dashboard region bucketing
         prefix_mask = s_lower.str.startswith(target)
         if prefix_mask.any():
             filtered = df[prefix_mask]
             matched = sorted(s[prefix_mask].unique().tolist())
-            _logging.info(
-                f"{log_prefix} prefix '{region}': {pre_rows} -> {len(filtered)} rows (prefix matches: {matched})"
+            logging.info(
+                "%s prefix '%s': %d -> %d rows (prefix matches: %s)",
+                log_prefix, region, pre_rows, len(filtered), matched,
             )
             return filtered, pre_rows, len(filtered), matched
-        _logging.warning(
-            f"{log_prefix} prefix '{region}': 0 matches in Region column; proceeding without filter"
-        )
+        logging.warning("%s prefix '%s': 0 matches in Region column; proceeding without filter", log_prefix, region)
         return df, pre_rows, pre_rows, []
 
     # Default: exact-then-contains behaviour
@@ -222,18 +209,17 @@ def filter_by_region(
     if exact_mask.any():
         filtered = df[exact_mask]
         matched = sorted(s[exact_mask].unique().tolist())
-        _logging.info(f"{log_prefix} '{region}': {pre_rows} -> {len(filtered)} rows (exact: {matched})")
+        logging.info("%s '%s': %d -> %d rows (exact: %s)", log_prefix, region, pre_rows, len(filtered), matched)
         return filtered, pre_rows, len(filtered), matched
 
-    import re as _re
-    contains_mask = s_lower.str.contains(_re.escape(target), na=False)
+    contains_mask = s_lower.str.contains(re.escape(target), na=False)
     if contains_mask.any():
         filtered = df[contains_mask]
         matched = sorted(s[contains_mask].unique().tolist())
-        _logging.info(f"{log_prefix} '{region}': {pre_rows} -> {len(filtered)} rows (contains: {matched})")
+        logging.info("%s '%s': %d -> %d rows (contains: %s)", log_prefix, region, pre_rows, len(filtered), matched)
         return filtered, pre_rows, len(filtered), matched
 
-    _logging.warning(f"{log_prefix} '{region}': 0 matches in Region column; proceeding without filter")
+    logging.warning("%s '%s': 0 matches in Region column; proceeding without filter", log_prefix, region)
     return df, pre_rows, pre_rows, []
 
 
@@ -264,11 +250,6 @@ def filter_index_frame_by_region(
     matched_values : list[str]
     mode : str
     """
-    try:
-        import numpy as np  # local import to keep module lightweight
-    except Exception:  # pragma: no cover
-        np = None  # type: ignore[assignment]
-
     if not isinstance(df, pd.DataFrame):
         return pd.DataFrame(), None, 0, 0, [], "exact"
 
@@ -280,6 +261,11 @@ def filter_index_frame_by_region(
         return df_aligned, None, pre_rows, pre_rows, [], mode
 
     if region_series is not None:
+        if len(region_series) != pre_rows:
+            raise ValueError(
+                f"region_series has {len(region_series)} rows for a frame of {pre_rows}; "
+                "it must line up with the frame row for row."
+            )
         series_aligned = region_series.reset_index(drop=True).astype(str)
         region_frame = pd.DataFrame({"Region": series_aligned})
         filtered_region_frame, _, _, matched = filter_by_region(
@@ -288,7 +274,7 @@ def filter_index_frame_by_region(
             log_prefix=log_prefix,
             mode=mode,
         )
-        if matched and np is not None:
+        if matched:
             idx = filtered_region_frame.index.to_numpy()
             filtered_df = df_aligned.iloc[idx].reset_index(drop=True)
             return filtered_df, idx, pre_rows, len(filtered_df), matched, mode
@@ -301,7 +287,7 @@ def filter_index_frame_by_region(
         log_prefix=log_prefix,
         mode=mode,
     )
-    if matched and np is not None:
+    if matched:
         idx = filtered_df.index.to_numpy()
         # Rebuild from df_aligned to guarantee the returned frame is aligned and clean.
         filtered_df = df_aligned.iloc[idx].reset_index(drop=True)
@@ -340,8 +326,9 @@ def sample_scenario_groups(
     max_sequences = min(max_groups, total_groups)
 
     if total_groups > max_sequences:
-        import numpy as _np
-        sampled_idx = _np.random.choice(total_groups, max_sequences, replace=False)
+        # Seeded so the explained scenarios are the same from one plot phase
+        # to the next, as the beeswarm's jitter already is.
+        sampled_idx = np.random.default_rng(SPLIT_SEED).choice(total_groups, max_sequences, replace=False)
         selected_group_keys = group_sizes.iloc[sampled_idx].index
         # Build a DataFrame of unique selected group keys for joining
         group_df = pd.DataFrame(list(selected_group_keys), columns=cols)

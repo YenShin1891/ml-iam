@@ -1,11 +1,20 @@
-# Trajectory and scatter plotting (migrated from utils.plot_trajectories)
+"""Trajectory and scatter plots of predictions against the IAM values."""
+import datetime
+import glob
+import json
+import logging
+import os
+from typing import Optional, Tuple
+
+import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from matplotlib.ticker import FuncFormatter, MaxNLocator
+
 from configs.paths import RAW_DATA_PATH
 from configs.data import INDEX_COLUMNS, OUTPUT_UNITS, OUTPUT_VARIABLES
-import os, json, datetime, glob, logging
-from typing import Optional, Tuple
-import numpy as np, pandas as pd, matplotlib.pyplot as plt
-from matplotlib import cm
-from matplotlib.ticker import FuncFormatter, MaxNLocator
+from .helpers import output_unit
 try:
     import streamlit as st
 except ModuleNotFoundError:
@@ -94,7 +103,7 @@ def load_marker_scenario(targets: list) -> Optional[pd.DataFrame]:
 
 def create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, target_index, targets, model_name, output_units, observed_mask_col=None):
     unique_years = sorted(test_data_valid['Year'].unique()) if len(test_data_valid) else []
-    cmap = cm.get_cmap('viridis')
+    cmap = matplotlib.colormaps['viridis']
     colors = cmap(np.linspace(0, 1, len(unique_years))) if unique_years else []
     for year, color in zip(unique_years, colors):
         group_df = test_data_valid[test_data_valid['Year'] == year]
@@ -183,7 +192,7 @@ def create_single_trajectory_plot(ax, test_data, y_test, preds, target_index, ta
                         color=color, alpha=0.1,
                         label='Emulation error' if first else None)
         first = False
-    ylabel_with_unit = f"{targets[target_index]} ({OUTPUT_UNITS[target_index]})"
+    ylabel_with_unit = f"{targets[target_index]} ({output_unit(targets[target_index])})"
     ax.set_xlabel("Year", fontsize=AXIS_LABEL_FONTSIZE)
     ax.set_ylabel(ylabel_with_unit, fontsize=AXIS_LABEL_FONTSIZE)
     ax.tick_params(axis='both', which='major', labelsize=TICK_LABELSIZE)
@@ -206,9 +215,6 @@ def compute_r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
             return float('nan')
         y_t = y_true[mask]
         y_p = y_pred[mask]
-        denom = np.var(y_t)
-        if denom == 0:
-            return float('nan')
         ss_res = np.sum((y_t - y_p) ** 2)
         ss_tot = np.sum((y_t - y_t.mean()) ** 2)
         if ss_tot == 0:
@@ -266,20 +272,20 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[s
         nolegend_path = os.path.join(indiv_dir, f"scatter_{i}_{targets[i] if i < len(targets) else 'unknown'}_nolegend.png")
         fig_indiv.savefig(nolegend_path, bbox_inches='tight')
         plt.close(fig_indiv)
-    plt.tight_layout()
+    fig.tight_layout()
     if filename is None:
         filename = "scatter_plot.png"
     plots_dir = os.path.join(get_run_root(run_id), "plots")
     os.makedirs(plots_dir, exist_ok=True)
-    plt.savefig(os.path.join(plots_dir, filename), bbox_inches='tight')
+    fig.savefig(os.path.join(plots_dir, filename), bbox_inches='tight')
     # Save no-legend version of grid plot
     for ax in axes.flatten():
         legend = ax.get_legend()
         if legend is not None:
             legend.remove()
     nolegend_filename = filename.replace(".png", "_nolegend.png")
-    plt.savefig(os.path.join(plots_dir, nolegend_filename), bbox_inches='tight')
-    plt.close()
+    fig.savefig(os.path.join(plots_dir, nolegend_filename), bbox_inches='tight')
+    plt.close(fig)
 
 def _overlay_marker(ax, marker_df: pd.DataFrame, target_name: str) -> None:
     """Overlay the marker scenario ground truth on a single axis."""
@@ -297,7 +303,7 @@ def _overlay_marker(ax, marker_df: pd.DataFrame, target_name: str) -> None:
 
 def _save_paper_plots(
     test_data, y_plot, preds_plot, targets, marker_df,
-    alpha, linewidth, run_id, timestamp, plots_dir,
+    alpha, linewidth, timestamp, plots_dir,
     individual_indices,
 ):
     """Save paper-ready plots (grid + individual) with marker overlay."""
@@ -310,8 +316,11 @@ def _save_paper_plots(
         create_single_trajectory_plot(ax, test_data, y_plot, preds_plot, i, targets, alpha, linewidth)
         if i < len(targets):
             _overlay_marker(ax, marker_df, targets[i])
-    # Add a single legend entry for the marker in the first subplot
+    # One legend, in the first panel: the IAM/prediction/error line styles
+    # and the marker scenario.
     handles, labels = axes.flatten()[0].get_legend_handles_labels()
+    if handles:
+        axes.flatten()[0].legend(handles, labels, fontsize=LEGEND_FONTSIZE)
     fig.tight_layout()
     paper_grid = os.path.join(plots_dir, f"trajectories_{timestamp}_paper.png")
     fig.savefig(paper_grid, bbox_inches='tight', dpi=200)
@@ -384,11 +393,15 @@ def plot_trajectories(
     if y_test is None or (hasattr(y_test, 'size') and y_test.size == 0):
         logging.warning("y_test is empty. Displaying blank plots.")
         for i, ax in enumerate(axes.flatten()):
-            ax.set_title(targets[i])
-            ax.set_xlabel("Year")
-        plt.tight_layout()
+            if i < len(targets):
+                ax.set_title(targets[i])
+                ax.set_xlabel("Year")
+            else:
+                ax.axis('off')
+        fig.tight_layout()
         if st is not None:
-            st.pyplot(plt.gcf())
+            st.pyplot(fig)
+        plt.close(fig)
         return
     # Prepare copies so we don't mutate caller data. All three model types now
     # persist already-absolute values by the time they reach this function, so
@@ -397,9 +410,9 @@ def plot_trajectories(
     preds_plot = None if preds is None else np.array(preds, copy=True)
     for i, ax in enumerate(axes.flatten()):
         create_single_trajectory_plot(ax, test_data, y_plot, preds_plot, i, targets, alpha, linewidth)
-    plt.tight_layout()
+    fig.tight_layout()
     if st is not None:
-        st.pyplot(plt.gcf())
+        st.pyplot(fig)
     # One timestamp and directory for everything this call saves, so the grid,
     # per-target and paper plots share a filename stem.
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -409,7 +422,7 @@ def plot_trajectories(
         plot_filename = f"trajectories_{timestamp}.png"
         metadata_filename = f"trajectories_{timestamp}_metadata.json"
         os.makedirs(plots_dir, exist_ok=True)
-        plt.savefig(os.path.join(plots_dir, plot_filename), bbox_inches='tight')
+        fig.savefig(os.path.join(plots_dir, plot_filename), bbox_inches='tight')
         with open(os.path.join(plots_dir, metadata_filename), 'w') as f:
             json.dump(filter_metadata, f, indent=2)
     if save_individual and run_id and filter_metadata:
@@ -419,7 +432,7 @@ def plot_trajectories(
                 individual_ax = individual_fig.add_subplot(111)
                 create_single_trajectory_plot(individual_ax, test_data, y_plot, preds_plot, i, targets, alpha, linewidth)
                 individual_filename = f"trajectories_{timestamp}_individual_{i}.png"
-                plt.savefig(os.path.join(plots_dir, individual_filename), bbox_inches='tight')
+                individual_fig.savefig(os.path.join(plots_dir, individual_filename), bbox_inches='tight')
                 plt.close(individual_fig)
     # ── Paper plots with marker overlay ──────────────────────────────
     if run_id and filter_metadata:
@@ -429,9 +442,12 @@ def plot_trajectories(
             paper_indices = individual_indices if (save_individual and individual_indices) else list(range(len(targets)))
             _save_paper_plots(
                 test_data, y_plot, preds_plot, targets, marker_df,
-                alpha, linewidth, run_id, timestamp, plots_dir,
+                alpha, linewidth, timestamp, plots_dir,
                 paper_indices,
             )
+    # Streamlit has rendered the figure by now; without this every dashboard
+    # rerun kept another 15x15-inch figure alive.
+    plt.close(fig)
 
 
 def get_saved_plots_metadata(run_id):
