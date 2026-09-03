@@ -310,13 +310,50 @@ def _run_trials_once(
     return results
 
 
+def _run_trials_by_encoder_length(
+    datasets_by_encoder_length: Dict[int, tuple],
+    n_targets: int,
+    params_list: List[Dict],
+    trainer_cfg: TFTTrainerConfig,
+    run_id: str,
+    stage: str,
+) -> List[Dict]:
+    """Run one stage, one encoder length at a time.
+
+    Encoder length decides which prebuilt TimeSeriesDataSet a trial trains
+    on, so trials that disagree about it cannot share a batch -- the
+    multi-GPU workers are handed one dataset pair each.
+    """
+    if not params_list:
+        return []
+
+    results: List[Dict] = []
+    for encoder_length in sorted({int(p["encoder_length"]) for p in params_list}):
+        batch = [p for p in params_list if int(p["encoder_length"]) == encoder_length]
+        datasets = datasets_by_encoder_length.get(encoder_length)
+        if datasets is None:
+            raise KeyError(
+                f"No dataset built for encoder_length={encoder_length}; "
+                f"have {sorted(datasets_by_encoder_length)}."
+            )
+        train_dataset, val_dataset = datasets
+        logging.info("[%s] %d trial(s) at encoder_length=%d", stage, len(batch), encoder_length)
+        results.extend(_run_trials_once(
+            train_dataset, val_dataset, n_targets, batch, trainer_cfg, run_id, stage,
+        ))
+    return results
+
+
 def hyperparameter_search_tft(
-    train_dataset,
-    val_dataset,
+    datasets_by_encoder_length: Dict[int, tuple],
     targets: List[str],
     run_id: str,
 ) -> Dict:
     """Perform hyperparameter search for TFT model.
+
+    *datasets_by_encoder_length* maps each searched context length to its
+    (train, val) TimeSeriesDataSet pair.  Every pair predicts the same steps
+    of the same trajectories, so the encoder lengths are comparable.
 
     When multiple GPUs are available, trials are distributed across GPUs
     in parallel (one trial per GPU at a time, each GPU runs its share
@@ -353,8 +390,16 @@ def hyperparameter_search_tft(
     # early inside it.
     stage1_cfg.patience = min(trainer_cfg.patience, max(1, stage1_cfg.max_epochs // 4))
 
-    stage1_new = _run_trials_once(
-        train_dataset, val_dataset, n_targets,
+    searched = set(space.distributions["encoder_length"].values)
+    missing = searched - set(datasets_by_encoder_length)
+    if missing:
+        raise ValueError(
+            f"The search covers encoder_length={sorted(searched)} but no dataset "
+            f"was built for {sorted(missing)}."
+        )
+
+    stage1_new = _run_trials_by_encoder_length(
+        datasets_by_encoder_length, n_targets,
         plan.stage1_pending, stage1_cfg, run_id, stage="stage1",
     )
 
@@ -384,8 +429,8 @@ def hyperparameter_search_tft(
         len(stage2_signatures), space.stage2_top_k, len(stage2_pending),
     )
 
-    stage2_new = _run_trials_once(
-        train_dataset, val_dataset, n_targets,
+    stage2_new = _run_trials_by_encoder_length(
+        datasets_by_encoder_length, n_targets,
         stage2_pending, trainer_cfg, run_id, stage="stage2",
     )
 

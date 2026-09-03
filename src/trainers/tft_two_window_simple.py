@@ -22,14 +22,17 @@ combined at test time.
 
 Coverage note
 -------------
-Both windows require ``encoder_length + prediction_length`` steps (e.g. 3 + 12
-= 15).  Trajectories shorter than this are excluded from *both* windows and
-therefore receive no predictions.
+Both windows require ``encoder_length + prediction_length`` steps, read off
+the training template rather than assumed.  The horizon is pinned to
+``MAX_SERIES_LENGTH - MAX_CONTEXT_LENGTH`` so that a run with a shorter
+encoder predicts the same steps, which makes the window shorter by exactly
+the difference in context.  Trajectories shorter than the window are excluded
+from *both* windows and therefore receive no predictions.
 
 The single-window method (``predict_tft`` in ``tft_trainer.py``) cannot fill
 that gap: ``predict=True`` raises ``min_prediction_length`` to
 ``max_prediction_length``, so it too needs ``min_encoder_length +
-prediction_length`` steps per trajectory -- the same 15 here.
+prediction_length`` steps per trajectory -- the same window as here.
 """
 
 import logging
@@ -252,8 +255,8 @@ def _predict_window(
 
         # predict=True is what makes the horizon alignable: it emits exactly one
         # sample per trajectory.  Eval mode would enumerate every (start,
-        # decoder length) pair instead — 23 overlapping samples per trajectory
-        # for a 3+12 window, most of them padded — with no way to tell which
+        # decoder length) pair instead — dozens of overlapping samples per
+        # trajectory, most of them padded — with no way to tell which
         # prediction belongs to which step.
         try:
             test_dataset = from_train_template(train_template, window_data, mode="predict")

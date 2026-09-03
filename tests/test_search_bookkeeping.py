@@ -72,42 +72,48 @@ def small_search(tmp_path, monkeypatch):
     return space, calls
 
 
-def _search(ledger=(), monkeypatch=None):
+def _datasets(space):
+    """One placeholder dataset pair per searched encoder length."""
+    return {length: (None, None) for length in space.distributions["encoder_length"].values}
+
+
+def _search(space, ledger=(), monkeypatch=None):
     monkeypatch.setattr(tft_trainer, "_read_trials_ledger", lambda _run_id: list(ledger))
-    return tft_trainer.hyperparameter_search_tft(None, None, ["A"], "tft_01")
+    return tft_trainer.hyperparameter_search_tft(_datasets(space), ["A"], "tft_01")
 
 
 def test_stage_one_runs_every_trial_at_the_reduced_budget(small_search, monkeypatch):
     space, calls = small_search
 
-    _search(monkeypatch=monkeypatch)
+    _search(space, monkeypatch=monkeypatch)
 
-    stage1 = next(call for call in calls if call["stage"] == "stage1")
-    assert len(stage1["params"]) == space.n_trials
-    assert stage1["max_epochs"] == space.stage1_budget["max_epochs"]
+    stage1 = [call for call in calls if call["stage"] == "stage1"]
+    assert sum(len(call["params"]) for call in stage1) == space.n_trials
+    assert {call["max_epochs"] for call in stage1} == {space.stage1_budget["max_epochs"]}
+    # One batch per encoder length: a batch shares one prebuilt dataset.
+    assert len(stage1) == len(space.distributions["encoder_length"].values)
 
 
 def test_stage_two_refits_only_the_leaders_at_the_full_budget(small_search, monkeypatch):
     from configs.models import TFTTrainerConfig
     space, calls = small_search
 
-    _search(monkeypatch=monkeypatch)
+    _search(space, monkeypatch=monkeypatch)
 
-    stage2 = next(call for call in calls if call["stage"] == "stage2")
-    assert len(stage2["params"]) == space.stage2_top_k
-    assert stage2["max_epochs"] == TFTTrainerConfig().max_epochs
+    stage2 = [call for call in calls if call["stage"] == "stage2"]
+    assert sum(len(call["params"]) for call in stage2) == space.stage2_top_k
+    assert {call["max_epochs"] for call in stage2} == {TFTTrainerConfig().max_epochs}
 
 
 def test_the_winner_comes_from_stage_two(small_search, monkeypatch):
     """Stage 1 only ranks candidates; the full-schedule scores decide."""
     space, calls = small_search
 
-    best = _search(monkeypatch=monkeypatch)
+    best = _search(space, monkeypatch=monkeypatch)
 
-    stage2_params = next(call for call in calls if call["stage"] == "stage2")["params"]
-    assert {k: best[k] for k in space.param_keys} == tft_trainer._canonicalize_search_params(
-        stage2_params[0]
-    )
+    stage2_params = [p for call in calls if call["stage"] == "stage2" for p in call["params"]]
+    winners = [tft_trainer._canonicalize_search_params(p) for p in stage2_params]
+    assert {k: best[k] for k in space.param_keys} in winners
     assert best["best_epoch"] == 3
 
 
@@ -122,14 +128,38 @@ def test_a_resumed_search_reruns_nothing_it_already_has(small_search, monkeypatc
         for i, params in enumerate(space.sample()[:3])
     ]
 
-    _search(ledger=done, monkeypatch=monkeypatch)
+    _search(space, ledger=done, monkeypatch=monkeypatch)
 
-    stage1 = next(call for call in calls if call["stage"] == "stage1")
-    assert len(stage1["params"]) == space.n_trials - 3
+    stage1 = [call for call in calls if call["stage"] == "stage1"]
+    assert sum(len(call["params"]) for call in stage1) == space.n_trials - 3
 
 
 def test_the_search_writes_the_report_the_paper_needs(small_search, tmp_path, monkeypatch):
-    _search(monkeypatch=monkeypatch)
+    space, _ = small_search
+    _search(space, monkeypatch=monkeypatch)
 
     written = sorted(p.name for p in (tmp_path / "search").iterdir())
     assert written == ["budget_curve.csv", "search_space.csv", "trials.csv"]
+
+
+def test_both_encoder_lengths_are_explored(small_search, monkeypatch):
+    from configs.data import CONTEXT_LENGTHS
+    space, calls = small_search
+
+    _search(space, monkeypatch=monkeypatch)
+
+    explored = {
+        int(p["encoder_length"])
+        for call in calls if call["stage"] == "stage1"
+        for p in call["params"]
+    }
+    assert explored == set(CONTEXT_LENGTHS)
+
+
+def test_an_encoder_length_with_no_dataset_is_refused(small_search, monkeypatch):
+    """Silently skipping it would shrink the search without saying so."""
+    space, _ = small_search
+    monkeypatch.setattr(tft_trainer, "_read_trials_ledger", lambda _run_id: [])
+
+    with pytest.raises(ValueError, match="no dataset was built"):
+        tft_trainer.hyperparameter_search_tft({2: (None, None)}, ["A"], "tft_01")

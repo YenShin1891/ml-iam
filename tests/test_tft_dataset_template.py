@@ -168,3 +168,65 @@ def test_template_exposes_the_fitted_categorical_encoders(run, dataset):
 
     assert "__group_id__gid" in encoders
     assert set(encoders["__group_id__gid"].classes_) == {f"G{g}" for g in range(30)}
+
+
+# ── context length must not change the evaluation geometry ────────────────
+#
+# The whole point of searching the encoder length is to learn whether more
+# history helps.  If a shorter encoder also predicted more steps, or admitted
+# shorter trajectories, it would win on being scored differently instead.
+
+from configs.data import CONTEXT_LENGTHS, MAX_CONTEXT_LENGTH, MAX_SERIES_LENGTH
+
+
+def _config(encoder_length):
+    from configs.models.tft import TFTDatasetConfig
+
+    config = TFTDatasetConfig()
+    config.max_encoder_length = encoder_length
+    config.min_encoder_length = encoder_length
+    return config
+
+
+def test_every_encoder_length_predicts_the_same_number_of_steps():
+    horizons = {_config(length).max_prediction_length for length in CONTEXT_LENGTHS}
+
+    assert horizons == {MAX_SERIES_LENGTH - MAX_CONTEXT_LENGTH}
+
+
+def test_the_horizon_does_not_stretch_when_the_encoder_shrinks():
+    """MAX_SERIES_LENGTH - encoder_length would give the short one extra steps."""
+    short, long = min(CONTEXT_LENGTHS), max(CONTEXT_LENGTHS)
+
+    assert _config(short).max_prediction_length == _config(long).max_prediction_length
+
+
+def test_a_shorter_encoder_needs_a_shorter_window():
+    short, long = min(CONTEXT_LENGTHS), max(CONTEXT_LENGTHS)
+
+    def window(length):
+        config = _config(length)
+        return config.resolve_encoder_lengths()[1] + config.max_prediction_length
+
+    assert window(short) == window(long) - (long - short)
+
+
+def test_the_trajectory_length_threshold_ignores_the_context_in_use():
+    """So the same trajectories are scored whichever encoder length wins."""
+    from src.trainers.tft_dataset import required_group_length
+
+    horizon = _config(max(CONTEXT_LENGTHS)).max_prediction_length
+
+    assert required_group_length(horizon) == MAX_CONTEXT_LENGTH + horizon
+    # It is a function of the horizon alone -- no encoder length reaches it.
+    assert required_group_length(1) == MAX_CONTEXT_LENGTH + 1
+
+
+def test_the_threshold_leaves_room_for_the_longest_window():
+    """A trajectory that passes must fit the longest encoder plus the horizon."""
+    from src.trainers.tft_dataset import required_group_length
+
+    config = _config(max(CONTEXT_LENGTHS))
+    window = config.resolve_encoder_lengths()[1] + config.max_prediction_length
+
+    assert required_group_length(config.max_prediction_length) == window

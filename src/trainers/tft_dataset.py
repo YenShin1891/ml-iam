@@ -3,7 +3,7 @@
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Dict, Tuple, List, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import torch
@@ -47,8 +47,32 @@ def _build_union_encoders(session_state: Dict, categorical_cols: List[str], add_
     return encoders
 
 
-def build_datasets(session_state: Dict) -> Tuple[TimeSeriesDataSet, TimeSeriesDataSet]:
-    """Build train/val TimeSeriesDataSet objects using shared template logic (encoders handle categoricals)."""
+def required_group_length(prediction_length: int) -> int:
+    """Steps a trajectory needs to be usable, whatever the context length.
+
+    Pinned to the longest context under comparison rather than to the one in
+    use, so a short-encoder run is fitted and scored on exactly the
+    trajectories a long-encoder run is.  Otherwise the short encoder would
+    admit trajectories the long one cannot fit, and win the context-length
+    comparison on its easier evaluation set.
+    """
+    return MAX_CONTEXT_LENGTH + int(prediction_length)
+
+
+def build_datasets(
+    session_state: Dict, encoder_length: Optional[int] = None
+) -> Tuple[TimeSeriesDataSet, TimeSeriesDataSet]:
+    """Build train/val TimeSeriesDataSet objects using shared template logic (encoders handle categoricals).
+
+    *encoder_length* overrides the configured context window.  The prediction
+    horizon and the group-length thresholds do not move with it -- they are
+    pinned to MAX_CONTEXT_LENGTH -- so two encoder lengths predict the same
+    steps of the same trajectories.
+    """
+    if encoder_length is not None:
+        # Set rather than rebind, so this lands in the caller's state
+        # alongside the other tft_* keys written below.
+        session_state["tft_encoder_length"] = int(encoder_length)
     val_data = session_state["val_data"]
     train_dataset, config = create_train_dataset(session_state)
     session_state["tft_target_offset"] = config.target_offset
@@ -126,6 +150,10 @@ def create_train_dataset(session_state: Dict) -> Tuple[TimeSeriesDataSet, Any]:
     targets = session_state["targets"]
 
     config = TFTDatasetConfig()
+    encoder_length = session_state.get("tft_encoder_length")
+    if encoder_length is not None:
+        config.max_encoder_length = int(encoder_length)
+        config.min_encoder_length = int(encoder_length)
     target_offset = session_state.get("tft_target_offset")
     if target_offset is not None:
         config.target_offset = int(target_offset)
@@ -145,13 +173,10 @@ def create_train_dataset(session_state: Dict) -> Tuple[TimeSeriesDataSet, Any]:
     pretrained_encoders = _build_union_encoders(session_state, categorical_cols, add_nan=False)
     config.pretrained_categorical_encoders = pretrained_encoders
 
-    # The threshold uses the longest context under comparison, not this
-    # config's, so a short-encoder run trains on exactly the groups a
-    # long-encoder run does.
     config.resolve_encoder_lengths()
     train_data = drop_underlength_groups(
         train_data, config.group_ids, config.time_idx,
-        MAX_CONTEXT_LENGTH + config.min_prediction_length,
+        required_group_length(config.min_prediction_length),
     )
 
     params = config.build(features, targets, mode="train")
@@ -273,9 +298,7 @@ def from_train_template(
     )
     data = drop_underlength_groups(
         data, train_dataset.group_ids, train_dataset.time_idx,
-        # Again the longest context, so every encoder length is scored on the
-        # same trajectories rather than on whichever ones its own window fits.
-        MAX_CONTEXT_LENGTH + prediction_length,
+        required_group_length(prediction_length),
     )
     if isinstance(train_dataset, DatasetTemplate):
         return train_dataset.build(data, mode=mode)

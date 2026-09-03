@@ -79,14 +79,21 @@ def search_tft(store, target_normalizer_mode=None):
 
 
 def _search_with_splits(splits, store):
+    from configs.data import CONTEXT_LENGTHS
     from src.trainers.tft_dataset import build_datasets
     from src.trainers.tft_trainer import hyperparameter_search_tft
 
-    session_state = dict(splits)
-    train_dataset, val_dataset = build_datasets(session_state)
+    # One dataset pair per searched context length.  build_datasets mutates
+    # the state it is given, so each gets its own copy.
+    datasets_by_encoder_length = {}
+    for encoder_length in CONTEXT_LENGTHS:
+        datasets_by_encoder_length[encoder_length] = build_datasets(
+            dict(splits), encoder_length=encoder_length,
+        )
+        logging.info("Built TFT datasets for encoder_length=%d", encoder_length)
 
     best_params = hyperparameter_search_tft(
-        train_dataset, val_dataset, splits["targets"], store.run_id,
+        datasets_by_encoder_length, splits["targets"], store.run_id,
     )
     store.save_best_params(best_params)
     store.save_features(splits["features"], splits["targets"])
@@ -113,9 +120,14 @@ def train_tft(store, target_normalizer_mode=None):
     if primary:
         logging.info("Training with best params: %s", best_params)
 
+    # The encoder length is part of the winning configuration, so the final
+    # fit has to see the same window the winning trial did.
+    encoder_length = best_params.get("encoder_length")
     session_state = dict(splits)
+    if encoder_length is not None:
+        session_state["tft_encoder_length"] = int(encoder_length)
     train_dataset, val_dataset = build_datasets(
-        dict(splits)  # build_datasets needs its own copy since it mutates
+        dict(session_state)  # build_datasets needs its own copy since it mutates
     )
 
     _train_final(

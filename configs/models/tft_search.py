@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Any, Dict
 
+from configs.data import CONTEXT_LENGTHS
 from src.trainers.search import Choice, IntLogUniform, LogUniform, SearchSpace, Uniform
 
 
@@ -44,6 +45,11 @@ class TFTSearchSpace(SearchSpace):
                 "lstm_layers": Choice([1, 2, 3]),
                 "dropout": Uniform(0.0, 0.5),
                 "learning_rate": LogUniform(1e-4, 3e-2),
+                # Context length: the encoder window.  The counterpart of the
+                # LSTM's sequence_length and XGBoost's n_lags, held to the
+                # same two settings.  Selects a prebuilt dataset rather than
+                # configuring the model, so create_tft_model ignores it.
+                "encoder_length": Choice(CONTEXT_LENGTHS),
             },
             n_trials=50,
             stage1_budget={"max_epochs": 25},
