@@ -867,9 +867,15 @@ def _report_search_results(
     search_results_df.to_csv(search_results_path, index=False)
     logging.info(f"Search results saved to: {search_results_path}")
 
-    # Log best params per sequence_length and save a CSV report
+    # Log best params per sequence_length and save a CSV report.  Only one
+    # stage may contribute: stage-2 rows were trained for far longer, so a
+    # table mixing them would rank the lengths that happened to reach stage 2
+    # above the rest on budget alone.  Stage 2 is preferred when it ran,
+    # because the stratified selection gives every length a row there.
     if "sequence_length" in search_results_df.columns:
         finite_df = search_results_df[np.isfinite(search_results_df["val_loss"])].copy()
+        if "stage" in finite_df.columns and (finite_df["stage"] == "stage2").any():
+            finite_df = finite_df[finite_df["stage"] == "stage2"].copy()
         if not finite_df.empty:
             idx = finite_df.groupby("sequence_length")["val_loss"].idxmin()
             best_by_seq = finite_df.loc[idx].sort_values("sequence_length")
@@ -1062,12 +1068,16 @@ def hyperparameter_search_lstm(
     signature_to_params = {params_signature(p, space.param_keys): p for p in all_params}
     stage2_params = [
         signature_to_params[sig]
-        for sig in select_top_k_signatures(stage1_done, space.stage2_top_k, space.param_keys)
+        for sig in select_top_k_signatures(
+            stage1_done, space.stage2_top_k, space.param_keys,
+            stratify_by=space.stage2_stratify_by,
+        )
         if sig in signature_to_params
     ]
     logging.info(
-        "LSTM stage2: refitting the top %d of %d completed stage-1 trials at full budget",
-        len(stage2_params), len(stage1_done),
+        "LSTM stage2: refitting %d of %d completed stage-1 trials at full budget "
+        "(every %s represented)",
+        len(stage2_params), len(stage1_done), space.stage2_stratify_by or "leader",
     )
     # Full budget: no overrides, so lstm_config_from_params falls back to
     # LSTMTrainerConfig's max_epochs, with the patience the final fit uses.

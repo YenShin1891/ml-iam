@@ -273,6 +273,13 @@ class SearchSpace:
         an epoch of TFT is not an epoch of LSTM, and XGBoost counts rounds.
     stage2_top_k:
         Stage-1 leaders refit under the trainer config's full budget.
+    stage2_stratify_by:
+        Parameter whose every sampled value is guaranteed a full-budget refit
+        before the remaining stage-2 slots go to the global leaders.  The LSTM
+        sets it to ``sequence_length``: choosing a context length is a result
+        in its own right, and it cannot be read off stage-1 scores alone
+        because those come from a truncated schedule.  Costs nothing extra --
+        the stage-2 budget is unchanged, only its allocation.
     seed:
         Fixed so a search is reproducible and so the three models see draws
         from the same generator sequence.
@@ -282,6 +289,7 @@ class SearchSpace:
     n_trials: int
     stage1_budget: Dict[str, Any] = field(default_factory=dict)
     stage2_top_k: int = 10
+    stage2_stratify_by: Optional[str] = None
     seed: int = 0
 
     def __post_init__(self):
@@ -300,6 +308,11 @@ class SearchSpace:
                     f"Parameter {name!r} must be a Distribution or a sequence, got {type(dist).__name__}"
                 )
         self.distributions = normalized
+        if self.stage2_stratify_by is not None and self.stage2_stratify_by not in normalized:
+            raise ValueError(
+                f"stage2_stratify_by={self.stage2_stratify_by!r} is not a searched parameter; "
+                f"expected one of {sorted(normalized)}"
+            )
 
     @property
     def param_keys(self) -> List[str]:
@@ -476,18 +489,44 @@ def select_top_k_signatures(
     keys: Sequence[str],
     metric: str = "val_loss",
     mode: str = "min",
+    stratify_by: Optional[str] = None,
 ) -> List[str]:
-    """Signatures of the ``k`` best distinct configurations, best-first."""
+    """Signatures of the ``k`` best distinct configurations, best-first.
+
+    With *stratify_by*, each distinct value of that parameter contributes its
+    own best configuration first, and the remaining slots then go to the
+    global ranking.  The total stays ``k``, so stratifying costs no extra
+    trials -- it only stops every slot from being spent on one corner of the
+    space, which is what makes a per-value comparison possible at all.
+    """
+    k = max(1, int(k))
+    ranked = rank_trials(rows, metric, mode)
     signatures: List[str] = []
     seen = set()
-    for row in rank_trials(rows, metric, mode):
+
+    def take(row) -> bool:
         signature = row.get("signature") or params_signature(row, keys)
         if signature in seen:
-            continue
+            return False
         seen.add(signature)
         signatures.append(signature)
-        if len(signatures) >= max(1, int(k)):
+        return True
+
+    if stratify_by is not None:
+        claimed = set()
+        for row in ranked:
+            if len(signatures) >= k:
+                break
+            value = row.get(stratify_by)
+            if value in claimed:
+                continue
+            claimed.add(value)
+            take(row)
+
+    for row in ranked:
+        if len(signatures) >= k:
             break
+        take(row)
     return signatures
 
 
@@ -576,7 +615,8 @@ def plan_two_stage_search(
     stage2_pending: List[Dict[str, Any]] = []
     if stage1_rows:
         for signature in select_top_k_signatures(
-            stage1_rows, space.stage2_top_k, keys, metric, mode
+            stage1_rows, space.stage2_top_k, keys, metric, mode,
+            stratify_by=space.stage2_stratify_by,
         ):
             if signature in sig_to_params and signature not in stage2_sigs:
                 stage2_pending.append(sig_to_params[signature])

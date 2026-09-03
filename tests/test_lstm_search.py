@@ -230,3 +230,22 @@ def test_the_search_and_the_final_fit_build_the_same_model_config():
         assert getattr(trial, name) == getattr(final, name), name
     # ...and they differ only in how long they train.
     assert trial.max_epochs != final.max_epochs
+
+
+def test_the_per_sequence_length_table_never_mixes_stages(run):
+    """Stage-2 rows trained far longer; a mixed table ranks budget, not length."""
+    run_id, root = run
+
+    _report_search_results(
+        [
+            _trial(0, 0.8, sequence_length=1, stage="stage1"),
+            _trial(1, 0.7, sequence_length=2, stage="stage1"),
+            _trial(2, 0.2, sequence_length=1, stage="stage2"),
+            _trial(3, 0.3, sequence_length=2, stage="stage2"),
+        ],
+        run_id,
+    )
+
+    by_seq = pd.read_csv(root / "search_best_by_seq_len.csv")
+    assert by_seq["val_loss"].tolist() == [0.2, 0.3]
+    assert set(by_seq["stage"]) == {"stage2"}

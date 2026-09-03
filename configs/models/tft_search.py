@@ -42,7 +42,7 @@ class TFTSearchSpace(SearchSpace):
             distributions={
                 "hidden_size": IntLogUniform(64, 512, multiple_of=8),
                 "lstm_layers": Choice([1, 2, 3]),
-                "dropout": Uniform(0.05, 0.4),
+                "dropout": Uniform(0.0, 0.5),
                 "learning_rate": LogUniform(1e-4, 3e-2),
             },
             n_trials=50,

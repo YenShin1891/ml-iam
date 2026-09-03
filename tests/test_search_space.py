@@ -398,3 +398,78 @@ def test_the_budget_curve_covers_stage_one_only(space, tmp_path):
     with open(written["budget_curve"]) as handle:
         curve = [float(row["best_val_loss"]) for row in csv.DictReader(handle)]
     assert curve == [0.9, 0.4]
+
+
+# ── stratified stage two ──────────────────────────────────────────────────
+
+
+def _stratified_space():
+    return SearchSpace(
+        distributions={"depth": IntUniform(2, 10), "layers": Choice([1, 2, 3, 4])},
+        n_trials=12,
+        stage2_top_k=3,
+        stage2_stratify_by="layers",
+    )
+
+
+def test_stratifying_gives_every_value_a_slot_before_the_leaders():
+    """Otherwise all the stage-2 budget can land on one corner of the space."""
+    # layers=1 sweeps the leaderboard; 2 and 3 appear only further down.
+    rows = [
+        _row(2, 1, 0.1), _row(3, 1, 0.2), _row(4, 1, 0.3),
+        _row(5, 2, 0.8), _row(6, 3, 0.9),
+    ]
+
+    top = select_top_k_signatures(rows, 3, KEYS, stratify_by="layers")
+
+    chosen = [r for r in rows if params_signature(r, KEYS) in top]
+    assert {r["layers"] for r in chosen} == {1, 2, 3}
+
+
+def test_stratifying_spends_leftover_slots_on_the_global_ranking():
+    rows = [_row(2, 1, 0.1), _row(3, 1, 0.2), _row(4, 2, 0.8)]
+
+    top = select_top_k_signatures(rows, 3, KEYS, stratify_by="layers")
+
+    assert len(top) == 3
+    assert top[0] == params_signature(_row(2, 1, 0), KEYS)
+
+
+def test_stratifying_does_not_enlarge_the_stage_two_budget():
+    """The allocation changes; the number of full-budget refits does not."""
+    rows = [_row(i, i % 4 + 1, i / 10) for i in range(2, 10)]
+
+    assert len(select_top_k_signatures(rows, 3, KEYS, stratify_by="layers")) == 3
+    assert len(select_top_k_signatures(rows, 3, KEYS)) == 3
+
+
+def test_the_plan_stratifies_stage_two_when_the_space_asks_for_it():
+    space = _stratified_space()
+    drawn = space.sample()
+    # Rank so that one 'layers' value would otherwise take every slot.
+    ledger = [
+        {**params, "val_loss": float(i) if params["layers"] != 1 else -1.0 - i,
+         "stage": "stage1", "status": "completed"}
+        for i, params in enumerate(drawn)
+    ]
+
+    plan = plan_two_stage_search(space, ledger)
+
+    assert len({p["layers"] for p in plan.stage2_pending}) > 1
+
+
+def test_stratifying_by_an_unsearched_parameter_is_rejected():
+    with pytest.raises(ValueError, match="not a searched parameter"):
+        SearchSpace(
+            distributions={"depth": IntUniform(2, 10)},
+            n_trials=4,
+            stage2_stratify_by="layers",
+        )
+
+
+def test_only_the_lstm_stratifies_and_it_does_so_by_context_length():
+    import configs.models as models
+
+    assert models.LSTMSearchSpace().stage2_stratify_by == "sequence_length"
+    assert models.TFTSearchSpace().stage2_stratify_by is None
+    assert models.XGBSearchSpace().stage2_stratify_by is None
