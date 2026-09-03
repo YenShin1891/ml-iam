@@ -16,12 +16,7 @@ from configs.data import (
     MAX_YEAR,
     SPLIT_SEED,
     REGION_CATEGORIES,
-    INTERPOLATE_TARGETS,
-    SCALE_AWARE_IMPUTATION,
-    NORMALIZE_TARGETS_BY_POPULATION,
     POPULATION_COLUMN,
-    KEEP_PARTIAL_TARGETS,
-    IMPUTE_IRREGULAR_INTERVALS,
 )
 
 SPLIT_NAMES = ("train", "val", "test")
@@ -312,7 +307,7 @@ def impute_with_train_medians(
     excluded = set(categorical_columns) | set(time_known)
 
     use_scale = (
-        SCALE_AWARE_IMPUTATION
+        _data_flag("SCALE_AWARE_IMPUTATION")
         and "Region_Scale" in train_df.columns
     )
 
@@ -386,15 +381,20 @@ def impute_with_train_medians(
     return train_df, val_df, test_df
 
 
-def _keep_partial_targets() -> bool:
-    """Read KEEP_PARTIAL_TARGETS at call time.
+def _data_flag(name: str) -> bool:
+    """Read a configs.data flag at call time.
 
     scripts/train.py overrides ``configs.data.KEEP_PARTIAL_TARGETS`` at
-    runtime, so the module-level import captured above can be stale.
+    runtime and the tests monkeypatch the others, so a value imported at
+    module load would be stale.
     """
     import configs.data as data_config
 
-    return bool(getattr(data_config, "KEEP_PARTIAL_TARGETS", KEEP_PARTIAL_TARGETS))
+    return bool(getattr(data_config, name))
+
+
+def _keep_partial_targets() -> bool:
+    return _data_flag("KEEP_PARTIAL_TARGETS")
 
 
 def sanitize_target_scaler(scaler, targets=None) -> bool:
@@ -573,6 +573,9 @@ def load_and_process_data(version=None) -> pd.DataFrame:
     year_melted = processed_series.melt(
         id_vars=non_year_cols, value_vars=year_cols, var_name='Year', value_name='value'
     )
+    # The year columns arrive as header strings; every later step sorts,
+    # differences or interpolates over Year and wants a number.
+    year_melted['Year'] = year_melted['Year'].astype(int)
     # Build pivot index — include Region_Scale if present
     pivot_index = ['Model', 'Model_Family', 'Scenario', 'Scenario_Category', 'Region']
     if 'Region_Scale' in non_year_cols:
@@ -610,6 +613,18 @@ def set_region_categories(regions) -> None:
 def observed_mask_columns(output_variables: list) -> list:
     """Return the list of ``{var}__observed`` column names for *output_variables*."""
     return [f"{var}__observed" for var in output_variables]
+
+
+def observed_mask_from_frame(frame: pd.DataFrame, output_variables: list) -> Optional[np.ndarray]:
+    """The (rows, targets) 0/1 observation mask *frame* carries, or None.
+
+    None means the frame has no mask columns (it predates them, or a merge
+    dropped them), which the metric code reads as "score every element".
+    """
+    obs_cols = observed_mask_columns(output_variables)
+    if not all(col in frame.columns for col in obs_cols):
+        return None
+    return frame[obs_cols].to_numpy()
 
 
 def interpolate_targets(
@@ -756,12 +771,20 @@ def normalize_targets_by_population(
 
 
 def denormalize_by_population(values: np.ndarray, population: np.ndarray) -> np.ndarray:
-    """Multiply per-capita values back to absolute units, elementwise by row.
+    """Return *values* in absolute units.
 
-    `values` may be shape (n,) or (n, k); `population` is shape (n,) and is
-    broadcast across the k target columns. NaNs propagate naturally.
+    With NORMALIZE_TARGETS_BY_POPULATION on, the models predict per-capita
+    values and this multiplies them back by population, row by row: `values`
+    may be shape (n,) or (n, k); `population` is shape (n,) and is broadcast
+    across the k target columns. NaNs propagate naturally.
+
+    With the flag off the targets were never divided, so they come back
+    unchanged.  Multiplying anyway reported every metric in <unit> x persons
+    and let a missing population turn an observed target into NaN.
     """
     values = np.asarray(values, dtype=float)
+    if not _data_flag("NORMALIZE_TARGETS_BY_POPULATION"):
+        return values
     population_col_vec = np.asarray(population, dtype=float).reshape(-1, 1)
     if values.ndim == 1:
         return (values.reshape(-1, 1) * population_col_vec).ravel()
@@ -807,7 +830,7 @@ def prepare_features_and_targets(data: pd.DataFrame, lag_required: bool = True) 
         lag_required,
     )
 
-    if NORMALIZE_TARGETS_BY_POPULATION:
+    if _data_flag("NORMALIZE_TARGETS_BY_POPULATION"):
         data = interpolate_targets(data, INDEX_COLUMNS, [POPULATION_COLUMN])
         data = normalize_targets_by_population(data, OUTPUT_VARIABLES, POPULATION_COLUMN)
 
@@ -819,7 +842,7 @@ def prepare_features_and_targets(data: pd.DataFrame, lag_required: bool = True) 
         if obs_col not in data.columns:
             data[obs_col] = data[col].notna().astype("float32")
 
-    if INTERPOLATE_TARGETS:
+    if _data_flag("INTERPOLATE_TARGETS"):
         data = interpolate_targets(data, INDEX_COLUMNS, OUTPUT_VARIABLES)
 
     prepared = add_lag_features(data, INDEX_COLUMNS, OUTPUT_VARIABLES, lag_required=lag_required)
@@ -834,7 +857,7 @@ def prepare_features_and_targets(data: pd.DataFrame, lag_required: bool = True) 
         and not col.endswith("__observed")
     ]
 
-    if KEEP_PARTIAL_TARGETS:
+    if _keep_partial_targets():
         # Keep rows where *at least one* target is observed (element-wise
         # masking handles the rest).  Rows where *all* targets are missing
         # carry zero gradient and waste memory, so drop them.
@@ -871,7 +894,7 @@ def prepare_features_and_targets_sequence(
     """
     logging.info("Preparing features and targets for sequence models...")
 
-    if NORMALIZE_TARGETS_BY_POPULATION:
+    if _data_flag("NORMALIZE_TARGETS_BY_POPULATION"):
         data = interpolate_targets(data, INDEX_COLUMNS, [POPULATION_COLUMN])
         data = normalize_targets_by_population(data, OUTPUT_VARIABLES, POPULATION_COLUMN)
 
@@ -881,10 +904,10 @@ def prepare_features_and_targets_sequence(
         if obs_col not in data.columns:
             data[obs_col] = data[col].notna().astype("float32")
 
-    if INTERPOLATE_TARGETS:
+    if _data_flag("INTERPOLATE_TARGETS"):
         data = interpolate_targets(data, INDEX_COLUMNS, OUTPUT_VARIABLES)
 
-    if IMPUTE_IRREGULAR_INTERVALS:
+    if _data_flag("IMPUTE_IRREGULAR_INTERVALS"):
         data = resample_to_uniform_intervals(data, INDEX_COLUMNS, OUTPUT_VARIABLES)
 
     prepared = data.copy()
@@ -899,7 +922,7 @@ def prepare_features_and_targets_sequence(
         and not col.endswith("__observed")
     ]
 
-    if KEEP_PARTIAL_TARGETS:
+    if _keep_partial_targets():
         any_observed = prepared[obs_cols].any(axis=1)
         n_dropped = int((~any_observed).sum())
         if n_dropped:

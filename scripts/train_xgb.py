@@ -149,22 +149,20 @@ def test_xgb(store):
     y_scaler = splits["y_scaler"]
 
     from src.trainers.evaluation import test_xgb_autoregressively, save_metrics
-    from src.data.preprocess import denormalize_by_population, observed_mask_columns
+    from src.data.preprocess import denormalize_by_population, observed_mask_from_frame
     from configs.data import POPULATION_COLUMN
 
     preds_scaled = test_xgb_autoregressively(X_test_with_index, y_test_scaled, store.run_id)
 
-    # Convert scaled model outputs back to per-capita units, then multiply by
-    # Population to recover absolute values. Ground truth comes straight from
-    # test_data (raw, per-capita) rather than the scaled y_test array, matching
-    # how LSTM/TFT already source their ground truth.
+    # Undo the target scaling; denormalize_by_population then restores absolute
+    # units when the run predicts per-capita targets (and is a no-op otherwise).
+    # Ground truth comes straight from test_data rather than the scaled y_test
+    # array, matching how LSTM/TFT source theirs.
     population = test_data[POPULATION_COLUMN].values
     preds = denormalize_by_population(y_scaler.inverse_transform(preds_scaled), population)
     y_test = denormalize_by_population(test_data[targets].values, population)
 
-    # Extract observed mask from test_data if available
-    obs_cols = observed_mask_columns(targets)
-    obs_mask = test_data[obs_cols].values if all(c in test_data.columns for c in obs_cols) else None
+    obs_mask = observed_mask_from_frame(test_data, targets)
 
     store.save_predictions(preds)
     store.save_test_data(test_data, y_test)

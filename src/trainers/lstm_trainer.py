@@ -1213,12 +1213,8 @@ def predict_lstm(
     # Pass all rows to save_metrics — it handles NaN per-target internally.
     # Filtering with .any(axis=1) would drop rows where only SOME targets
     # are NaN, biasing per-target R² toward well-covered regions.
-    from src.data.preprocess import observed_mask_columns
-    obs_cols = observed_mask_columns(targets)
-    if all(c in test_data.columns for c in obs_cols):
-        obs_mask = test_data[obs_cols].values
-    else:
-        obs_mask = None
+    from src.data.preprocess import observed_mask_from_frame
+    obs_mask = observed_mask_from_frame(test_data, targets)
 
     # test_data drives the per-region-scale breakdown; align_sequence_predictions
     # returned one row per test_data row, so the frame matches the scored arrays.

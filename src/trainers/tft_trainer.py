@@ -724,10 +724,17 @@ def predict_tft(
 
         # Evaluate only the forecast horizon rows returned by predict=True.
         from configs.data import POPULATION_COLUMN
+        from src.data.preprocess import observed_mask_columns, observed_mask_from_frame
 
         key_cols = group_ids + [time_idx_name]
-        # Collect reference columns (ensure presence in test_data)
-        ref_cols = [c for c in key_cols + ['Year'] + targets + [POPULATION_COLUMN] if c in test_data.columns]
+        # Reference columns carried onto the horizon rows.  The __observed
+        # masks must come along: without them the metrics scored the
+        # zero-filled and interpolated targets as ground truth, while the LSTM
+        # and XGBoost paths masked them out.
+        ref_cols = [
+            c for c in key_cols + ['Year'] + targets + observed_mask_columns(targets) + [POPULATION_COLUMN]
+            if c in test_data.columns
+        ]
         horizon_df = index_df[key_cols].merge(
             test_data[ref_cols].drop_duplicates(key_cols),
             on=key_cols,
@@ -787,16 +794,11 @@ def predict_tft(
         # Save metrics unless caller will compute them on combined data (e.g.
         # two-window prediction calls predict_tft for single-window fallback).
         if not skip_metrics:
-            from src.data.preprocess import observed_mask_columns
-            obs_cols = observed_mask_columns(targets)
-            if all(c in horizon_df.columns for c in obs_cols):
-                obs_mask = horizon_df[obs_cols].values
-            else:
-                obs_mask = None
             # horizon_df, not test_data: predictions cover the forecast horizon
             # only, and the rows were checked against it just above.
             save_metrics(run_id, y_true, y_pred, horizon_df,
-                         observed_mask=obs_mask, metrics_filename=metrics_filename)
+                         observed_mask=observed_mask_from_frame(horizon_df, targets),
+                         metrics_filename=metrics_filename)
 
         removed_groups = None
         try:

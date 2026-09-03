@@ -280,11 +280,17 @@ def _predict_window(
         idx_df = _normalize_index_df(index_df, template_time_idx)
         idx_df, preds_flat = _expand_horizon_index(idx_df, preds_tensor, template_time_idx, torch)
 
-        # Build horizon dataframe
+        # Build horizon dataframe.  The __observed masks come along so the
+        # metrics can skip zero-filled and interpolated targets, as the LSTM
+        # and XGBoost paths do.
         from configs.data import POPULATION_COLUMN
+        from src.data.preprocess import observed_mask_columns
         targets = session_state["targets"]
         key_cols = list(template_group_ids) + [template_time_idx]
-        ref_cols = [c for c in key_cols + ['Year'] + targets + [POPULATION_COLUMN] if c in window_data.columns]
+        ref_cols = [
+            c for c in key_cols + ['Year'] + targets + observed_mask_columns(targets) + [POPULATION_COLUMN]
+            if c in window_data.columns
+        ]
         horizon_df = idx_df[key_cols].merge(
             window_data.drop_duplicates(subset=key_cols)[ref_cols],
             on=key_cols,
