@@ -627,6 +627,23 @@ def observed_mask_from_frame(frame: pd.DataFrame, output_variables: list) -> Opt
     return frame[obs_cols].to_numpy()
 
 
+def _fill_linear_in_year(values: pd.Series, year: pd.Series, series: pd.Series) -> pd.Series:
+    """Series.interpolate(method="index") within each *series*, vectorised.
+
+    A gap takes the straight line between the observations either side of it
+    in Year; NaNs after the last observation take its value; NaNs before the
+    first stay NaN.  *series* is an integer id per (Model, Scenario, Region).
+    """
+    values = pd.to_numeric(values, errors="coerce")
+    known_year = year.where(values.notna())
+    by_series_values = values.groupby(series, sort=False)
+    by_series_years = known_year.groupby(series, sort=False)
+    previous, previous_year = by_series_values.ffill(), by_series_years.ffill()
+    following, following_year = by_series_values.bfill(), by_series_years.bfill()
+    interior = previous + (following - previous) * (year - previous_year) / (following_year - previous_year)
+    return values.fillna(interior).fillna(previous)
+
+
 def interpolate_targets(
     data: pd.DataFrame,
     group_cols: list,
@@ -643,7 +660,7 @@ def interpolate_targets(
     Before interpolating, captures ``{var}__observed`` boolean columns so
     downstream code can distinguish originally-observed from filled values.
     """
-    data = data.sort_values(group_cols + ["Year"]).copy()
+    data = data.sort_values(group_cols + ["Year"]).reset_index(drop=True)
 
     # Capture observation mask *before* any interpolation
     for col in output_variables:
@@ -655,16 +672,13 @@ def interpolate_targets(
 
     data["Year"] = pd.to_numeric(data["Year"], errors="coerce")
 
-    def _interp_group(grp):
-        grp = grp.set_index("Year").sort_index()
-        for col in output_variables:
-            if col in grp.columns and grp[col].notna().any():
-                grp[col] = pd.to_numeric(grp[col], errors="coerce")
-                grp[col] = grp[col].interpolate(method="index")
-        return grp.reset_index()
-
-    data = data.groupby(group_cols, group_keys=False).apply(_interp_group)
-    data = data.reset_index(drop=True)
+    # Vectorised over the groups: the per-group apply this replaces walked
+    # 23k groups in Python, two minutes per phase, and relied on pandas
+    # handing the grouping columns to the function, which pandas 3 stops doing.
+    series = data.groupby(group_cols, sort=False).ngroup()
+    for col in output_variables:
+        if col in data.columns:
+            data[col] = _fill_linear_in_year(data[col], data["Year"], series)
 
     after_nans = data[output_variables].isna().sum().sum()
     filled = before_nans - after_nans
@@ -689,49 +703,57 @@ def resample_to_uniform_intervals(
     interpolated; observation masks (``{var}__observed``) are set to 0 for
     the inserted rows so they are masked in loss and metrics.
     """
-    obs_cols = observed_mask_columns(output_variables)
-    groups: list = []
-    n_resampled = 0
+    obs_cols = [c for c in observed_mask_columns(output_variables) if c in data.columns]
+    keys = list(group_cols) + ["Year"]
 
-    for _key, grp in data.groupby(group_cols, sort=False):
-        grp = grp.sort_values("Year")
-        years = grp["Year"].values
-        diffs = np.diff(years)
+    # Caches written before Year was made numeric still hold header strings,
+    # and differencing strings raises.
+    data = data.assign(Year=pd.to_numeric(data["Year"], errors="coerce"))
+    data = data.sort_values(keys, kind="stable").reset_index(drop=True)
 
-        if len(diffs) == 0 or diffs.min() <= interval:
-            groups.append(grp)
-            continue
+    # Only the groups whose smallest gap exceeds the interval are rebuilt.
+    series = data.groupby(group_cols, sort=False).ngroup()
+    smallest_gap = data["Year"].groupby(series, sort=False).diff().groupby(series, sort=False).min()
+    coarse = series.isin(smallest_gap.index[smallest_gap > interval]).to_numpy()
+    n_resampled = int(smallest_gap.gt(interval).sum())
+    if not n_resampled:
+        logging.info("Resampled 0 groups to uniform %d-year intervals", interval)
+        return data
 
-        n_resampled += 1
-        full_years = np.arange(years.min(), years.max() + 1, interval)
+    # The full grid of every coarse series, then its rows merged onto it: a
+    # year off the grid is dropped and a missing one appears as a NaN row,
+    # exactly as reindexing each group did, without a loop over the groups.
+    spans = data.loc[coarse].groupby(group_cols, sort=False)["Year"].agg(["min", "max"])
+    grid = pd.concat(
+        [
+            pd.DataFrame({**dict(zip(group_cols, key)), "Year": np.arange(lo, hi + 1, interval)})
+            for key, (lo, hi) in spans.iterrows()
+        ],
+        ignore_index=True,
+    )
+    rebuilt = grid.merge(data.loc[coarse], on=keys, how="left")
+    rebuilt_series = rebuilt.groupby(group_cols, sort=False).ngroup()
 
-        grp_indexed = grp.set_index("Year")
-        grp_reindexed = grp_indexed.reindex(full_years)
+    # Metadata / categorical columns are constant within a group — fill.
+    fill_cols = (set(NON_FEATURE_COLUMNS) - {"Year"}) | set(CATEGORICAL_COLUMNS)
+    for col in [c for c in rebuilt.columns if c in fill_cols and c not in group_cols]:
+        by_series = rebuilt[col].groupby(rebuilt_series, sort=False)
+        rebuilt[col] = by_series.ffill()
+        rebuilt[col] = rebuilt[col].groupby(rebuilt_series, sort=False).bfill()
 
-        # Metadata / categorical columns are constant within group — fill.
-        fill_cols = set(group_cols) | {
-            c for c in NON_FEATURE_COLUMNS if c != "Year"
-        } | set(CATEGORICAL_COLUMNS)
-        for col in fill_cols:
-            if col in grp_reindexed.columns:
-                grp_reindexed[col] = grp_reindexed[col].ffill().bfill()
+    # Observation masks: inserted rows are unobserved.
+    rebuilt[obs_cols] = rebuilt[obs_cols].fillna(0.0)
 
-        # Observation masks: new rows are unobserved.
-        for col in obs_cols:
-            if col in grp_reindexed.columns:
-                grp_reindexed[col] = grp_reindexed[col].fillna(0.0)
+    # Numeric columns (targets and features alike) are interpolated in Year.
+    numeric_cols = [
+        c for c in data.select_dtypes(include=[np.number]).columns
+        if c != "Year" and not c.endswith("__observed")
+    ]
+    for col in numeric_cols:
+        rebuilt[col] = _fill_linear_in_year(rebuilt[col], rebuilt["Year"], rebuilt_series)
 
-        # Interpolate numeric columns (exclude __observed masks).
-        numeric_cols = grp_reindexed.select_dtypes(include=[np.number]).columns
-        interp_cols = [c for c in numeric_cols if not c.endswith("__observed")]
-        grp_reindexed[interp_cols] = grp_reindexed[interp_cols].interpolate(
-            method="index"
-        )
-
-        grp_reindexed = grp_reindexed.reset_index(names="Year")
-        groups.append(grp_reindexed)
-
-    result = pd.concat(groups, ignore_index=True)
+    result = pd.concat([data.loc[~coarse], rebuilt[data.columns]], ignore_index=True)
+    result = result.sort_values(keys, kind="stable").reset_index(drop=True)
     logging.info(
         "Resampled %d groups to uniform %d-year intervals", n_resampled, interval
     )
