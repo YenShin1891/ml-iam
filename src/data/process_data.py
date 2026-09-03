@@ -114,24 +114,33 @@ def filter_by_selected_variables(df_list: List[pd.DataFrame], selected_vars: pd.
     return [cast(pd.DataFrame, df.loc[df["Variable"].isin(keep)].copy()) for df in df_list]
 
 
-def add_scenario_category(df: pd.DataFrame, scenario_cat: pd.DataFrame) -> pd.DataFrame:
-    """Attach the AR6 category of each scenario, dropping scenarios without one.
+UNCATEGORISED = "no-climate-assessment"
 
-    The drop is explicit here: it used to happen silently downstream, where
-    pivot_table discards rows whose index carries a NaN, with nothing in the
-    log about the 3-4% of series that went with them.  Keeping them instead
-    would take a fillna("Unknown") in place of the dropna.
+
+def add_scenario_category(df: pd.DataFrame, scenario_cat: pd.DataFrame) -> pd.DataFrame:
+    """Attach the AR6 category of each scenario, labelling those without one.
+
+    Most of the misses are scenarios the metadata CSV does list but whose
+    category cell holds a literal "#N/A" from a failed lookup; only a handful
+    per raw file are absent from the CSV outright.  Either way the category is
+    simply unknown, which is what UNCATEGORISED already means for the 237
+    scenarios the CSV labels that way, so they share the label rather than
+    being dropped.  Dropping them used to happen silently downstream, where
+    pivot_table discards rows whose index carries a NaN; the column is not a
+    model feature (see NON_FEATURE_COLUMNS), so it cost ~3% of the series for
+    nothing the models predict from.
     """
     out = df.merge(scenario_cat[["Scenario", "Scenario_Category"]], on="Scenario", how="left")
     uncategorised = out["Scenario_Category"].isna()
     if uncategorised.any():
-        logging.warning(
-            "Dropping %d rows from %d scenarios that have no Scenario_Category in %s",
+        logging.info(
+            "Labelling %d rows from %d scenarios as %r: no Scenario_Category in %s",
             int(uncategorised.sum()),
             out.loc[uncategorised, "Scenario"].nunique(),
+            UNCATEGORISED,
             SCENARIO_CATEGORY_CSV.name,
         )
-        out = out.loc[~uncategorised]
+        out["Scenario_Category"] = out["Scenario_Category"].fillna(UNCATEGORISED)
     # Reorder: Model, Scenario, Scenario_Category, Region, Variable, Unit, years...
     cols = ["Model", "Scenario", "Scenario_Category", "Region"]
     remainder = [c for c in out.columns if c not in cols]
