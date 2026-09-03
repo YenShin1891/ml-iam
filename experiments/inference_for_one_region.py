@@ -32,34 +32,26 @@ Usage:
 """
 
 import argparse
-import json
 import logging
 import os
-import sys
 
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter, MaxNLocator
 import numpy as np
 import pandas as pd
-import xgboost as xgb
-
-# Add project root to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from configs.data import (
     INDEX_COLUMNS,
     NON_FEATURE_COLUMNS,
-    N_LAG_FEATURES,
     OUTPUT_VARIABLES,
-    REGION_CATEGORIES,
     POPULATION_COLUMN,
 )
-from src.data.preprocess import denormalize_by_population
+from src.data.preprocess import add_lag_features, denormalize_by_population
 from src.trainers.evaluation import test_xgb_autoregressively
 from src.utils.run_store import RunStore
 from src.utils.utils import get_run_root
+from src.visualization.helpers import output_unit
 from src.visualization.trajectories import format_large_numbers
-from configs.data import OUTPUT_UNITS
 from configs.visualization import (
     AXIS_LABEL_FONTSIZE,
     LEGEND_FONTSIZE,
@@ -102,18 +94,28 @@ def load_artifacts(run_id: str):
     run_root = get_run_root(run_id)
     store = RunStore(run_id)
 
-    with open(os.path.join(run_root, "artifacts", "features.json")) as f:
-        feat_meta = json.load(f)
+    features, targets = store.load_features()
+    feat_meta = {"features": features, "targets": targets}
+
+    if not store.has_categories():
+        raise RuntimeError(
+            f"Run {run_id} has no artifacts/categories.json, so the integer codes it "
+            "was trained with cannot be reproduced. Re-run its preprocess phase."
+        )
+    categories = store.load_categories()
 
     if model_type == "xgb":
-        model = xgb.XGBRegressor()
-        model.load_model(os.path.join(run_root, "checkpoints", "final_best.json"))
+        from src.trainers.xgb_trainer import load_final_xgb_model
+
+        model = load_final_xgb_model(run_id, feat_meta["targets"])
         return model_type, {
+            "run_id": run_id,
             "model": model,
             "x_scaler": store.load_artifact("x_scaler.pkl"),
             "y_scaler": store.load_artifact("y_scaler.pkl"),
             "features": feat_meta["features"],
             "targets": feat_meta["targets"],
+            "categories": categories,
         }
 
     if model_type == "lstm":
@@ -132,6 +134,7 @@ def load_artifacts(run_id: str):
         config = LSTMTrainerConfig(**(meta.get("lstm_config", {})))
 
         return model_type, {
+            "run_id": run_id,
             "model": model,
             "scaler_X": scaler_X,
             "scaler_y": scaler_y,
@@ -140,7 +143,8 @@ def load_artifacts(run_id: str):
             "targets": feat_meta["targets"],
             "non_numeric_features": meta.get("lstm_non_numeric_features", []),
             "categorical_features": meta.get("lstm_categorical_features", []),
-            "model_family_categories": meta.get("lstm_model_family_categories"),
+            "model_family_categories": categories.get("Model_Family"),
+            "categories": categories,
             "sequence_length": meta.get("lstm_sequence_length", config.sequence_length),
             "target_offset": meta.get("lstm_target_offset", config.target_offset),
             "config": config,
@@ -154,6 +158,7 @@ def load_artifacts(run_id: str):
         template = load_dataset_template(run_id)
 
         return model_type, {
+            "run_id": run_id,
             "model": model,
             "dataset_template": template,
             "features": feat_meta["features"],
@@ -163,28 +168,45 @@ def load_artifacts(run_id: str):
     raise ValueError(f"Unsupported model type: {model_type}")
 
 
-def encode_categorical_columns(data: pd.DataFrame, model_family_categories=None) -> pd.DataFrame:
-    """Encode categoricals the same way as preprocess.py.
+def encode_categorical_columns(data: pd.DataFrame, categories: dict) -> pd.DataFrame:
+    """Encode categoricals with the vocabularies the run was trained on.
 
-    Args:
-        model_family_categories: Fixed category list from training. When provided,
-            ensures Model_Family codes match the training vocabulary.
+    *categories* comes from the run's categories.json.  Deriving codes here
+    instead would number them from whatever this one region happens to
+    contain, which has nothing to do with what the model learned.
     """
     data = data.copy()
-    if "Region" in data.columns:
-        data["Region"] = (
-            pd.Categorical(data["Region"].astype(str), categories=REGION_CATEGORIES, ordered=True)
-            .codes.astype("int64")
-        )
-    if "Model_Family" in data.columns:
-        if model_family_categories is not None:
-            data["Model_Family"] = (
-                pd.Categorical(data["Model_Family"].astype(str), categories=model_family_categories)
-                .codes.astype("int64")
+    for column in ("Region", "Model_Family"):
+        if column not in data.columns:
+            continue
+        labels = categories.get(column)
+        if not labels:
+            raise ValueError(
+                f"Run has no saved vocabulary for '{column}', so its codes cannot be "
+                "reproduced. Re-run the preprocess phase to write artifacts/categories.json."
             )
-        else:
-            data["Model_Family"] = data["Model_Family"].astype("category").cat.codes.astype("int64")
+        codes = pd.Categorical(
+            data[column].astype(str), categories=list(labels), ordered=True
+        ).codes.astype("int64")
+        unknown = sorted(set(data.loc[codes == -1, column].astype(str)))
+        if unknown:
+            raise ValueError(
+                f"{column} value(s) {unknown} were not in the training vocabulary; "
+                "the model has no code for them."
+            )
+        data[column] = codes
     return data
+
+
+def _decode_categorical_columns(frame: pd.DataFrame, categories: dict) -> pd.DataFrame:
+    """Inverse of encode_categorical_columns, for output and plots."""
+    for column in ("Region", "Model_Family"):
+        labels = categories.get(column)
+        if not labels or column not in frame.columns:
+            continue
+        if pd.api.types.is_integer_dtype(frame[column]):
+            frame[column] = frame[column].map(dict(enumerate(labels)))
+    return frame
 
 
 # ── Step 1: Region summary ────────────────────────────────────────────────
@@ -306,6 +328,7 @@ def build_synthetic_data(
     scenarios: list,
     template_model: str,
     known_families: list = None,
+    preferred_models: list = None,
 ) -> pd.DataFrame:
     """Build input rows for every (Model, Scenario, Region) combination.
 
@@ -318,6 +341,8 @@ def build_synthetic_data(
 
     Args:
         known_families: If provided, restrict to families the model was trained on.
+        preferred_models: Models to represent their family when they are in it
+            (the --models filter); otherwise the first model by name stands in.
     """
     # Get template rows
     template_mask = (
@@ -359,6 +384,11 @@ def build_synthetic_data(
         logger.info("Excluded %d families with <%d training rows: %s",
                      len(small_families), MIN_FAMILY_TRAINING_ROWS, sorted(small_families))
 
+    if preferred_models:
+        preferred = all_models["Model"].isin(preferred_models)
+        all_models = all_models.assign(_preferred=preferred).sort_values(
+            ["Model_Family", "_preferred", "Model"], ascending=[True, False, True]
+        ).drop(columns="_preferred")
     model_map = all_models.groupby("Model_Family").first().reset_index()
     logger.info("Representative models: %d families (one Model per family)", len(model_map))
 
@@ -409,15 +439,13 @@ def build_synthetic_data(
             s_template["Model"] = target_model
             s_template["Model_Family"] = target_family
 
-            # Fill model-specific features from lookup
+            # Fill model-specific features from the model's own per-year medians
             if target_model in feature_lookup:
                 lookup = feature_lookup[target_model]
-                for _, srow in s_template.iterrows():
-                    year = srow["Year"]
-                    if year in lookup.index:
-                        for col in model_specific_cols:
-                            if col in lookup.columns:
-                                s_template.loc[srow.name, col] = lookup.loc[year, col]
+                cols = [c for c in model_specific_cols if c in lookup.columns]
+                years = pd.to_numeric(s_template["Year"], errors="coerce")
+                known = years.isin(lookup.index).to_numpy()
+                s_template.loc[known, cols] = lookup.loc[years[known], cols].to_numpy()
 
             # Targets will be predicted
             s_template[OUTPUT_VARIABLES] = np.nan
@@ -434,25 +462,22 @@ def build_synthetic_data(
 
 # ── Preprocessing ─────────────────────────────────────────────────────────
 
-def add_lag_features(data: pd.DataFrame) -> pd.DataFrame:
-    """Add lag columns and drop rows without full lag history."""
-    data = data.sort_values(INDEX_COLUMNS + ["Year"]).copy()
-
-    for lag in range(1, N_LAG_FEATURES + 1):
-        shifted = data.groupby(INDEX_COLUMNS, sort=False)[OUTPUT_VARIABLES].shift(lag)
-        for col in OUTPUT_VARIABLES:
-            prefix = "prev_" if lag == 1 else f"prev{lag}_"
-            data[f"{prefix}{col}"] = shifted[col]
-
-    row_num = data.groupby(INDEX_COLUMNS, sort=False).cumcount()
-    data = data[row_num >= N_LAG_FEATURES].reset_index(drop=True)
+def _add_sequence_index(data: pd.DataFrame) -> pd.DataFrame:
+    """Step and DeltaYears per series, as prepare_features_and_targets_sequence builds them."""
+    data = data.copy()
+    data["Year"] = data["Year"].astype(int)
+    data = data.sort_values(INDEX_COLUMNS + ["Year"])
+    if "Step" not in data.columns:
+        data["Step"] = data.groupby(INDEX_COLUMNS).cumcount().astype("int64")
+    if "DeltaYears" not in data.columns:
+        data["DeltaYears"] = data.groupby(INDEX_COLUMNS)["Year"].diff().fillna(0).astype(int)
     return data
 
 
-def prepare_for_xgb(data: pd.DataFrame, features: list, targets: list, x_scaler):
+def prepare_for_xgb(data: pd.DataFrame, features: list, targets: list, x_scaler, categories: dict):
     """Encode, scale, and format data for XGB inference."""
     X = data[features].copy()
-    X = encode_categorical_columns(X)
+    X = encode_categorical_columns(X, categories)
 
     X_scaled = pd.DataFrame(x_scaler.transform(X), columns=X.columns, index=X.index)
 
@@ -486,7 +511,7 @@ def run_inference(model_type: str, artifacts: dict, synthetic: pd.DataFrame,
 
 def _infer_xgb(artifacts, synthetic, features, targets):
     X_test, y_test, test_data = prepare_for_xgb(
-        synthetic, features, targets, artifacts["x_scaler"],
+        synthetic, features, targets, artifacts["x_scaler"], artifacts["categories"],
     )
     n_groups = X_test.groupby(INDEX_COLUMNS).ngroups
     logger.info("Running XGB autoregressive inference on %d groups...", n_groups)
@@ -508,7 +533,7 @@ def _infer_lstm(artifacts, synthetic, features, targets):
     from torch.utils.data import DataLoader
     from lightning.pytorch import Trainer
     from src.trainers.lstm_trainer import LSTMDataset
-    from src.data.preprocess import add_missingness_indicators, impute_with_train_medians
+    from src.data.preprocess import add_missingness_indicators
 
     data = synthetic.copy()
 
@@ -516,7 +541,7 @@ def _infer_lstm(artifacts, synthetic, features, targets):
     data, features_with_missing = add_missingness_indicators(data, features)
 
     # Encode categoricals (use training vocab so codes match embeddings)
-    data = encode_categorical_columns(data, model_family_categories=artifacts.get("model_family_categories"))
+    data = encode_categorical_columns(data, artifacts["categories"])
 
     # Impute NaN with scaler mean (≈ train median) so scaled values are ~0 (neutral).
     # During training, NaN was imputed with train medians before fitting scaler_X.
@@ -530,16 +555,9 @@ def _infer_lstm(artifacts, synthetic, features, targets):
                 fill_val = 0.0
             data[col] = data[col].fillna(fill_val)
 
-    # Add Step and DeltaYears if not present
-    data["Year"] = data["Year"].astype(int)
-    if "Step" not in data.columns:
-        data = data.sort_values(INDEX_COLUMNS + ["Year"])
-        data["Step"] = data.groupby(INDEX_COLUMNS).cumcount().astype("int64")
-    if "DeltaYears" not in data.columns:
-        data["DeltaYears"] = data.groupby(INDEX_COLUMNS)["Year"].diff().fillna(0).astype(int)
+    data = _add_sequence_index(data)
 
     model = artifacts["model"]
-    scaler_X = artifacts["scaler_X"]
     scaler_y = artifacts["scaler_y"]
     seq_len = artifacts["sequence_length"]
     target_offset = artifacts["target_offset"]
@@ -578,18 +596,10 @@ def _infer_lstm(artifacts, synthetic, features, targets):
 
     preds_unscaled = scaler_y.inverse_transform(preds_array)
 
-    # Align predictions with data rows (sequence alignment)
-    aligned = np.full((len(data), len(targets)), np.nan)
-    pred_idx = 0
-    for _, group_data in data.groupby(INDEX_COLUMNS):
-        group_size = len(group_data)
-        group_indices = group_data.index
-        num_seqs = max(0, group_size - (seq_len + target_offset) + 1)
-        for i in range(num_seqs):
-            if pred_idx < len(preds_unscaled):
-                row_idx = data.index.get_loc(group_indices[i + seq_len - 1 + target_offset])
-                aligned[row_idx] = preds_unscaled[pred_idx]
-                pred_idx += 1
+    # Align predictions with the rows the dataset built them from.
+    from src.trainers.lstm_trainer import align_sequence_predictions
+
+    aligned = align_sequence_predictions(dataset, preds_unscaled, len(data))
 
     logger.info("LSTM predictions aligned: %d/%d rows have values",
                 (~np.isnan(aligned[:, 0])).sum(), len(data))
@@ -599,20 +609,17 @@ def _infer_lstm(artifacts, synthetic, features, targets):
 
 
 def _infer_tft(artifacts, synthetic, features, targets):
-    import torch
-    from src.trainers.tft_dataset import from_train_template
     from src.data.preprocess import add_missingness_indicators
-    from configs.models.tft import TFTTrainerConfig
+    from src.trainers.tft_trainer import predict_tft
+    from configs.models.tft import TFTDatasetConfig
 
     data = synthetic.copy()
 
     # Add missingness indicators
     data, features_with_missing = add_missingness_indicators(data, features)
 
-    # TFT handles categorical encoding internally via NaNLabelEncoder in the
-    # saved dataset template — do NOT pre-encode to integer codes here.
-    # Just ensure categorical columns are strings so the template's encoders
-    # can map them.
+    # TFT encodes categoricals itself through the template's NaNLabelEncoders,
+    # so they stay strings here rather than being pre-encoded to codes.
     for col in ("Region", "Model_Family"):
         if col in data.columns:
             data[col] = data[col].astype(str)
@@ -622,78 +629,46 @@ def _infer_tft(artifacts, synthetic, features, targets):
         if col in data.columns and col not in ("Region", "Model_Family"):
             data[col] = data[col].fillna(0.0)
 
-    # TFT requires non-NaN targets even in predict mode (they're not used as
-    # inputs but TimeSeriesDataSet validates them). Fill with 0.0.
-    for col in targets:
-        if col in data.columns:
-            data[col] = data[col].fillna(0.0)
+    # TimeSeriesDataSet validates the targets even in predict mode.
+    data[targets] = data[targets].fillna(0.0)
 
-    # Add Step and DeltaYears
-    data["Year"] = data["Year"].astype(int)
-    if "Step" not in data.columns:
-        data = data.sort_values(INDEX_COLUMNS + ["Year"])
-        data["Step"] = data.groupby(INDEX_COLUMNS).cumcount().astype("int64")
-    if "DeltaYears" not in data.columns:
-        data["DeltaYears"] = data.groupby(INDEX_COLUMNS)["Year"].diff().fillna(0).astype(int)
-
-    model = artifacts["model"]
-    template = artifacts["dataset_template"]
+    data = _add_sequence_index(data).reset_index(drop=True)
 
     # Drop rows with Model names not in the training vocabulary — TFT's
     # NaNLabelEncoder rejects unknown categories, and patching it after the
     # fact breaks the code ↔ index alignment during inverse_transform.
-    model_enc = template._categorical_encoders.get("__group_id__Model")
+    model_enc = artifacts["dataset_template"].categorical_encoders.get("__group_id__Model")
     if model_enc is not None and hasattr(model_enc, "classes_"):
-        known_models = set(model_enc.classes_.keys())
-        unknown_mask = ~data["Model"].isin(known_models)
+        unknown_mask = ~data["Model"].isin(set(model_enc.classes_.keys()))
         if unknown_mask.any():
-            dropped = data.loc[unknown_mask, "Model"].unique().tolist()
             logger.warning(
                 "Dropping %d rows with models unseen during training: %s",
-                unknown_mask.sum(), dropped,
+                unknown_mask.sum(), data.loc[unknown_mask, "Model"].unique().tolist(),
             )
             data = data[~unknown_mask].reset_index(drop=True)
 
-    try:
-        test_dataset = from_train_template(template, data, mode="predict")
-    except Exception as e:
-        raise RuntimeError(f"Failed to build TFT test dataset from template: {e}")
-
-    trainer_cfg = TFTTrainerConfig()
-    test_loader = test_dataset.to_dataloader(
-        train=False, batch_size=trainer_cfg.batch_size, num_workers=1,
+    # predict_tft is the test phase's own path: it builds the dataset from the
+    # template, pins inference to one GPU, matches each forecast step to its
+    # (series, step) row and restores absolute units.  Writing the forecasts
+    # onto the last rows of the frame instead, as this used to, handed one
+    # series' horizon to whichever series came next.
+    state = {
+        "test_data": data,
+        "targets": targets,
+        "tft_target_offset": max(0, TFTDatasetConfig().target_offset),
+    }
+    y_pred = predict_tft(
+        state, artifacts["run_id"], skip_metrics=True,
+        prediction_summary_filename="prediction_summary_inference.json",
     )
 
-    # Force single-GPU inference via trainer_kwargs — without this,
-    # model.predict() creates a Trainer that auto-detects all GPUs and
-    # launches DDP, duplicating the script and failing on tiny datasets.
-    logger.info("Running TFT prediction...")
-    returns = model.predict(
-        test_loader, return_index=True,
-        trainer_kwargs={"accelerator": "gpu", "devices": 1},
-    )
+    keys = INDEX_COLUMNS + ["Year"]
+    pred_cols = [f"__pred_{i}" for i in range(len(targets))]
+    horizon = state["horizon_df"][keys].copy()
+    horizon[pred_cols] = y_pred
+    aligned = data[keys].merge(horizon, on=keys, how="left")[pred_cols].to_numpy()
 
-    from pytorch_forecasting.models.base._base_model import Prediction as _PFPrediction
-    outputs = returns.output
-    if isinstance(outputs, list):
-        preds_tensor = outputs[0] if len(outputs) == 1 else torch.stack(outputs, dim=-1)
-    elif torch.is_tensor(outputs):
-        preds_tensor = outputs
-    else:
-        raise RuntimeError(f"Unsupported Prediction.output type: {type(outputs)}")
-
-    preds_flat = preds_tensor.detach().cpu().numpy()
-    if preds_flat.ndim == 3:
-        n, pred_len, out_size = preds_flat.shape
-        preds_flat = preds_flat.reshape(n * pred_len, out_size)
-
-    # Align with data — TFT predictions are for the forecast horizon only
-    # For now, return predictions aligned to the last rows of each group
-    aligned = np.full((len(data), len(targets)), np.nan)
-    aligned[-len(preds_flat):] = preds_flat[:len(aligned)]
-
-    logger.info("TFT predictions: %d rows", len(preds_flat))
-    aligned = denormalize_by_population(aligned, data[POPULATION_COLUMN].values)
+    logger.info("TFT predictions: %d of %d rows have values", int(np.isfinite(aligned[:, 0]).sum()), len(data))
     return _build_results(data, aligned, targets), aligned
 
 
@@ -779,8 +754,7 @@ def plot_inference_trajectories(
                         label=f"{family} (pred)" if idx == 0 else None)
 
         # Axis styling
-        unit = OUTPUT_UNITS[idx] if idx < len(OUTPUT_UNITS) else ""
-        ax.set_ylabel(f"{target} ({unit})", fontsize=AXIS_LABEL_FONTSIZE)
+        ax.set_ylabel(f"{target} ({output_unit(target)})", fontsize=AXIS_LABEL_FONTSIZE)
         ax.set_xlabel("Year", fontsize=AXIS_LABEL_FONTSIZE)
         ax.tick_params(axis="both", which="major", labelsize=TICK_LABELSIZE)
         ax.yaxis.set_major_formatter(FuncFormatter(format_large_numbers))
@@ -838,12 +812,6 @@ def main():
     store = RunStore(run_id)
     cache = store.load_processed_data()
     logger.info("Loaded processed data: %d rows", len(cache))
-
-    if model_type == "lstm" and not artifacts.get("model_family_categories"):
-        raise RuntimeError(
-            f"Run {run_id} was trained before Model_Family category vocab was saved. "
-            "Retrain to persist lstm_model_family_categories in train_meta."
-        )
 
     # ── Step 1: Print region summary ──
     print_region_summary(cache, region, model_families=args.model_family)
@@ -920,6 +888,7 @@ def main():
     synthetic = build_synthetic_data(
         cache, region, scenarios, template_model,
         known_families=artifacts.get("model_family_categories"),
+        preferred_models=args.models,
     )
 
     # Apply model filter — keep only requested families
@@ -927,8 +896,8 @@ def main():
     synthetic = synthetic[synthetic["Model_Family"].isin(filtered_families)].reset_index(drop=True)
     logger.info("After model filter: %d rows (%d families)", len(synthetic), len(filtered_families))
 
-    # Add lag features
-    synthetic = add_lag_features(synthetic)
+    # Lag features, as the training pipeline builds them
+    synthetic = add_lag_features(synthetic, INDEX_COLUMNS, OUTPUT_VARIABLES)
 
     # Extract ground truth (models with real target values)
     gt_mask = synthetic[targets[0]].notna()
@@ -941,16 +910,10 @@ def main():
     results, preds_original = run_inference(model_type, artifacts, synthetic, features, targets)
 
     # Decode integer-encoded categoricals back to string labels for output/plots
-    mf_cats = artifacts.get("model_family_categories")
-    if mf_cats and pd.api.types.is_integer_dtype(results["Model_Family"]):
-        code_to_name = {i: name for i, name in enumerate(mf_cats)}
-        results["Model_Family"] = results["Model_Family"].map(code_to_name)
-    if mf_cats and not ground_truth.empty and pd.api.types.is_integer_dtype(ground_truth["Model_Family"]):
-        ground_truth["Model_Family"] = ground_truth["Model_Family"].map(code_to_name)
-    if pd.api.types.is_integer_dtype(results["Region"]):
-        results["Region"] = results["Region"].map({i: r for i, r in enumerate(REGION_CATEGORIES)})
-    if not ground_truth.empty and pd.api.types.is_integer_dtype(ground_truth["Region"]):
-        ground_truth["Region"] = ground_truth["Region"].map({i: r for i, r in enumerate(REGION_CATEGORIES)})
+    categories = artifacts["categories"]
+    results = _decode_categorical_columns(results, categories)
+    if not ground_truth.empty:
+        ground_truth = _decode_categorical_columns(ground_truth, categories)
 
     # Save predictions
     results_path = os.path.join(output_dir, "predictions.csv")
@@ -958,7 +921,6 @@ def main():
     logger.info("Saved predictions: %s (%d rows)", results_path, len(results))
 
     # ── Step 4: Plot ──
-    # Build title suffix from filters
     filter_parts = []
     if args.model_family:
         filter_parts.append(f"Families: {', '.join(args.model_family)}")
@@ -968,7 +930,6 @@ def main():
         filter_parts.append(f"Categories: {', '.join(args.scenario_categories)}")
     title_suffix = " | ".join(filter_parts)
 
-    # ── Step 4: Plot ──
     title_parts = [region]
     if title_suffix:
         title_parts.append(title_suffix)

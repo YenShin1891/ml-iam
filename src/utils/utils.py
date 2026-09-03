@@ -1,6 +1,6 @@
-import inspect
 import logging
 import os
+import sys
 from datetime import datetime
 from typing import Optional
 
@@ -16,6 +16,56 @@ def get_run_root(run_id: str) -> str:
     model_type = run_id.split("_", 1)[0]
     return os.path.join(RESULTS_PATH, model_type, run_id)
 
+def is_primary_rank() -> bool:
+    """True on the primary DDP rank, and in any non-distributed process.
+
+    Phases run under torchrun/Lightning DDP re-execute in every rank; artifact
+    writing and logging setup must happen once.
+    """
+    rank_vars = (
+        os.getenv("LOCAL_RANK"),
+        os.getenv("PL_TRAINER_GLOBAL_RANK"),
+        os.getenv("GLOBAL_RANK"),
+        os.getenv("RANK"),
+    )
+    return all(rank in (None, "0") for rank in rank_vars)
+
+
+def format_number(value, digits: int = 4) -> str:
+    """Format one number for a log line.
+
+    Losses and metrics in this project span per-capita scaled units (0.0538)
+    and absolute ones (2.9e+07); fixed point stays readable in the middle of
+    that range and scientific notation takes over at both ends.
+    """
+    if value is None:
+        return "NA"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "NA"
+    if number != number:
+        return "nan"
+    if number == 0:
+        return "0"
+    if 1e-3 <= abs(number) < 1e5:
+        return f"{number:.{digits}f}"
+    return f"{number:.{digits}e}"
+
+
+def format_duration(seconds) -> str:
+    """Format an elapsed time in the largest unit that keeps it a small number."""
+    try:
+        total = float(seconds)
+    except (TypeError, ValueError):
+        return "NA"
+    if total < 90:
+        return f"{total:.0f}s"
+    if total < 90 * 60:
+        return f"{total / 60:.1f}m"
+    return f"{total / 3600:.1f}h"
+
+
 class LocalFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
         record_time = datetime.fromtimestamp(record.created).astimezone()
@@ -27,7 +77,7 @@ def _make_formatter(fmt: str = '%(asctime)s - %(levelname)s - %(message)s') -> l
 
 
 def _make_stream_handler(level: int = logging.INFO, fmt: Optional[str] = None) -> logging.Handler:
-    """Create a StreamHandler with KST formatting."""
+    """Create a StreamHandler with local-time formatting."""
     h = logging.StreamHandler()
     if fmt is None:
         fmt = '%(asctime)s - %(levelname)s - %(message)s'
@@ -37,7 +87,7 @@ def _make_stream_handler(level: int = logging.INFO, fmt: Optional[str] = None) -
 
 
 def _make_file_handler(file_path: str, level: int = logging.INFO, fmt: Optional[str] = None) -> logging.Handler:
-    """Create a FileHandler with KST formatting."""
+    """Create a FileHandler with local-time formatting."""
     h = logging.FileHandler(file_path)
     if fmt is None:
         fmt = '%(asctime)s - %(levelname)s - %(message)s'
@@ -48,7 +98,7 @@ def _make_file_handler(file_path: str, level: int = logging.INFO, fmt: Optional[
 
 def setup_console_logging(level: int = logging.INFO, logger_name: Optional[str] = None) -> logging.Logger:
     """
-    Configure a logger to log to console only using the same KST format as training.
+    Configure a logger to log to console only using the same format as training.
 
     Args:
         level: Logging level (default INFO)
@@ -69,12 +119,17 @@ def setup_console_logging(level: int = logging.INFO, logger_name: Optional[str] 
 
 
 def setup_logging(run_id, log_file=None):
-    """
-    Set up logging with a log file under the specified run directory.
+    """Log to the console and to logs/<caller>.log under the run directory.
+
+    Re-entrant: a process that switches runs (the dashboard) gets the new
+    file rather than basicConfig's silent no-op once handlers exist.
+    Lightning attaches its own stream handler and stops propagating when it
+    is imported before the root logger has handlers, so it is pointed back
+    at the root here either way.
     """
     if log_file is None:
-        caller_filename = inspect.stack()[1].filename
-        log_file = os.path.basename(caller_filename).split('.')[0] + ".log"
+        caller_filename = sys._getframe(1).f_code.co_filename
+        log_file = os.path.splitext(os.path.basename(caller_filename))[0] + ".log"
 
     log_dir = os.path.join(get_run_root(run_id), "logs")
     os.makedirs(log_dir, exist_ok=True)
@@ -84,8 +139,15 @@ def setup_logging(run_id, log_file=None):
         _make_file_handler(os.path.join(log_dir, log_file), logging.INFO),
     ]
 
-    logging.basicConfig(level=logging.INFO, handlers=handlers)
-    logging.info("Logging is set up for %s.", run_id)
+    logging.basicConfig(level=logging.INFO, handlers=handlers, force=True)
+    for name in ("lightning.pytorch", "lightning.fabric"):
+        library_logger = logging.getLogger(name)
+        library_logger.handlers.clear()
+        library_logger.propagate = True
+    # Every phase runs in its own process and sets logging up again; the phase
+    # banner marks where each one starts, so this only needs to be findable
+    # when debugging the logging itself.
+    logging.debug("Logging is set up for %s.", run_id)
 
 
 def get_next_run_id(model_type: str) -> str:
@@ -106,17 +168,8 @@ def get_next_run_id(model_type: str) -> str:
         for d in os.listdir(model_results_dir)
         if os.path.isdir(os.path.join(model_results_dir, d)) and d.startswith(f"{model_type}_")
     ]
-    run_numbers = []
-    for d in existing_runs:
-        try:
-            suffix = d.split("_", 1)[1]
-        except Exception:
-            continue
-        if suffix.isdigit():
-            try:
-                run_numbers.append(int(suffix))
-            except Exception:
-                continue
+    suffixes = (d.split("_", 1)[1] for d in existing_runs)
+    run_numbers = [int(suffix) for suffix in suffixes if suffix.isdigit()]
     candidate = max(run_numbers, default=0) + 1
 
     # Atomically reserve a unique run directory.
@@ -130,15 +183,3 @@ def get_next_run_id(model_type: str) -> str:
         except FileExistsError:
             candidate += 1
 
-
-def load_model(run_id):
-    run_dir = os.path.join(get_run_root(run_id), "checkpoints")
-    file_path = os.path.join(run_dir, "final_best.json")
-    try:
-        import xgboost as xgb
-        model = xgb.XGBRegressor()
-        model.load_model(file_path)
-        return model
-    except Exception as e:
-        logging.error("Error loading model: %s", str(e))
-        return None

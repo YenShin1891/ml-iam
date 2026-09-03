@@ -1,11 +1,20 @@
-# Trajectory and scatter plotting (migrated from utils.plot_trajectories)
-from configs.paths import RESULTS_PATH, RAW_DATA_PATH
-from configs.data import INDEX_COLUMNS, OUTPUT_UNITS, OUTPUT_VARIABLES
-import os, json, datetime, glob, logging
+"""Trajectory and scatter plots of predictions against the IAM values."""
+import datetime
+import glob
+import json
+import logging
+import os
 from typing import Optional, Tuple
-import numpy as np, pandas as pd, matplotlib.pyplot as plt
-from matplotlib import cm
+
+import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 from matplotlib.ticker import FuncFormatter, MaxNLocator
+
+from configs.paths import RAW_DATA_PATH
+from configs.data import INDEX_COLUMNS, OUTPUT_UNITS, OUTPUT_VARIABLES
+from .helpers import output_unit
 try:
     import streamlit as st
 except ModuleNotFoundError:
@@ -31,7 +40,7 @@ from configs.visualization import (
 
 __all__ = [
     'preprocess_data','format_large_numbers','create_single_trajectory_plot','create_single_scatter_plot','configure_axes',
-    'plot_scatter','plot_trajectories','get_saved_plots_metadata','apply_inverse_scaling','compute_r2',
+    'plot_scatter','plot_trajectories','get_saved_plots_metadata','compute_r2',
 ]
 
 # ── Marker scenario for paper overlay ────────────────────────────────────
@@ -94,7 +103,7 @@ def load_marker_scenario(targets: list) -> Optional[pd.DataFrame]:
 
 def create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, target_index, targets, model_name, output_units, observed_mask_col=None):
     unique_years = sorted(test_data_valid['Year'].unique()) if len(test_data_valid) else []
-    cmap = cm.get_cmap('viridis')
+    cmap = matplotlib.colormaps['viridis']
     colors = cmap(np.linspace(0, 1, len(unique_years))) if unique_years else []
     for year, color in zip(unique_years, colors):
         group_df = test_data_valid[test_data_valid['Year'] == year]
@@ -131,9 +140,6 @@ def create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, t
         ax.text(0.05, 0.95, f'R² = {r2_val:.3f}', transform=ax.transAxes, fontsize=R2_ANNOTATION_FONTSIZE,
                 verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
-# ... (content copied verbatim from original) ...
-import numpy as np
-import pandas as pd
 
 # Keeping original function bodies for continuity
 
@@ -186,7 +192,7 @@ def create_single_trajectory_plot(ax, test_data, y_test, preds, target_index, ta
                         color=color, alpha=0.1,
                         label='Emulation error' if first else None)
         first = False
-    ylabel_with_unit = f"{targets[target_index]} ({OUTPUT_UNITS[target_index]})"
+    ylabel_with_unit = f"{targets[target_index]} ({output_unit(targets[target_index])})"
     ax.set_xlabel("Year", fontsize=AXIS_LABEL_FONTSIZE)
     ax.set_ylabel(ylabel_with_unit, fontsize=AXIS_LABEL_FONTSIZE)
     ax.tick_params(axis='both', which='major', labelsize=TICK_LABELSIZE)
@@ -209,9 +215,6 @@ def compute_r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
             return float('nan')
         y_t = y_true[mask]
         y_p = y_pred[mask]
-        denom = np.var(y_t)
-        if denom == 0:
-            return float('nan')
         ss_res = np.sum((y_t - y_p) ** 2)
         ss_tot = np.sum((y_t - y_t.mean()) ** 2)
         if ss_tot == 0:
@@ -219,77 +222,6 @@ def compute_r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
         return 1 - ss_res/ss_tot
     except Exception:
         return float('nan')
-
-def apply_inverse_scaling(y_values: Optional[np.ndarray], preds_values: Optional[np.ndarray], run_id: Optional[str] = None):
-    """Attempt to inverse scale arrays using scaler(s) stored in Streamlit session_state.
-
-    Checks known session_state keys for a target scaler and applies its inverse_transform
-    if available. Returns (y_out, preds_out, used_scaler_name).
-
-    Parameters
-    ----------
-    y_values : np.ndarray | None
-        True target values (scaled). Not modified in-place.
-    preds_values : np.ndarray | None
-        Predicted target values (scaled). Not modified in-place.
-
-    Notes
-    -----
-    - If no scaler is found, originals are returned unchanged.
-    - Emits Streamlit informational/warning messages instead of raising.
-    """
-    if y_values is None or preds_values is None:
-        return y_values, preds_values, None
-    y_out = np.array(y_values, copy=True)
-    preds_out = np.array(preds_values, copy=True)
-    scaler_candidates = ['lstm_scaler_y', 'scaler_y']
-    scaler_found = None
-    scaler_key_used = None
-    try:
-        for key in scaler_candidates:
-            if st is not None and key in st.session_state and st.session_state[key] is not None:
-                scaler_found = st.session_state[key]
-                scaler_key_used = key
-                break
-        # Attempt to load from disk if not found in session_state
-        if scaler_found is None and run_id is not None:
-            try:
-                from src.utils.run_store import RunStore
-                store = RunStore(run_id)
-                scaler_candidate = store.load_artifact("y_scaler.pkl")
-                if hasattr(scaler_candidate, 'inverse_transform'):
-                    scaler_found = scaler_candidate
-                    scaler_key_used = 'file:y_scaler.pkl'
-                    if st is not None:
-                        st.session_state['scaler_y'] = scaler_found
-            except Exception as disk_e:  # noqa: BLE001
-                logging.info(f"No y_scaler.pkl loaded for run {run_id}: {disk_e}")
-        if scaler_found is None:
-            if st is not None:
-                st.info("No scaler found in session state; displaying scaled values (may be misleading).")
-            else:
-                logging.info("No scaler found; displaying scaled values.")
-            return y_out, preds_out, None
-        # Ensure 2D shape
-        y_2d = y_out.reshape(-1, 1) if y_out.ndim == 1 else y_out
-        preds_2d = preds_out.reshape(-1, 1) if preds_out.ndim == 1 else preds_out
-        if hasattr(scaler_found, 'inverse_transform'):
-            y_inv = scaler_found.inverse_transform(y_2d)
-            preds_inv = scaler_found.inverse_transform(preds_2d)
-            y_out = y_inv.ravel() if y_out.ndim == 1 else y_inv
-            preds_out = preds_inv.ravel() if preds_out.ndim == 1 else preds_inv
-        else:
-            if st is not None:
-                st.warning("Scaler found but missing inverse_transform; using scaled values.")
-            else:
-                logging.warning("Scaler found but missing inverse_transform; using scaled values.")
-        return y_out, preds_out, scaler_key_used
-    except Exception as e:  # noqa: BLE001
-        if st is not None:
-            st.warning(f"Automatic inverse scaling failed; using scaled values. Error: {e}")
-        else:
-            logging.warning("Automatic inverse scaling failed; using scaled values. Error: %s", e)
-        return y_values, preds_values, None
 
 def configure_axes(ax, min_val: float, max_val: float, xlabel: str, ylabel: str) -> None:
     ax.set_xlim(min_val, max_val)
@@ -340,20 +272,20 @@ def plot_scatter(run_id, test_data, y_test, preds, targets, filename: Optional[s
         nolegend_path = os.path.join(indiv_dir, f"scatter_{i}_{targets[i] if i < len(targets) else 'unknown'}_nolegend.png")
         fig_indiv.savefig(nolegend_path, bbox_inches='tight')
         plt.close(fig_indiv)
-    plt.tight_layout()
+    fig.tight_layout()
     if filename is None:
         filename = "scatter_plot.png"
     plots_dir = os.path.join(get_run_root(run_id), "plots")
     os.makedirs(plots_dir, exist_ok=True)
-    plt.savefig(os.path.join(plots_dir, filename), bbox_inches='tight')
+    fig.savefig(os.path.join(plots_dir, filename), bbox_inches='tight')
     # Save no-legend version of grid plot
     for ax in axes.flatten():
         legend = ax.get_legend()
         if legend is not None:
             legend.remove()
     nolegend_filename = filename.replace(".png", "_nolegend.png")
-    plt.savefig(os.path.join(plots_dir, nolegend_filename), bbox_inches='tight')
-    plt.close()
+    fig.savefig(os.path.join(plots_dir, nolegend_filename), bbox_inches='tight')
+    plt.close(fig)
 
 def _overlay_marker(ax, marker_df: pd.DataFrame, target_name: str) -> None:
     """Overlay the marker scenario ground truth on a single axis."""
@@ -371,7 +303,7 @@ def _overlay_marker(ax, marker_df: pd.DataFrame, target_name: str) -> None:
 
 def _save_paper_plots(
     test_data, y_plot, preds_plot, targets, marker_df,
-    alpha, linewidth, run_id, timestamp, plots_dir,
+    alpha, linewidth, timestamp, plots_dir,
     individual_indices,
 ):
     """Save paper-ready plots (grid + individual) with marker overlay."""
@@ -384,8 +316,11 @@ def _save_paper_plots(
         create_single_trajectory_plot(ax, test_data, y_plot, preds_plot, i, targets, alpha, linewidth)
         if i < len(targets):
             _overlay_marker(ax, marker_df, targets[i])
-    # Add a single legend entry for the marker in the first subplot
+    # One legend, in the first panel: the IAM/prediction/error line styles
+    # and the marker scenario.
     handles, labels = axes.flatten()[0].get_legend_handles_labels()
+    if handles:
+        axes.flatten()[0].legend(handles, labels, fontsize=LEGEND_FONTSIZE)
     fig.tight_layout()
     paper_grid = os.path.join(plots_dir, f"trajectories_{timestamp}_paper.png")
     fig.savefig(paper_grid, bbox_inches='tight', dpi=200)
@@ -458,11 +393,15 @@ def plot_trajectories(
     if y_test is None or (hasattr(y_test, 'size') and y_test.size == 0):
         logging.warning("y_test is empty. Displaying blank plots.")
         for i, ax in enumerate(axes.flatten()):
-            ax.set_title(targets[i])
-            ax.set_xlabel("Year")
-        plt.tight_layout()
+            if i < len(targets):
+                ax.set_title(targets[i])
+                ax.set_xlabel("Year")
+            else:
+                ax.axis('off')
+        fig.tight_layout()
         if st is not None:
-            st.pyplot(plt.gcf())
+            st.pyplot(fig)
+        plt.close(fig)
         return
     # Prepare copies so we don't mutate caller data. All three model types now
     # persist already-absolute values by the time they reach this function, so
@@ -471,44 +410,44 @@ def plot_trajectories(
     preds_plot = None if preds is None else np.array(preds, copy=True)
     for i, ax in enumerate(axes.flatten()):
         create_single_trajectory_plot(ax, test_data, y_plot, preds_plot, i, targets, alpha, linewidth)
-    plt.tight_layout()
+    fig.tight_layout()
     if st is not None:
-        st.pyplot(plt.gcf())
+        st.pyplot(fig)
+    # One timestamp and directory for everything this call saves, so the grid,
+    # per-target and paper plots share a filename stem.
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    plots_dir = os.path.join(get_run_root(run_id), "saved_dashboard_plots") if run_id else None
+
     if run_id and filter_metadata:
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         plot_filename = f"trajectories_{timestamp}.png"
         metadata_filename = f"trajectories_{timestamp}_metadata.json"
-        plots_dir = os.path.join(get_run_root(run_id), "saved_dashboard_plots")
         os.makedirs(plots_dir, exist_ok=True)
-        plt.savefig(os.path.join(plots_dir, plot_filename), bbox_inches='tight')
+        fig.savefig(os.path.join(plots_dir, plot_filename), bbox_inches='tight')
         with open(os.path.join(plots_dir, metadata_filename), 'w') as f:
             json.dump(filter_metadata, f, indent=2)
     if save_individual and run_id and filter_metadata:
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        plots_dir = os.path.join(get_run_root(run_id), "saved_dashboard_plots")
         for i in individual_indices:
             if 0 <= i < len(targets):
                 individual_fig = plt.figure(figsize=TRAJECTORY_INDIVIDUAL_FIGSIZE)
                 individual_ax = individual_fig.add_subplot(111)
                 create_single_trajectory_plot(individual_ax, test_data, y_plot, preds_plot, i, targets, alpha, linewidth)
                 individual_filename = f"trajectories_{timestamp}_individual_{i}.png"
-                plt.savefig(os.path.join(plots_dir, individual_filename), bbox_inches='tight')
+                individual_fig.savefig(os.path.join(plots_dir, individual_filename), bbox_inches='tight')
                 plt.close(individual_fig)
     # ── Paper plots with marker overlay ──────────────────────────────
     if run_id and filter_metadata:
         marker_df = load_marker_scenario(targets)
         if marker_df is not None:
-            if 'timestamp' not in dir():
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            if 'plots_dir' not in dir():
-                plots_dir = os.path.join(get_run_root(run_id), "saved_dashboard_plots")
-                os.makedirs(plots_dir, exist_ok=True)
+            os.makedirs(plots_dir, exist_ok=True)
             paper_indices = individual_indices if (save_individual and individual_indices) else list(range(len(targets)))
             _save_paper_plots(
                 test_data, y_plot, preds_plot, targets, marker_df,
-                alpha, linewidth, run_id, timestamp, plots_dir,
+                alpha, linewidth, timestamp, plots_dir,
                 paper_indices,
             )
+    # Streamlit has rendered the figure by now; without this every dashboard
+    # rerun kept another 15x15-inch figure alive.
+    plt.close(fig)
 
 
 def get_saved_plots_metadata(run_id):

@@ -14,12 +14,10 @@ import torch
 from lightning.pytorch.callbacks import EarlyStopping
 from sklearn.model_selection import ParameterSampler
 
-from configs.paths import RESULTS_PATH
 from configs.models import TFTSearchSpace, TFTTrainerConfig
-from src.utils.utils import get_run_root
+from src.utils.utils import get_run_root, is_primary_rank
 from .tft_dataset import (
     build_datasets,
-    create_combined_dataset,
     from_train_template,
     load_dataset_template,
     save_dataset_template,
@@ -124,21 +122,33 @@ def _get_search_gpu_ids() -> List[int]:
     return list(range(n)) if n > 0 else []
 
 
-def _get_best_epoch(trainer) -> int:
-    """Extract the epoch of the best val_loss from an EarlyStopping callback."""
-    best_epoch, _ = _get_best_score(trainer)
-    return best_epoch
-
-
 def _get_best_score(trainer):
-    """Return (best_epoch, best_val_loss) from the EarlyStopping callback."""
+    """Return (best_epoch, best_val_loss) from the EarlyStopping callback.
+
+    After fit, ``current_epoch`` counts completed epochs, so the last one ran
+    at index ``current_epoch - 1``, and ``wait_count`` epochs have passed since
+    the best.  Epochs are 0-based, as the progress log reports them.
+    """
     for cb in trainer.callbacks:
         if isinstance(cb, EarlyStopping):
-            best_epoch = trainer.current_epoch - cb.wait_count
+            best_epoch = trainer.current_epoch - 1 - cb.wait_count
             best_val_loss = cb.best_score.item()
             return best_epoch, best_val_loss
     # Fallback: if no early stopping, use last epoch's metrics.
-    return trainer.current_epoch, trainer.callback_metrics["val_loss"].item()
+    return trainer.current_epoch - 1, trainer.callback_metrics["val_loss"].item()
+
+
+def _fit_search_trial(train_dataset, params, n_targets, trainer_cfg, log_dir, train_loader, val_loader):
+    """Fit one configuration and return (best_epoch, best_val_loss).
+
+    The model and trainer are locals, so they are released on return; the
+    caller empties the CUDA cache before the next trial.
+    """
+    tft = create_tft_model(train_dataset, params, n_targets)
+    os.makedirs(log_dir, exist_ok=True)
+    trainer = create_search_trainer(trainer_cfg, log_dir=log_dir)
+    trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    return _get_best_score(trainer)
 
 
 def _search_worker(gpu_id, trials, train_dataset, val_dataset, n_targets, trainer_cfg, result_queue, run_id, stage):
@@ -163,22 +173,24 @@ def _search_worker(gpu_id, trials, train_dataset, val_dataset, n_targets, traine
         params = trial["params"]
         trial_id = trial["trial_id"]
         logging.info("[%s] GPU %d - Trial %d/%d - Params: %s", stage, gpu_id, i + 1, len(trials), params)
-        tft = create_tft_model(train_dataset, params, n_targets)
         log_dir = os.path.join(get_run_root(run_id), "search", "trials", trial_id)
-        os.makedirs(log_dir, exist_ok=True)
-        trainer = create_search_trainer(trainer_cfg, log_dir=log_dir)
         try:
-            trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
+            best = _fit_search_trial(
+                train_dataset, params, n_targets, trainer_cfg, log_dir, train_loader, val_loader,
+            )
         except torch.cuda.OutOfMemoryError:
             logging.warning(
                 "[%s] GPU %d - Trial %d/%d OOM — skipping trial %s. "
                 "Consider reducing batch_size or excluding this GPU if another process holds memory.",
                 stage, gpu_id, i + 1, len(trials), trial_id,
             )
-            del tft, trainer
-            torch.cuda.empty_cache()
+            best = None
+        # The trial's model and trainer were locals of _fit_search_trial and
+        # are gone by now; hand their cached blocks back before the next one.
+        torch.cuda.empty_cache()
+        if best is None:
             continue
-        best_epoch, best_val_loss = _get_best_score(trainer)
+        best_epoch, best_val_loss = best
         result_queue.put({
             **_canonicalize_search_params(params),
             "val_loss": float(best_val_loss),
@@ -192,8 +204,6 @@ def _search_worker(gpu_id, trials, train_dataset, val_dataset, n_targets, traine
             "[%s] GPU %d - Trial %d/%d - best_val_loss: %.4f best_epoch: %d",
             stage, gpu_id, i + 1, len(trials), best_val_loss, best_epoch,
         )
-        del tft, trainer
-        torch.cuda.empty_cache()
 
 
 def _run_trials_once(
@@ -225,12 +235,18 @@ def _run_trials_once(
         for i, trial in enumerate(trials):
             params = trial["params"]
             logging.info("[%s] Trial %d/%d - Params: %s", stage, i + 1, len(trials), params)
-            tft = create_tft_model(train_dataset, params, n_targets)
             log_dir = os.path.join(get_run_root(run_id), "search", "trials", trial["trial_id"])
-            os.makedirs(log_dir, exist_ok=True)
-            trainer = create_search_trainer(trainer_cfg, log_dir=log_dir)
-            trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
-            epoch, val_loss = _get_best_score(trainer)
+            try:
+                epoch, val_loss = _fit_search_trial(
+                    train_dataset, params, n_targets, trainer_cfg, log_dir, train_loader, val_loader,
+                )
+            except torch.cuda.OutOfMemoryError:
+                # Same policy as the multi-GPU workers: one configuration that
+                # does not fit must not end the search.
+                logging.warning("[%s] Trial %d/%d OOM — skipping trial %s.", stage, i + 1, len(trials), trial["trial_id"])
+                torch.cuda.empty_cache()
+                continue
+            torch.cuda.empty_cache()
             results.append({
                 **_canonicalize_search_params(params),
                 "val_loss": float(val_loss),
@@ -347,15 +363,10 @@ def hyperparameter_search_tft(
         )
     )
 
-    sig_to_params = {}
-    for p in all_params:
-        try:
-            sig_to_params[_params_signature(p)] = p
-        except Exception:
-            continue
+    sig_to_params = {_params_signature(p): p for p in all_params}
 
-    stage1_epochs = int(getattr(search_cfg, "stage1_max_epochs", 40))
-    stage2_top_k = int(getattr(search_cfg, "stage2_top_k", 10))
+    stage1_epochs = int(search_cfg.stage1_max_epochs)
+    stage2_top_k = int(search_cfg.stage2_top_k)
 
     stage1_sigs = set()
     stage2_sigs = set()
@@ -459,75 +470,6 @@ def hyperparameter_search_tft(
     return best_params
 
 
-def _search_sequential(
-    train_dataset,
-    val_dataset,
-    n_targets,
-    all_params,
-    trainer_cfg,
-    run_id,
-    existing_ledger_rows=None,
-) -> Dict:
-    """Sequential search fallback for single-GPU / CPU environments."""
-    train_loader, val_loader = create_dataloaders(train_dataset, val_dataset, trainer_cfg.batch_size)
-
-    new_results = []
-    for i, params in enumerate(all_params):
-        logging.info("TFT Search Iteration %d/%d - Params: %s", i + 1, len(all_params), params)
-        tft = create_tft_model(train_dataset, params, n_targets)
-        trial_id = _trial_dirname_from_params(params)
-        log_dir = os.path.join(get_run_root(run_id), "search", "trials", trial_id)
-        os.makedirs(log_dir, exist_ok=True)
-        trainer = create_search_trainer(trainer_cfg, log_dir=log_dir)
-        trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
-        epoch, val_loss = _get_best_score(trainer)
-
-        row = {
-            **_canonicalize_search_params(params),
-            "val_loss": float(val_loss),
-            "best_epoch": int(epoch),
-            "trial_id": trial_id,
-        }
-        new_results.append(row)
-
-        # Append each trial to ledger so a killed job can resume without redoing work
-        try:
-            _append_trials_ledger(run_id, [{
-                **{k: row.get(k) for k in _SEARCH_PARAM_KEYS},
-                "val_loss": float(row["val_loss"]),
-                "best_epoch": int(row["best_epoch"]),
-                "signature": _params_signature(row),
-                "trial_id": trial_id,
-                "status": "completed",
-            }])
-        except Exception as exc:
-            logging.warning("Failed to write trial to ledger (result kept in memory): %s", exc)
-
-    # Choose best across existing ledger + new
-    combined = []
-    if existing_ledger_rows:
-        combined.extend([r for r in existing_ledger_rows if _is_completed_trial_row(r)])
-    combined.extend([r for r in new_results if _is_completed_trial_row(r)])
-
-    best = min(combined, key=lambda r: float(r["val_loss"]))
-    best_params = {k: best[k] for k in _SEARCH_PARAM_KEYS}
-    best_params["best_epoch"] = int(best.get("best_epoch", 0))
-    best_score = float(best["val_loss"])
-    logging.info("Best TFT Params: %s with Val Loss: %.4f (best epoch: %d)", best_params, best_score, best_params["best_epoch"])
-    return best_params
-
-
-def _is_primary_rank() -> bool:
-    """Check if this is the primary DDP rank (or non-DDP)."""
-    rank_vars = [
-        os.getenv("LOCAL_RANK"),
-        os.getenv("PL_TRAINER_GLOBAL_RANK"),
-        os.getenv("GLOBAL_RANK"),
-        os.getenv("RANK"),
-    ]
-    return all(rv in (None, "0") for rv in rank_vars)
-
-
 def train_final_tft(
     train_dataset,
     val_dataset,
@@ -551,11 +493,13 @@ def train_final_tft(
     final_dir = os.path.join(get_run_root(run_id), "final")
     final_ckpt_path = os.path.join(final_dir, "best.ckpt")
 
-    primary = _is_primary_rank()
+    primary = is_primary_rank()
 
     os.makedirs(final_dir, exist_ok=True)
 
-    # Pop search best_epoch — informational only, early stopping decides when to stop
+    # best_epoch is search bookkeeping, not a model parameter: early stopping
+    # decides when to stop.  Drop it from a copy so the caller's dict survives.
+    best_params = dict(best_params)
     search_best_epoch = best_params.pop("best_epoch", None)
 
     if primary:
@@ -657,8 +601,20 @@ def train_final_tft(
         session_state["tft_time_idx_column"] = getattr(train_dataset, "time_idx", "Step")
 
 
-def predict_tft(session_state: Dict, run_id: str, *, skip_metrics: bool = False) -> np.ndarray:
-    """Make predictions following the exact original tft_trajectory_plotting logic."""
+def predict_tft(
+    session_state: Dict,
+    run_id: str,
+    *,
+    skip_metrics: bool = False,
+    metrics_filename: str = "performance.csv",
+    prediction_summary_filename: str = "prediction_summary.json",
+) -> np.ndarray:
+    """Make predictions following the exact original tft_trajectory_plotting logic.
+
+    *metrics_filename* and *prediction_summary_filename* let callers evaluate
+    non-test splits (e.g. train/val, for over/underfitting diagnostics) without
+    overwriting the canonical test-set artifacts under metrics/ and final/.
+    """
     from src.trainers.evaluation import save_metrics
 
     test_data = session_state["test_data"]
@@ -701,7 +657,7 @@ def predict_tft(session_state: Dict, run_id: str, *, skip_metrics: bool = False)
             train=False,
             batch_size=trainer_cfg.batch_size,
             num_workers=get_default_num_workers(),
-            persistent_workers=True,
+            persistent_workers=False,
         )
 
         logging.info("Predicting with TFT model (forecast horizon only)...")
@@ -783,10 +739,17 @@ def predict_tft(session_state: Dict, run_id: str, *, skip_metrics: bool = False)
 
         # Evaluate only the forecast horizon rows returned by predict=True.
         from configs.data import POPULATION_COLUMN
+        from src.data.preprocess import observed_mask_columns, observed_mask_from_frame
 
         key_cols = group_ids + [time_idx_name]
-        # Collect reference columns (ensure presence in test_data)
-        ref_cols = [c for c in key_cols + ['Year'] + targets + [POPULATION_COLUMN] if c in test_data.columns]
+        # Reference columns carried onto the horizon rows.  The __observed
+        # masks must come along: without them the metrics scored the
+        # zero-filled and interpolated targets as ground truth, while the LSTM
+        # and XGBoost paths masked them out.
+        ref_cols = [
+            c for c in key_cols + ['Year'] + targets + observed_mask_columns(targets) + [POPULATION_COLUMN]
+            if c in test_data.columns
+        ]
         horizon_df = index_df[key_cols].merge(
             test_data[ref_cols].drop_duplicates(key_cols),
             on=key_cols,
@@ -846,13 +809,11 @@ def predict_tft(session_state: Dict, run_id: str, *, skip_metrics: bool = False)
         # Save metrics unless caller will compute them on combined data (e.g.
         # two-window prediction calls predict_tft for single-window fallback).
         if not skip_metrics:
-            from src.data.preprocess import observed_mask_columns
-            obs_cols = observed_mask_columns(targets)
-            if all(c in horizon_df.columns for c in obs_cols):
-                obs_mask = horizon_df[obs_cols].values
-            else:
-                obs_mask = None
-            save_metrics(run_id, y_true, y_pred, observed_mask=obs_mask)
+            # horizon_df, not test_data: predictions cover the forecast horizon
+            # only, and the rows were checked against it just above.
+            save_metrics(run_id, y_true, y_pred, horizon_df,
+                         observed_mask=observed_mask_from_frame(horizon_df, targets),
+                         metrics_filename=metrics_filename)
 
         removed_groups = None
         try:
@@ -877,7 +838,7 @@ def predict_tft(session_state: Dict, run_id: str, *, skip_metrics: bool = False)
             "removed_groups_count": removed_count,
             "removed_groups_sample": removed_groups[:5] if removed_groups else [],
         }
-        prediction_summary_path = os.path.join(get_run_root(run_id), "final", "prediction_summary.json")
+        prediction_summary_path = os.path.join(get_run_root(run_id), "final", prediction_summary_filename)
         try:
             os.makedirs(os.path.dirname(prediction_summary_path), exist_ok=True)
             with open(prediction_summary_path, "w", encoding="utf-8") as fp:
@@ -896,7 +857,6 @@ def predict_tft(session_state: Dict, run_id: str, *, skip_metrics: bool = False)
 
 
 # Maintain backward compatibility
-build_datasets = build_datasets
 
 __all__ = [
     "build_datasets",

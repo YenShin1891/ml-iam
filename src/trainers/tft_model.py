@@ -2,13 +2,7 @@
 
 import logging
 import os
-import warnings
-from typing import Dict, List, Optional
-
-# Suppress per-sample warnings from EncoderNormalizer's __getitem__ re-fitting
-# and pytorch_forecasting's group-drop notices (logged once is enough).
-warnings.filterwarnings("ignore", message="X does not have valid feature names")
-warnings.filterwarnings("ignore", message="Min encoder length and/or min_prediction_idx")
+from typing import Dict, Optional
 
 import torch
 from lightning.pytorch import Trainer
@@ -18,6 +12,7 @@ from pytorch_forecasting import TemporalFusionTransformer, RMSE, TimeSeriesDataS
 from pytorch_forecasting.metrics import MultiLoss
 
 from configs.models.tft import TFTTrainerConfig
+from .progress import EpochProgressLogger
 from .tft_utils import get_default_num_workers
 from src.utils.utils import get_run_root
 
@@ -46,7 +41,21 @@ class MaskedRMSE(RMSE):
         return sq_err
 
 
-class MaskedTFT(TemporalFusionTransformer):
+class SyncedTFT(TemporalFusionTransformer):
+    """TFT whose logged metrics are reduced across DDP ranks.
+
+    pytorch_forecasting logs val_loss and its per-target metrics without
+    ``sync_dist``, so under DDP each rank kept its own value of the metric
+    EarlyStopping and ModelCheckpoint monitor, and Lightning warned about it
+    once per metric name -- 75 lines a run.
+    """
+
+    def log(self, *args, **kwargs):
+        kwargs.setdefault("sync_dist", True)
+        super().log(*args, **kwargs)
+
+
+class MaskedTFT(SyncedTFT):
     """Thin wrapper that injects per-target observed masks into MaskedRMSE
     metrics before each loss computation.
 
@@ -121,7 +130,7 @@ def create_tft_model(
         output_size = 1
         loss = MaskedRMSE() if KEEP_PARTIAL_TARGETS else RMSE()
 
-    model_cls = MaskedTFT if KEEP_PARTIAL_TARGETS else TemporalFusionTransformer
+    model_cls = MaskedTFT if KEEP_PARTIAL_TARGETS else SyncedTFT
 
     kwargs = dict(
         hidden_size=params["hidden_size"],
@@ -205,7 +214,13 @@ def create_final_trainer(
         monitor="val_loss",
         mode="min",
         save_top_k=1,
+        # A re-run train phase must overwrite best.ckpt: with the version
+        # counter on, Lightning writes best-v1.ckpt instead and the test
+        # phase keeps loading the stale weights.
+        enable_version_counter=False,
     )
+
+    progress = EpochProgressLogger("TFT final training")
 
     logger = False
     if log_dir:
@@ -222,22 +237,9 @@ def create_final_trainer(
         devices=devices,
         strategy="auto",
         gradient_clip_val=trainer_cfg.gradient_clip_val,
-        callbacks=[early_stop, checkpoint],
+        callbacks=[early_stop, checkpoint, progress],
         logger=logger,
         enable_progress_bar=False,
-    )
-
-
-def create_inference_trainer() -> Trainer:
-    """Create single-device trainer for inference to preserve index ordering."""
-    accelerator = "gpu" if torch.cuda.is_available() else "cpu"
-    return Trainer(
-        accelerator=accelerator,
-        devices=1,
-        strategy="auto",
-        logger=False,
-        enable_progress_bar=False,
-        enable_checkpointing=False,
     )
 
 
@@ -250,7 +252,7 @@ def load_tft_checkpoint(run_id: str) -> TemporalFusionTransformer:
         raise FileNotFoundError(f"Final TFT checkpoint not found at {final_ckpt_path}")
     
     from configs.data import KEEP_PARTIAL_TARGETS
-    model_cls = MaskedTFT if KEEP_PARTIAL_TARGETS else TemporalFusionTransformer
+    model_cls = MaskedTFT if KEEP_PARTIAL_TARGETS else SyncedTFT
 
     try:
         model = model_cls.load_from_checkpoint(

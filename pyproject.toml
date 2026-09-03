@@ -5,3 +5,10 @@ requires-python = ">=3.9"
 
 [tool.setuptools.packages.find]
 include = ["src*", "configs*", "scripts*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

@@ -1,97 +1,72 @@
 """Evaluation utilities.
 
-Note: pytorch-forecasting 1.4.x returns normalized outputs in Prediction.output; original-scale values
-may not be present unless Prediction.prediction is populated. The TFT prediction path enforces original-scale
-predictions to avoid computing metrics on mixed scales. See scripts/check_pf_prediction.py and requirements.txt
-for the version-specific note.
+Note: pytorch-forecasting 1.4.x returns normalized outputs in Prediction.output;
+original-scale values may not be present unless Prediction.prediction is
+populated. The TFT prediction path enforces original-scale predictions so
+metrics are never computed on mixed scales — see predict_tft in
+src/trainers/tft_trainer.py.
 """
 
 from sklearn.metrics import mean_squared_error
 import os
 import logging
+import time
 import numpy as np
 import pandas as pd
 import concurrent.futures
-from tqdm import tqdm
-import xgboost as xgb
-from xgboost import DMatrix
 
 from typing import Optional
 
-from configs.paths import RESULTS_PATH
 from configs.data import INDEX_COLUMNS, NON_FEATURE_COLUMNS, N_LAG_FEATURES
-from src.utils.utils import get_run_root
+from src.utils.regions import SCALE_ORDER_COARSEST_FIRST, scale_of_frame
+from src.utils.utils import format_number, get_run_root
+
+# How often a long-running loop reports progress to the run log.
+PROGRESS_LOG_SECONDS = 60
 
 def group_test_data(X_test_with_index, cache=None):
-    """
-    Groups the test data by the specified index columns (group each instance)
-    Uses caching and more efficient operations for better performance.
+    """Split the test frame into per-group index lists and feature matrices.
+
+    *cache* holds results across search trials, which re-group the same
+    validation frame for every hyperparameter configuration.
     """
     if cache is None:
         cache = {}
 
     cache_key = (id(X_test_with_index), X_test_with_index.shape, tuple(INDEX_COLUMNS), tuple(NON_FEATURE_COLUMNS))
-    
-    if cache_key in cache:
-        return cache[cache_key]
-    
+
+    cached = cache.get(cache_key)
+    if cached is not None:
+        cached_frame, result = cached
+        # id() is only unique among live objects, so confirm identity rather
+        # than serving another frame that landed on a recycled address.
+        if cached_frame is X_test_with_index:
+            return result
+
     feature_columns = X_test_with_index.drop(columns=NON_FEATURE_COLUMNS, errors='ignore').columns
-    
-    # Create masks for all lag levels
-    lag_masks = {}
-    for lag in range(1, N_LAG_FEATURES + 1):
-        if lag == 1:
-            pattern = 'prev_'
-        else:
-            pattern = f'prev{lag}_'
-        
-        if hasattr(feature_columns, 'str'):  # pandas Index/Series
-            lag_result = feature_columns.str.startswith(pattern)
-            lag_masks[lag] = lag_result.values if hasattr(lag_result, 'values') else lag_result
-        else:  # already a numpy array
-            lag_masks[lag] = np.array([str(col).startswith(pattern) for col in feature_columns])
-    
     grouped = X_test_with_index.groupby(INDEX_COLUMNS, sort=False)
-    
-    num_groups = grouped.ngroups
+
     group_indices_list = []
     group_matrices = []
-    lag_indices_lists = {lag: [] for lag in range(1, N_LAG_FEATURES + 1)}
-    
-    group_keys = list(grouped.groups.keys())
-    
-    for group_key in group_keys:
+    for group_key in grouped.groups:
         group_df = grouped.get_group(group_key)
+        group_indices_list.append(group_df.index.tolist())
+        group_matrices.append(group_df[feature_columns].to_numpy())
 
-        group_indices = group_df.index.tolist()
+    result = (group_indices_list, group_matrices)
+    # Holding the frame also stops its id being reused while cached.
+    cache[cache_key] = (X_test_with_index, result)
 
-        group_matrix = group_df[feature_columns].to_numpy()
-        
-        group_indices_list.append(group_indices)
-        group_matrices.append(group_matrix)
-
-        # Append masks for all lag levels
-        for lag in range(1, N_LAG_FEATURES + 1):
-            lag_indices_lists[lag].append(lag_masks[lag])
-    
-    # Return tuple with all lag indices
-    result_tuple = [group_indices_list, group_matrices]
-    for lag in range(1, N_LAG_FEATURES + 1):
-        result_tuple.append(lag_indices_lists[lag])
-    result = tuple(result_tuple)
-    cache[cache_key] = result
-    
     return result
 
 
-def autoregressive_predictions(model, group_indices, group_matrix, lag_indices_dict, start_pos, y_scaler=None, x_scaler=None, feature_columns=None):
+def autoregressive_predictions(model, group_indices, group_matrix, start_pos, y_scaler=None, x_scaler=None, feature_columns=None):
     """
     Generate autoregressive predictions for a single grouped series.
 
     Notes:
     - Supports arbitrary N_LAG_FEATURES based on configs.data.N_LAG_FEATURES.
-    - Does not rely on lag_indices_dict; uses feature column names to locate
-      lagged feature columns of the form prev_<var> or prev{lag}_<var>.
+    - Locates lagged feature columns by name: prev_<var> or prev{lag}_<var>.
     - Assumes model.predict returns a vector of targets aligned with
       OUTPUT_VARIABLES[:num_targets].
     """
@@ -202,45 +177,36 @@ def test_xgb_autoregressively(
     x_scaler=None,
     max_workers: Optional[int] = None,
 ):
-    """
-    Test the model autoregressively on the test set.
+    """Test the model autoregressively on the test set.
+
+    *disable_progress* silences the periodic progress line and the closing
+    RMSE; the search sets it, where one line per trial is enough and these
+    would arrive once per fold.
     """
     if cache is None:
         cache = {}
     
-    # Load scalers if not provided and run_id is available
+    # Load the run's scalers when the caller did not pass them.  Without them
+    # the lag columns would receive y-scaled predictions in x-scaled units, a
+    # wrong-scale feedback loop that yields a plausible but wrong RMSE, so a
+    # missing scaler is an error rather than a warning.
     if y_scaler is None and x_scaler is None and run_id is not None:
-        try:
-            from src.utils.run_store import RunStore
-            store = RunStore(run_id)
-            y_scaler = store.load_artifact("y_scaler.pkl")
-            x_scaler = store.load_artifact("x_scaler.pkl")
-        except Exception:
-            logging.warning("Could not load scalers, falling back to original behavior")
-            y_scaler = None
-            x_scaler = None
-        
-    # group_test_data returns (group_indices_list, group_matrices, [optional lag masks...])
-    _grouped = group_test_data(X_test_with_index, cache)
-    group_indices_list, group_matrices = _grouped[0], _grouped[1]
+        from src.utils.run_store import RunStore
+        store = RunStore(run_id)
+        y_scaler = store.load_artifact("y_scaler.pkl")
+        x_scaler = store.load_artifact("x_scaler.pkl")
+
+    group_indices_list, group_matrices = group_test_data(X_test_with_index, cache)
     full_preds = np.full(y_test.shape, np.nan, dtype=float)
     
     if model is None:
         if run_id is None:
             raise ValueError("Either provide a preloaded `model` or a valid `run_id` to load from disk.")
-        ckpt_path = os.path.join(get_run_root(run_id), "checkpoints", "final_best.json")
-        # Try per-target models first (final_best_0.json, ...), fall back to
-        # single multi-output model for backward compatibility.
         from configs.data import OUTPUT_VARIABLES
-        stem, ext = os.path.splitext(ckpt_path)
-        if os.path.exists(f"{stem}_0{ext}"):
-            from src.trainers.xgb_trainer import PerTargetXGBRegressor
-            n_targets = y_test.shape[1] if y_test.ndim > 1 else 1
-            targets = OUTPUT_VARIABLES[:n_targets]
-            model = PerTargetXGBRegressor.load_model(ckpt_path, targets)
-        else:
-            model = xgb.XGBRegressor()
-            model.load_model(ckpt_path)
+        from src.trainers.xgb_trainer import load_final_xgb_model
+
+        n_targets = y_test.shape[1] if y_test.ndim > 1 else 1
+        model = load_final_xgb_model(run_id, OUTPUT_VARIABLES[:n_targets])
 
     # Get feature column names
     feature_columns = [col for col in X_test_with_index.columns if col not in NON_FEATURE_COLUMNS]
@@ -249,7 +215,7 @@ def test_xgb_autoregressively(
         group_indices, group_matrix = args
         # With no nan values in y_test, we always use the first instance as seed.
         start_pos = 0
-        preds_target = autoregressive_predictions(model, group_indices, group_matrix, None, start_pos, y_scaler, x_scaler, feature_columns)
+        preds_target = autoregressive_predictions(model, group_indices, group_matrix, start_pos, y_scaler, x_scaler, feature_columns)
         return group_indices, preds_target
 
     index_to_pos = {idx: pos for pos, idx in enumerate(X_test_with_index.index)}
@@ -259,124 +225,209 @@ def test_xgb_autoregressively(
         for group in groups:
             futures.append(executor.submit(process_group, group))
             
-        if disable_progress:
-            for future in concurrent.futures.as_completed(futures):
-                group_indices, preds_target = future.result()
-                pos = [index_to_pos[idx] for idx in group_indices]
-                full_preds[pos, :] = preds_target
-        else:
-            for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Processing groups"):
-                group_indices, preds_target = future.result()
-                pos = [index_to_pos[idx] for idx in group_indices]
-                full_preds[pos, :] = preds_target
+        total = len(futures)
+        completed = 0
+        last_logged = time.monotonic()
+
+        for future in concurrent.futures.as_completed(futures):
+            group_indices, preds_target = future.result()
+            pos = [index_to_pos[idx] for idx in group_indices]
+            full_preds[pos, :] = preds_target
+
+            completed += 1
+            # Reported to the log rather than a progress bar: the bar reached
+            # only a terminal, so train.log had nothing for the six minutes
+            # this takes, while its redraws filled the console log instead.
+            now = time.monotonic()
+            if not disable_progress and (
+                completed == total or now - last_logged >= PROGRESS_LOG_SECONDS
+            ):
+                logging.info("Autoregressive prediction: %d/%d groups", completed, total)
+                last_logged = now
 
     if not disable_progress:
-        mse = mean_squared_error(y_test, full_preds)
-        logging.info(f"Root Mean Squared Error: {np.sqrt(mse)}")
+        # y_test carries NaN at unobserved targets; score the observed ones.
+        finite = np.isfinite(np.asarray(y_test, dtype=float)) & np.isfinite(full_preds)
+        if finite.any():
+            mse = mean_squared_error(
+                np.asarray(y_test, dtype=float)[finite], full_preds[finite]
+            )
+            # Named for its units: this runs on the scaled targets the model
+            # predicts, while save_metrics reports RMSE in absolute units a few
+            # lines later, and the two differ by eight orders of magnitude.
+            logging.info(
+                "Autoregressive test RMSE (scaled units): %s",
+                format_number(np.sqrt(mse)),
+            )
+        else:
+            logging.warning("No observed test targets to score")
 
     return full_preds
 
 
-def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None):
+def _r2(yt, yp):
+    """Coefficient of determination for a single flat array pair."""
+    ss_res = float(np.sum((yt - yp) ** 2))
+    ss_tot = float(np.sum((yt - np.mean(yt)) ** 2))
+    return 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+
+
+def _pearson(yt, yp):
+    if len(yt) < 2 or np.std(yt) == 0 or np.std(yp) == 0:
+        return np.nan
+    return float(np.corrcoef(yt, yp)[0, 1])
+
+
+def _as_2d(y_true, y_pred, observed_mask=None):
+    """(rows, targets) float views of the arrays, and the mask or None."""
+    yt_2d = np.asarray(y_true, dtype=float)
+    yp_2d = np.asarray(y_pred, dtype=float)
+    if yt_2d.ndim == 1:
+        yt_2d = yt_2d.reshape(-1, 1)
+        yp_2d = yp_2d.reshape(-1, 1)
+    obs_2d = np.asarray(observed_mask) if observed_mask is not None else None
+    return yt_2d, yp_2d, obs_2d
+
+
+def _scored_elements(yt_2d, yp_2d, obs_2d=None, col=None):
+    """Flat (y_true, y_pred) over the elements that count: observed and finite.
+
+    *col* selects one target; None pools every target.
+    """
+    if col is None:
+        yt, yp = yt_2d.ravel(), yp_2d.ravel()
+        keep = obs_2d.astype(bool).ravel() if obs_2d is not None else np.ones(yt.shape, dtype=bool)
+    else:
+        yt, yp = yt_2d[:, col], yp_2d[:, col]
+        keep = obs_2d[:, col].astype(bool) if obs_2d is not None else np.ones(yt.shape, dtype=bool)
+    keep &= np.isfinite(yt) & np.isfinite(yp)
+    return yt[keep], yp[keep]
+
+
+def _per_target_r2_average(yt_2d, yp_2d, obs_2d=None):
+    r2s = []
+    for col in range(yt_2d.shape[1]):
+        yt, yp = _scored_elements(yt_2d, yp_2d, obs_2d, col)
+        if len(yt):
+            r2s.append(_r2(yt, yp))
+    return float(np.mean(r2s)) if r2s else np.nan
+
+
+def compute_r2_summary(y_true, y_pred, observed_mask=None) -> dict:
+    """Pooled and per-target-average metrics for one (y_true, y_pred) pair.
+
+    This is the "Overall" row of save_metrics(); callers that need a quick
+    split-level diagnostic (e.g. train/val/test R2 breakdowns) use it directly.
+    """
+    yt_2d, yp_2d, obs_2d = _as_2d(y_true, y_pred, observed_mask)
+    yt_flat, yp_flat = _scored_elements(yt_2d, yp_2d, obs_2d)
+
+    if len(yt_flat) == 0:
+        return {
+            "R2 (per-target avg)": np.nan, "R2 (pooled)": np.nan,
+            "RMSE": np.nan, "MAE": np.nan, "MSE": np.nan, "Pearson": np.nan,
+            "Sample Size": 0,
+        }
+    mse = float(mean_squared_error(yt_flat, yp_flat))
+    return {
+        "R2 (per-target avg)": _per_target_r2_average(yt_2d, yp_2d, obs_2d),
+        "R2 (pooled)": _r2(yt_flat, yp_flat),
+        "RMSE": float(np.sqrt(mse)),
+        "MAE": float(np.mean(np.abs(yt_flat - yp_flat))),
+        "MSE": mse,
+        "Pearson": _pearson(yt_flat, yp_flat),
+        "Sample Size": int(len(yt_flat)),
+    }
+
+
+def per_target_r2_table(y_true, y_pred, targets, observed_mask=None) -> pd.DataFrame:
+    """Per-output-variable R2/RMSE table (rows = targets), for ablation-style reporting."""
+    yt_2d, yp_2d, obs_2d = _as_2d(y_true, y_pred, observed_mask)
+
+    rows = []
+    for col, target in enumerate(targets):
+        yt, yp = _scored_elements(yt_2d, yp_2d, obs_2d, col)
+        if len(yt) == 0:
+            rows.append({"Output Variable": target, "R2": np.nan, "RMSE": np.nan, "Sample Size": 0})
+            continue
+        rows.append({
+            "Output Variable": target,
+            "R2": _r2(yt, yp),
+            "RMSE": float(np.sqrt(mean_squared_error(yt, yp))),
+            "Sample Size": int(len(yt)),
+        })
+    return pd.DataFrame(rows)
+
+
+def _metrics_line(headline) -> str:
+    """The metric values as one log line, defined once so that the per-scale
+    and overall lines cannot drift apart.
+
+    Absolute targets run to 1e16, where %.4f prints seventeen digits of noise,
+    while the scaled losses elsewhere are ~0.05; format_number picks the
+    notation that stays readable across both.
+    """
+    return " ".join(
+        f"{label}={format_number(headline[key])}"
+        for label, key in (
+            ("MSE", "Mean Squared Error"),
+            ("RMSE", "RMSE"),
+            ("MAE", "MAE"),
+            ("R2_avg", "R2 Score (per-target avg)"),
+            ("R2_pooled", "R2 Score (pooled)"),
+            ("Pearson", "Pearson Correlation"),
+        )
+    )
+
+
+def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None,
+                 metrics_filename="performance.csv"):
     """Save performance metrics to a CSV file under the specified run directory.
 
     When *observed_mask* is provided (KEEP_PARTIAL_TARGETS=True), metrics are
     computed on observed elements only.  Otherwise all elements are used.
 
-    If test_data is provided, also compute metrics by region type.
+    *test_data* is the frame whose rows correspond one-for-one, in order, with
+    the rows of *y_true*: for the sequence models that is the forecast horizon
+    frame rather than the full test split.  Given it, metrics are additionally
+    broken down by region scale, which is the comparison the models are read
+    against each other on.
+
+    *metrics_filename* lets callers write split-specific metrics (e.g.
+    "performance_train.csv") without overwriting the canonical test-set
+    "performance.csv".
     """
+    if test_data is not None and len(test_data) != len(y_true):
+        raise ValueError(
+            f"save_metrics got {len(test_data)} frame rows for {len(y_true)} scored rows; "
+            "pass the frame the predictions were made on, row for row."
+        )
 
     def compute_metrics(y_true_subset, y_pred_subset, subset_name="Overall", obs=None):
-        results = []
-
-        def _r2(yt, yp):
-            ss_res = float(np.sum((yt - yp) ** 2))
-            ss_tot = float(np.sum((yt - np.mean(yt)) ** 2))
-            return 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
-
-        def _metrics(yt, yp, per_target_r2):
-            mse = mean_squared_error(yt, yp)
-            mae = float(np.mean(np.abs(yt - yp)))
-            rmse = float(np.sqrt(mse))
-            r2_pooled = _r2(yt, yp)
-            try:
-                yt_f, yp_f = yt.flatten(), yp.flatten()
-                pearson_corr = float(np.corrcoef(yt_f, yp_f)[0, 1]) if len(yt_f) > 1 else np.nan
-            except Exception:
-                pearson_corr = np.nan
-            return {
-                "Run ID": run_id,
-                "Region Type": subset_name,
-                "Mean Squared Error": mse,
-                "Pearson Correlation": pearson_corr,
-                "R2 Score (per-target avg)": per_target_r2,
-                "R2 Score (pooled)": r2_pooled,
-                "MAE": mae,
-                "RMSE": rmse,
-                "Sample Size": len(yt),
-            }
-
-        yt_2d = np.asarray(y_true_subset)
-        yp_2d = np.asarray(y_pred_subset)
-        if yt_2d.ndim == 1:
-            yt_2d = yt_2d.reshape(-1, 1)
-            yp_2d = yp_2d.reshape(-1, 1)
-        obs_2d = np.asarray(obs) if obs is not None else None
-
-        # Compute per-target R²
-        target_r2s = []
-        for col in range(yt_2d.shape[1]):
-            yt_col = yt_2d[:, col]
-            yp_col = yp_2d[:, col]
-            if obs_2d is not None:
-                col_mask = obs_2d[:, col].astype(bool)
-                yt_col = yt_col[col_mask]
-                yp_col = yp_col[col_mask]
-            valid = np.isfinite(yt_col) & np.isfinite(yp_col)
-            if valid.any():
-                target_r2s.append(_r2(yt_col[valid], yp_col[valid]))
-        per_target_r2 = float(np.mean(target_r2s)) if target_r2s else np.nan
-
-        # Flatten for pooled metrics
-        yt_flat = yt_2d.flatten()
-        yp_flat = yp_2d.flatten()
-
-        if obs_2d is not None:
-            mask = obs_2d.astype(bool).flatten()
-            yt_flat = yt_flat[mask]
-            yp_flat = yp_flat[mask]
-
-        valid = np.isfinite(yt_flat) & np.isfinite(yp_flat)
-        if valid.any():
-            results.append(_metrics(yt_flat[valid], yp_flat[valid], per_target_r2))
-
-        return results
+        summary = compute_r2_summary(y_true_subset, y_pred_subset, observed_mask=obs)
+        if summary["Sample Size"] == 0:
+            return []
+        return [{
+            "Run ID": run_id,
+            "Region Type": subset_name,
+            "Mean Squared Error": summary["MSE"],
+            "Pearson Correlation": summary["Pearson"],
+            "R2 Score (per-target avg)": summary["R2 (per-target avg)"],
+            "R2 Score (pooled)": summary["R2 (pooled)"],
+            "MAE": summary["MAE"],
+            "RMSE": summary["RMSE"],
+            "Sample Size": summary["Sample Size"],
+        }]
 
     # Compute overall metrics
     all_metrics = compute_metrics(y_true, y_pred, "Overall", obs=observed_mask)
 
-    # If test_data is provided, compute metrics by region type
-    if test_data is not None and 'Region' in test_data.columns:
-        regions = test_data['Region'].unique()
-        R10 = [region for region in regions if region.startswith('R10')]
-        R6 = [region for region in regions if region.startswith('R6')]
-        R5 = [region for region in regions if region.startswith('R5')]
-        World = [region for region in regions if region.startswith('World')]
-        ISO = [region for region in regions if not (region.startswith('R10') or region.startswith('R6') or region.startswith('R5') or region.startswith('World'))]
-
-        region_groups = {
-            'R10': R10,
-            'R6': R6,
-            'R5': R5,
-            'World': World,
-            'ISO': ISO
-        }
-
-        for region_type, region_list in region_groups.items():
-            if len(region_list) > 0:
-                region_mask = test_data['Region'].isin(region_list)
-                region_positions = np.where(region_mask.values)[0]
-
+    # If test_data is provided, compute metrics by region scale
+    scales = scale_of_frame(test_data) if test_data is not None else None
+    if scales is not None:
+        for region_type in SCALE_ORDER_COARSEST_FIRST:
+            region_positions = np.where((scales == region_type).to_numpy())[0]
+            if len(region_positions) > 0:
                 y_true_region = y_true[region_positions]
                 y_pred_region = y_pred[region_positions]
                 obs_region = observed_mask[region_positions] if observed_mask is not None else None
@@ -385,38 +436,25 @@ def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None):
                     region_results = compute_metrics(y_true_region, y_pred_region, region_type, obs=obs_region)
                     all_metrics.extend(region_results)
 
-                    try:
+                    if region_results:
                         headline = region_results[0]
                         logging.info(
-                            "Run %s %s regions (%d samples) -> MSE=%.4f RMSE=%.4f MAE=%.4f R2_avg=%.4f R2_pooled=%.4f Pearson=%.4f",
+                            "Run %s %s regions (%d samples) -> %s",
                             run_id, region_type, int(headline["Sample Size"]),
-                            float(headline["Mean Squared Error"]),
-                            float(headline["RMSE"]),
-                            float(headline["MAE"]),
-                            float(headline["R2 Score (per-target avg)"]),
-                            float(headline["R2 Score (pooled)"]),
-                            float(headline["Pearson Correlation"]) if not np.isnan(headline["Pearson Correlation"]) else float('nan'),
+                            _metrics_line(headline),
                         )
-                    except Exception:
-                        pass
 
     metrics = pd.DataFrame(all_metrics)
 
     metrics_dir = os.path.join(get_run_root(run_id), "metrics")
     os.makedirs(metrics_dir, exist_ok=True)
-    metrics_file = os.path.join(metrics_dir, "performance.csv")
+    metrics_file = os.path.join(metrics_dir, metrics_filename)
     metrics.to_csv(metrics_file, index=False)
     logging.info("Metrics saved to %s.", metrics_file)
 
-    try:
+    if all_metrics:
         headline = all_metrics[0]
         logging.info(
-            "Run %s overall metrics -> MSE=%.4f RMSE=%.4f MAE=%.4f R2_avg=%.4f R2_pooled=%.4f Pearson=%.4f",
-            run_id,
-            float(headline["Mean Squared Error"]), float(headline["RMSE"]),
-            float(headline["MAE"]), float(headline["R2 Score (per-target avg)"]),
-            float(headline["R2 Score (pooled)"]),
-            float(headline["Pearson Correlation"]) if not np.isnan(headline["Pearson Correlation"]) else float('nan')
+            "Run %s overall metrics (%d samples) -> %s",
+            run_id, int(headline["Sample Size"]), _metrics_line(headline),
         )
-    except Exception:
-        pass

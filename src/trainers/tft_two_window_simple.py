@@ -12,6 +12,11 @@ Temporal Fusion Transformer (TFT):
 - The two sets of predictions are combined with a time-dependent linear
     weighting over any overlap, fading from early → late.
 
+Each window is sliced to exactly ``encoder_length + prediction_length`` steps
+and predicted with ``predict=True``, so every trajectory yields one sample whose
+decoder covers the window's last ``prediction_length`` steps.  ``Prediction.index``
+reports the first decoder step, and horizon step ``h`` belongs to ``base + h``.
+
 Training is unchanged; this only affects how predictions are generated and
 combined at test time.
 
@@ -21,27 +26,21 @@ Both windows require ``encoder_length + prediction_length`` steps (e.g. 3 + 12
 = 15).  Trajectories shorter than this are excluded from *both* windows and
 therefore receive no predictions.
 
-By contrast, the standard single-window method (``predict_tft`` in
-``tft_trainer.py``) uses pytorch_forecasting's ``predict=True`` mode, which
-only needs ``min_encoder_length`` steps (e.g. 3).  For a short trajectory of
-*N* steps the standard method uses the first 3 steps as encoder context and
-outputs ``prediction_length`` (12) decoder steps; after merging back with
-test data, only the *N − encoder_length* steps that have ground truth are kept.
-
-To get full coverage, the caller can run the standard method as a fallback for
-trajectories that the two-window approach cannot cover.
+The single-window method (``predict_tft`` in ``tft_trainer.py``) cannot fill
+that gap: ``predict=True`` raises ``min_prediction_length`` to
+``max_prediction_length``, so it too needs ``min_encoder_length +
+prediction_length`` steps per trajectory -- the same 15 here.
 """
 
 import logging
-import os
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 import numpy as np
 import pandas as pd
 
 from configs.models.tft import TFTTrainerConfig
 from .tft_dataset import from_train_template, load_dataset_template
-from .tft_model import load_tft_checkpoint, create_inference_trainer
+from .tft_model import load_tft_checkpoint
 from .tft_utils import single_gpu_env, teardown_distributed, get_default_num_workers
 
 
@@ -114,19 +113,19 @@ def _normalize_index_df(index_df: pd.DataFrame, template_time_idx: Optional[str]
     return index_df
 
 
-def _expand_multistep_index(
+def _expand_horizon_index(
     idx_df: pd.DataFrame,
     preds_tensor,
-    window_data: pd.DataFrame,
-    template_group_ids,
     template_time_idx: str,
-    mode: str,
     torch_module,
 ) -> tuple[pd.DataFrame, np.ndarray]:
-    """Expand (batch, horizon, targets) predictions to per-step index rows.
+    """Expand (batch, horizon, targets) predictions to one row per decoder step.
 
-    mode="early"  -> use the first pred_len steps from each trajectory.
-    mode="late"   -> use the last  pred_len steps from each trajectory.
+    ``Prediction.index`` holds one row per sample, whose time index is the
+    *first decoder step*; decoder steps are consecutive, so horizon step ``h``
+    of sample ``i`` belongs to ``base_time + h``.  Labelling the horizon with
+    the window's own first steps instead would shift every early-window
+    prediction back by the encoder length.
     """
     if not (torch_module.is_tensor(preds_tensor) and preds_tensor.ndim == 3):
         # Nothing to expand; return original index and flattened predictions.
@@ -137,37 +136,37 @@ def _expand_multistep_index(
         # Shape mismatch or single-step horizon; fall back to simple flatten.
         return idx_df.reset_index(drop=True), _flatten_predictions_tensor(preds_tensor, torch_module)
 
-    grouped = window_data.groupby(list(template_group_ids))
+    if template_time_idx not in idx_df.columns:
+        raise KeyError(
+            f"Time index column '{template_time_idx}' not found in prediction index "
+            f"columns: {list(idx_df.columns)}"
+        )
 
-    expanded_rows: list[pd.Series] = []
-    for i in range(n_samples):
-        base_row = idx_df.iloc[i]
-        trajectory_key = tuple(base_row[col] for col in template_group_ids)
-        try:
-            traj_data = grouped.get_group(trajectory_key).sort_values(template_time_idx)
-            unique_steps = sorted(traj_data[template_time_idx].unique())
-            if len(unique_steps) >= pred_len:
-                if mode == "early":
-                    steps_for_window = unique_steps[:pred_len]
-                else:  # "late"
-                    steps_for_window = unique_steps[-pred_len:]
-            else:
-                # Not enough steps; fall back to synthetic increments
-                base_time = base_row[template_time_idx]
-                steps_for_window = [base_time + h for h in range(pred_len)]
-        except KeyError:
-            # Trajectory not found, use fallback increment
-            base_time = base_row[template_time_idx]
-            steps_for_window = [base_time + h for h in range(pred_len)]
+    expanded = idx_df.loc[idx_df.index.repeat(pred_len)].reset_index(drop=True)
+    offsets = np.tile(np.arange(pred_len), n_samples)
+    expanded[template_time_idx] = expanded[template_time_idx].to_numpy() + offsets
 
-        for step_val in steps_for_window:
-            new_row = base_row.copy()
-            new_row[template_time_idx] = step_val
-            expanded_rows.append(new_row)
-
-    expanded_idx_df = pd.DataFrame(expanded_rows).reset_index(drop=True)
     preds_flat = preds_tensor.detach().cpu().numpy().reshape(n_samples * pred_len, out_size)
-    return expanded_idx_df, preds_flat
+    return expanded, preds_flat
+
+
+def _unpack_prediction_output(returns, torch_module):
+    """Pull a single (batch, horizon, targets) tensor out of a Prediction."""
+    from pytorch_forecasting.models.base._base_model import Prediction as _PFPrediction  # type: ignore
+
+    if not isinstance(returns, _PFPrediction):
+        raise RuntimeError(f"Expected Prediction object, got {type(returns)}")
+
+    outputs = returns.output
+    if isinstance(outputs, list):
+        if len(outputs) == 0:
+            raise RuntimeError("Prediction.output list is empty.")
+        if not all(torch_module.is_tensor(o) for o in outputs):
+            raise RuntimeError("All elements in Prediction.output list must be tensors.")
+        return outputs[0] if len(outputs) == 1 else torch_module.stack(outputs, dim=-1)
+    if torch_module.is_tensor(outputs):
+        return outputs
+    raise RuntimeError(f"Unsupported Prediction.output type: {type(outputs)}")
 
 
 def _create_early_window_test_data(test_data: pd.DataFrame, window_length: int, time_idx_col: str) -> pd.DataFrame:
@@ -184,130 +183,6 @@ def _create_early_window_test_data(test_data: pd.DataFrame, window_length: int, 
     result = pd.concat(filtered_groups, ignore_index=True) if filtered_groups else pd.DataFrame()
     logging.info(f"Early window test data: {len(result)} rows from {len(filtered_groups)} trajectories")
     return result
-
-
-def _predict_early_window(session_state: dict, run_id: str) -> WindowPrediction:
-    """Generate predictions for early window using existing trained model."""
-    logging.info("Generating early window predictions using existing model...")
-
-    # Use existing trained model to predict on early window data
-    with single_gpu_env():
-        import torch
-        if torch.distributed.is_available() and torch.distributed.is_initialized():
-            teardown_distributed()
-
-        model = load_tft_checkpoint(run_id)
-
-        # Load dataset template
-        train_template = load_dataset_template(run_id)
-
-        # Determine time index and warm-start offset
-        raw_time_idx = getattr(train_template, "time_idx", None)
-        time_idx_col = raw_time_idx or session_state.get("tft_time_idx_column", "Step")
-        target_offset = int(session_state.get("tft_target_offset", 0) or 0)
-
-        # Get window lengths from template
-        cfg = WindowConfig(
-            encoder_length=getattr(train_template, 'max_encoder_length', 2),
-            prediction_length=getattr(train_template, 'max_prediction_length', 13),
-        )
-        early_window_length = cfg.total_length
-
-        # Create early window test data (keep early steps for encoder context)
-        test_data = session_state["test_data"]
-        early_test_data = _create_early_window_test_data(test_data, early_window_length, time_idx_col)
-
-        if len(early_test_data) == 0:
-            logging.warning("No early window test data available")
-            return WindowPrediction(preds=np.array([]), horizon=pd.DataFrame(), name="early")
-
-        # Create test dataset for early window
-        try:
-            test_dataset = from_train_template(train_template, early_test_data, mode="eval")
-        except Exception as e:
-            raise RuntimeError(f"Failed to build early window test dataset: {e}")
-
-        # Generate predictions
-        trainer_cfg = TFTTrainerConfig()
-        test_loader = test_dataset.to_dataloader(
-            train=False,
-            batch_size=trainer_cfg.batch_size,
-            num_workers=get_default_num_workers(),
-            persistent_workers=False
-        )
-
-        trainer = create_inference_trainer()
-        returns = model.predict(test_loader, return_index=True)
-
-        from pytorch_forecasting.models.base._base_model import Prediction as _PFPrediction  # type: ignore
-
-        if not isinstance(returns, _PFPrediction):
-            raise RuntimeError(f"Expected Prediction object, got {type(returns)}")
-
-        outputs = returns.output
-        if isinstance(outputs, list):
-            if len(outputs) == 0:
-                raise RuntimeError("Prediction.output list is empty.")
-            if not all(torch.is_tensor(o) for o in outputs):
-                raise RuntimeError("All elements in Prediction.output list must be tensors.")
-            preds_tensor = outputs[0] if len(outputs) == 1 else torch.stack(outputs, dim=-1)
-        elif torch.is_tensor(outputs):
-            preds_tensor = outputs
-        else:
-            raise RuntimeError(f"Unsupported Prediction.output type: {type(outputs)}")
-
-        preds_flat = _flatten_predictions_tensor(preds_tensor, torch)
-
-        # Build horizon dataframe for early window
-        targets = session_state["targets"]
-        template_time_idx = getattr(train_template, "time_idx", None)
-        template_group_ids = getattr(train_template, "group_ids", None)
-        if template_time_idx is None or template_group_ids is None:
-            raise ValueError("Dataset template is missing time_idx or group_ids; cannot align early window predictions")
-
-        index_attr = returns.index
-        index_df = _collect_index_dataframe(index_attr)
-        idx_df = _normalize_index_df(index_df, template_time_idx)
-
-        # Handle multi-step predictions for early window
-        idx_df, preds_flat = _expand_multistep_index(
-            idx_df,
-            preds_tensor,
-            early_test_data,
-            template_group_ids,
-            template_time_idx,
-            mode="early",
-            torch_module=torch,
-        )
-
-        # Build horizon dataframe
-        from configs.data import POPULATION_COLUMN
-        key_cols = list(template_group_ids) + [template_time_idx]
-        ref_cols = [c for c in key_cols + ['Year'] + targets + [POPULATION_COLUMN] if c in early_test_data.columns]
-        horizon_df = idx_df[key_cols].merge(
-            early_test_data.drop_duplicates(subset=key_cols)[ref_cols],
-            on=key_cols,
-            how='left'
-        )
-
-        if target_offset > 0 and template_time_idx in horizon_df.columns:
-            horizon_mask = horizon_df[template_time_idx] >= target_offset
-            dropped = int((~horizon_mask).sum())
-            if dropped > 0:
-                logging.info(
-                    "Warm start offset %d: early-window horizon filter removed %d rows",
-                    target_offset,
-                    dropped,
-                )
-                horizon_df = horizon_df.loc[horizon_mask].reset_index(drop=True)
-                preds_flat = preds_flat[horizon_mask.to_numpy()]
-
-        # Convert per-capita predictions back to absolute units.
-        from src.data.preprocess import denormalize_by_population
-        preds_flat = denormalize_by_population(preds_flat, horizon_df[POPULATION_COLUMN].values)
-
-        logging.info(f"Early window predictions: {preds_flat.shape}, horizon_df: {horizon_df.shape}")
-        return WindowPrediction(preds=preds_flat, horizon=horizon_df, name="early")
 
 
 def _create_late_window_test_data(test_data: pd.DataFrame, window_length: int, time_idx_col: str) -> pd.DataFrame:
@@ -334,52 +209,57 @@ def _create_late_window_test_data(test_data: pd.DataFrame, window_length: int, t
     return result
 
 
-def _predict_late_window(session_state: dict, run_id: str) -> WindowPrediction:
-    """Generate predictions for late window positioned to end at trajectory ends."""
-    logging.info("Generating late window predictions using existing model...")
+def _predict_window(
+    session_state: dict,
+    run_id: str,
+    name: str,
+    slice_window: Callable[[pd.DataFrame, int, str], pd.DataFrame],
+) -> WindowPrediction:
+    """Predict one window (early or late) with the already-trained model.
 
-    # Create late window test data
-    test_data = session_state["test_data"]
+    Both windows are sliced to exactly ``encoder_length + prediction_length``
+    steps, so ``predict=True`` yields one sample per trajectory whose decoder
+    covers the window's last ``prediction_length`` steps.
+    """
+    logging.info("Generating %s window predictions using existing model...", name)
 
-    # Get actual prediction length from template
-    train_template = load_dataset_template(run_id)
-    raw_time_idx = getattr(train_template, "time_idx", None)
-    time_idx_col = raw_time_idx or session_state.get("tft_time_idx_column", "Step")
-    target_offset = int(session_state.get("tft_target_offset", 0) or 0)
-    cfg = WindowConfig(
-        encoder_length=getattr(train_template, 'max_encoder_length', 2),
-        prediction_length=getattr(train_template, 'max_prediction_length', 13),
-    )
-    # Need full encoder+decoder span so model sees proper history while window still ends at last step
-    window_length = cfg.total_length
-
-    late_test_data = _create_late_window_test_data(test_data, window_length, time_idx_col)
-
-    if len(late_test_data) == 0:
-        logging.warning("No late window test data available")
-        return WindowPrediction(preds=np.array([]), horizon=pd.DataFrame(), name="late")
-
-    # Use existing trained model to predict on late window data
     with single_gpu_env():
         import torch
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             teardown_distributed()
 
         model = load_tft_checkpoint(run_id)
+        train_template = load_dataset_template(run_id)
 
-        # Create test dataset for late window with custom handling for better coverage
+        template_time_idx = getattr(train_template, "time_idx", None)
+        template_group_ids = getattr(train_template, "group_ids", None)
+        if not template_time_idx or not template_group_ids:
+            raise ValueError(
+                f"Dataset template is missing time_idx or group_ids; "
+                f"cannot align {name} window predictions"
+            )
+        target_offset = int(session_state.get("tft_target_offset", 0) or 0)
+
+        cfg = WindowConfig(
+            encoder_length=train_template.max_encoder_length,
+            prediction_length=train_template.max_prediction_length,
+        )
+
+        window_data = slice_window(session_state["test_data"], cfg.total_length, template_time_idx)
+        if len(window_data) == 0:
+            logging.warning("No %s window test data available", name)
+            return WindowPrediction(preds=np.array([]), horizon=pd.DataFrame(), name=name)
+
+        # predict=True is what makes the horizon alignable: it emits exactly one
+        # sample per trajectory.  Eval mode would enumerate every (start,
+        # decoder length) pair instead — 23 overlapping samples per trajectory
+        # for a 3+12 window, most of them padded — with no way to tell which
+        # prediction belongs to which step.
         try:
-            # First try with predict=True for proper prediction format
-            test_dataset = from_train_template(train_template, late_test_data, mode="predict")
-        except Exception as e1:
-            # If that fails due to length constraints, try with eval mode
-            try:
-                logging.warning(f"Late window predict mode failed ({e1}), trying eval mode")
-                test_dataset = from_train_template(train_template, late_test_data, mode="eval")
-            except Exception as e2:
-                raise RuntimeError(f"Failed to build late window test dataset with both predict ({e1}) and eval ({e2}) modes")
+            test_dataset = from_train_template(train_template, window_data, mode="predict")
+        except Exception as e:
+            raise RuntimeError(f"Failed to build {name} window test dataset: {e}") from e
 
-        # Generate predictions
         trainer_cfg = TFTTrainerConfig()
         test_loader = test_dataset.to_dataloader(
             train=False,
@@ -388,56 +268,26 @@ def _predict_late_window(session_state: dict, run_id: str) -> WindowPrediction:
             persistent_workers=False
         )
 
-        trainer = create_inference_trainer()
         returns = model.predict(test_loader, return_index=True)
+        preds_tensor = _unpack_prediction_output(returns, torch)
 
-        from pytorch_forecasting.models.base._base_model import Prediction as _PFPrediction  # type: ignore
-
-        if not isinstance(returns, _PFPrediction):
-            raise RuntimeError(f"Expected Prediction object, got {type(returns)}")
-
-        outputs = returns.output
-        if isinstance(outputs, list):
-            if len(outputs) == 0:
-                raise RuntimeError("Prediction.output list is empty.")
-            if not all(torch.is_tensor(o) for o in outputs):
-                raise RuntimeError("All elements in Prediction.output list must be tensors.")
-            preds_tensor = outputs[0] if len(outputs) == 1 else torch.stack(outputs, dim=-1)
-        elif torch.is_tensor(outputs):
-            preds_tensor = outputs
-        else:
-            raise RuntimeError(f"Unsupported Prediction.output type: {type(outputs)}")
-
-        preds_flat = _flatten_predictions_tensor(preds_tensor, torch)
-
-        # Build horizon dataframe for late window
-        targets = session_state["targets"]
-        template_time_idx = getattr(train_template, "time_idx", None)
-        template_group_ids = getattr(train_template, "group_ids", None)
-        if template_time_idx is None or template_group_ids is None:
-            raise ValueError("Dataset template is missing time_idx or group_ids; cannot align late window predictions")
-
-        index_attr = returns.index
-        index_df = _collect_index_dataframe(index_attr)
+        index_df = _collect_index_dataframe(returns.index)
         idx_df = _normalize_index_df(index_df, template_time_idx)
+        idx_df, preds_flat = _expand_horizon_index(idx_df, preds_tensor, template_time_idx, torch)
 
-        # Handle multi-step predictions for late window
-        idx_df, preds_flat = _expand_multistep_index(
-            idx_df,
-            preds_tensor,
-            late_test_data,
-            template_group_ids,
-            template_time_idx,
-            mode="late",
-            torch_module=torch,
-        )
-
-        # Build horizon dataframe
+        # Build horizon dataframe.  The __observed masks come along so the
+        # metrics can skip zero-filled and interpolated targets, as the LSTM
+        # and XGBoost paths do.
         from configs.data import POPULATION_COLUMN
+        from src.data.preprocess import observed_mask_columns
+        targets = session_state["targets"]
         key_cols = list(template_group_ids) + [template_time_idx]
-        ref_cols = [c for c in key_cols + ['Year'] + targets + [POPULATION_COLUMN] if c in late_test_data.columns]
+        ref_cols = [
+            c for c in key_cols + ['Year'] + targets + observed_mask_columns(targets) + [POPULATION_COLUMN]
+            if c in window_data.columns
+        ]
         horizon_df = idx_df[key_cols].merge(
-            late_test_data.drop_duplicates(subset=key_cols)[ref_cols],
+            window_data.drop_duplicates(subset=key_cols)[ref_cols],
             on=key_cols,
             how='left'
         )
@@ -447,8 +297,9 @@ def _predict_late_window(session_state: dict, run_id: str) -> WindowPrediction:
             dropped = int((~horizon_mask).sum())
             if dropped > 0:
                 logging.info(
-                    "Warm start offset %d: late-window horizon filter removed %d rows",
+                    "Warm start offset %d: %s-window horizon filter removed %d rows",
                     target_offset,
+                    name,
                     dropped,
                 )
                 horizon_df = horizon_df.loc[horizon_mask].reset_index(drop=True)
@@ -458,8 +309,18 @@ def _predict_late_window(session_state: dict, run_id: str) -> WindowPrediction:
         from src.data.preprocess import denormalize_by_population
         preds_flat = denormalize_by_population(preds_flat, horizon_df[POPULATION_COLUMN].values)
 
-        logging.info(f"Late window predictions: {preds_flat.shape}, horizon_df: {horizon_df.shape}")
-        return WindowPrediction(preds=preds_flat, horizon=horizon_df, name="late")
+        logging.info(f"{name.capitalize()} window predictions: {preds_flat.shape}, horizon_df: {horizon_df.shape}")
+        return WindowPrediction(preds=preds_flat, horizon=horizon_df, name=name)
+
+
+def _predict_early_window(session_state: dict, run_id: str) -> WindowPrediction:
+    """Predictions for the first encoder+decoder span of each trajectory."""
+    return _predict_window(session_state, run_id, "early", _create_early_window_test_data)
+
+
+def _predict_late_window(session_state: dict, run_id: str) -> WindowPrediction:
+    """Predictions for the span ending at each trajectory's last step."""
+    return _predict_window(session_state, run_id, "late", _create_late_window_test_data)
 
 
 def _combine_predictions_weighted(
@@ -595,29 +456,29 @@ def _combine_predictions_weighted(
         return late
 
 
-def predict_tft_two_window(session_state: Dict, run_id: str) -> np.ndarray:
-    """Dual-approach TFT prediction.
+def predict_tft_two_window(
+    session_state: Dict,
+    run_id: str,
+    *,
+    skip_metrics: bool = False,
+    metrics_filename: str = "performance.csv",
+) -> np.ndarray:
+    """Two-window TFT prediction: early and late windows, blended over the overlap.
 
-    1. Two-window (early + late with weighted blending) for trajectories with
-       enough steps (>= encoder_length + prediction_length).
-    2. Standard single-window prediction for shorter trajectories that cannot
-       fit a full two-window pass (see module docstring "Coverage note").
+    Trajectories shorter than ``encoder_length + prediction_length`` fit
+    neither window and receive no prediction (module docstring, "Coverage
+    note").
+
+    *skip_metrics* / *metrics_filename* let callers evaluate non-test splits
+    (e.g. train/val, for over/underfitting diagnostics) without overwriting
+    the canonical test-set "performance.csv".
     """
-    from .tft_trainer import predict_tft
-
-    logging.info("Starting two-window prediction (using existing trained model)...")
-
-    # Generate early window predictions
     early_window = _predict_early_window(session_state, run_id)
-
-    # Generate late window predictions (positioned to end at trajectory ends)
-    logging.info("Generating late window predictions...")
     late_window = _predict_late_window(session_state, run_id)
 
     if late_window.horizon is None or len(late_window.horizon) == 0:
         raise ValueError("Late window predictions failed or returned empty results")
 
-    # Combine predictions with weighted averaging
     time_idx_col = session_state.get("tft_time_idx_column", "Step")
     combined_window = _combine_predictions_weighted(
         early_window,
@@ -626,7 +487,6 @@ def predict_tft_two_window(session_state: Dict, run_id: str) -> np.ndarray:
         time_idx_col,
     )
 
-    # Identify trajectories not covered by two-window
     test_data = session_state["test_data"]
     targets = session_state["targets"]
     all_test_trajectories = set(
@@ -635,57 +495,25 @@ def predict_tft_two_window(session_state: Dict, run_id: str) -> np.ndarray:
     combined_trajectories = set(
         map(tuple, combined_window.horizon[TRAJECTORY_COLS].drop_duplicates().itertuples(index=False, name=None))
     )
-    missing_trajectories = all_test_trajectories - combined_trajectories
-
     logging.info(
         "Two-window coverage: %d/%d trajectories",
         len(combined_trajectories),
         len(all_test_trajectories),
     )
+    n_missing = len(all_test_trajectories - combined_trajectories)
+    if n_missing:
+        logging.warning(
+            "%d/%d test trajectories are shorter than the encoder+decoder window "
+            "and receive no TFT prediction.",
+            n_missing, len(all_test_trajectories),
+        )
 
     final_horizon = combined_window.horizon
     final_preds = combined_window.preds
 
-    if len(missing_trajectories) > 0:
-        logging.info(
-            "%d trajectories too short for two-window; using single-window prediction.",
-            len(missing_trajectories),
-        )
-
-        # Run standard single-window prediction on the full test set.
-        # predict_tft writes horizon_df into session_state as a side effect.
-        sw_preds = predict_tft(session_state, run_id, skip_metrics=True)
-        sw_horizon = session_state["horizon_df"]
-
-        # Filter to only the missing trajectories by matching on trajectory keys.
-        sw_traj_tuples = list(zip(
-            sw_horizon["Model"], sw_horizon["Scenario"], sw_horizon["Region"]
-        ))
-        sw_mask = np.array([t in missing_trajectories for t in sw_traj_tuples])
-
-        if sw_mask.any():
-            additional_horizon = sw_horizon.loc[sw_mask].reset_index(drop=True)
-            additional_preds = sw_preds[sw_mask]
-
-            final_horizon = pd.concat(
-                [combined_window.horizon, additional_horizon], ignore_index=True
-            )
-            final_preds = np.vstack([combined_window.preds, additional_preds])
-
-            sw_added = additional_horizon[TRAJECTORY_COLS].drop_duplicates().shape[0]
-            logging.info(
-                "Single-window added %d trajectories (%d rows). Final coverage: %d/%d",
-                sw_added,
-                len(additional_horizon),
-                combined_trajectories.__len__() + sw_added,
-                len(all_test_trajectories),
-            )
-
-    # Update session state. final_preds (and early_window.preds/late_window.preds)
-    # are already absolute (denormalized in _predict_early_window/_predict_late_window
-    # and in predict_tft's single-window fallback); ground truth here is read
-    # fresh from final_horizon and must be denormalized to match.
-    from src.data.preprocess import denormalize_by_population
+    # The window predictions are already absolute (denormalized in
+    # _predict_window); the ground truth read from final_horizon has to match.
+    from src.data.preprocess import denormalize_by_population, observed_mask_from_frame
     from configs.data import POPULATION_COLUMN
     session_state['horizon_df'] = final_horizon
     y_true_combined = denormalize_by_population(
@@ -695,17 +523,13 @@ def predict_tft_two_window(session_state: Dict, run_id: str) -> np.ndarray:
     session_state['early_predictions'] = early_window.preds
     session_state['late_predictions'] = late_window.preds
 
-    # Compute metrics on the full combined predictions (two-window + single-window
-    # fallback).  The predict_tft call above only evaluated the single-window
-    # subset, so those metrics are incomplete.
-    from src.trainers.evaluation import save_metrics
-    from src.data.preprocess import observed_mask_columns
-    obs_cols = observed_mask_columns(targets)
-    if all(c in final_horizon.columns for c in obs_cols):
-        obs_mask = final_horizon[obs_cols].values
-    else:
-        obs_mask = None
-    save_metrics(run_id, y_true_combined, final_preds, observed_mask=obs_mask)
+    if not skip_metrics:
+        from src.trainers.evaluation import save_metrics
+        save_metrics(
+            run_id, y_true_combined, final_preds, final_horizon,
+            observed_mask=observed_mask_from_frame(final_horizon, targets),
+            metrics_filename=metrics_filename,
+        )
 
     logging.info("Two-window prediction completed successfully!")
     return final_preds

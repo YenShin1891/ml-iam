@@ -6,72 +6,74 @@ All heavy imports are lazy to avoid pulling in unnecessary dependencies.
 
 import logging
 
+from src.utils.utils import is_primary_rank
+
+
+# Trainer-produced metadata persisted for the test and plot phases.
+_LSTM_TRAIN_META_KEYS = (
+    "lstm_features", "lstm_raw_features", "lstm_non_numeric_features",
+    "lstm_categorical_features", "lstm_num_model_families", "lstm_num_regions",
+    "lstm_sequence_length", "lstm_target_offset",
+)
+
 
 def _default_best_params_from_config() -> dict:
-    from configs.models.lstm import LSTMTrainerConfig
+    """Hyperparameters to train with when the search phase is skipped."""
+    from src.trainers.lstm_trainer import default_lstm_params
 
-    default_config = LSTMTrainerConfig()
-    return {
-        "hidden_size": default_config.hidden_size,
-        "num_layers": default_config.num_layers,
-        "dropout": default_config.dropout,
-        "bidirectional": default_config.bidirectional,
-        "dense_hidden_size": default_config.dense_hidden_size,
-        "dense_dropout": default_config.dense_dropout,
-        "learning_rate": default_config.learning_rate,
-        "batch_size": default_config.batch_size,
-        "weight_decay": default_config.weight_decay,
-        "sequence_length": default_config.sequence_length,
-        "target_offset": default_config.target_offset,
-        "embedding_dim": default_config.embedding_dim,
-    }
+    return default_lstm_params()
 
 
-def derive_splits(data):
+def derive_splits(data, store=None):
     """From cached processed_data, derive all LSTM splits. Takes seconds.
 
     Returns the ephemeral dict that phase functions and trainers expect.
+    *store* supplies the run's category vocabularies so codes stay identical
+    across phases and models.
     """
-    import pandas as pd
     from src.data.preprocess import (
-        set_region_categories,
+        build_categorical_vocabularies,
         add_missingness_indicators,
+        encode_categorical_columns,
         impute_with_train_medians,
         prepare_features_and_targets_sequence,
         split_data,
     )
-    from configs.data import CATEGORICAL_COLUMNS, REGION_CATEGORIES
+    from configs.data import CATEGORICAL_COLUMNS
 
-    # Ensure REGION_CATEGORIES is populated (empty when loading from cache)
-    if not REGION_CATEGORIES and 'Region' in data.columns:
-        set_region_categories(data['Region'])
+    categories = (
+        store.categories_for(data) if store is not None
+        else build_categorical_vocabularies(data)
+    )
+    split_assignment = store.splits_for(data) if store is not None else None
 
     prepared, features, targets = prepare_features_and_targets_sequence(data)
     prepared, features = add_missingness_indicators(prepared, features)
 
-    # Encode categoricals as integer codes
-    num_model_families = None
-    num_regions = None
-    model_family_categories = None
-    for col in CATEGORICAL_COLUMNS:
-        if col not in prepared.columns:
-            continue
-        if col == "Region":
-            cat = pd.Categorical(prepared[col].astype(str), categories=REGION_CATEGORIES, ordered=True)
-            prepared[col] = cat.codes.astype("int64")
-            num_regions = len(REGION_CATEGORIES)
-        else:
-            cat = prepared[col].astype("category")
-            prepared[col] = cat.cat.codes.astype("int64")
-            if col == "Model_Family":
-                num_model_families = len(cat.cat.categories)
-                model_family_categories = list(cat.cat.categories)
+    num_regions = len(categories.get("Region", [])) or None
+    model_family_categories = categories.get("Model_Family")
+    num_model_families = len(model_family_categories) if model_family_categories else None
 
     # Separate categorical features from continuous features
     categorical_features = [c for c in CATEGORICAL_COLUMNS if c in features]
     continuous_features = [f for f in features if f not in categorical_features]
 
-    train_data, val_data, test_data = split_data(prepared)
+    # Split while the identity columns still hold region labels: the run's
+    # assignment is keyed by them, and the codes assigned below would match
+    # none of them.  XGB splits before encoding for the same reason.
+    train_data, val_data, test_data = split_data(prepared, assignment=split_assignment)
+
+    # Encode categoricals as integer codes against the run's vocabulary, one
+    # vocabulary for all three splits so a label keeps the same code in each;
+    # the embedding sizes must cover every code, not just the ones present here.
+    train_data, val_data, test_data = (
+        encode_categorical_columns(frame, CATEGORICAL_COLUMNS, categories)
+        for frame in (train_data, val_data, test_data)
+    )
+    train_data, val_data, test_data = (
+        frame.astype({col: "int64" for col in CATEGORICAL_COLUMNS if col in frame.columns})
+        for frame in (train_data, val_data, test_data)
+    )
     # Only impute continuous features (categoricals are already int codes, no NaN)
     train_data, val_data, test_data = impute_with_train_medians(
         train_data, val_data, test_data, continuous_features
@@ -84,6 +86,7 @@ def derive_splits(data):
         "num_model_families": num_model_families,
         "num_regions": num_regions,
         "model_family_categories": model_family_categories,
+        "categories": categories,
         "targets": targets,
         "train_data": train_data,
         "val_data": val_data,
@@ -91,20 +94,11 @@ def derive_splits(data):
     }
 
 
-def preprocess_lstm(store, dataset=None):
-    """Run the expensive melt+pivot and cache as parquet."""
-    from src.data.preprocess import load_and_process_data
-
-    data = load_and_process_data(version=dataset)
-    store.save_processed_data(data)
-    return data
-
-
 def search_lstm(store):
     """Run hyperparameter search and save best_params."""
     logging.info("Starting hyperparameter search for LSTM...")
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
 
     from src.trainers.lstm_trainer import hyperparameter_search_lstm
 
@@ -117,19 +111,9 @@ def search_lstm(store):
     )
     store.save_best_params(best_params)
     store.save_features(splits["features"], splits["targets"])
-    logging.info("Hyperparameter search complete. Best params: %s", best_params)
+    # The searcher already logged the winning parameters, and the phase banner
+    # marks the end of the phase; repeating both here said nothing new.
     return best_params
-
-
-def _is_primary_rank():
-    import os
-    rank_vars = [
-        os.getenv("LOCAL_RANK"),
-        os.getenv("PL_TRAINER_GLOBAL_RANK"),
-        os.getenv("GLOBAL_RANK"),
-        os.getenv("RANK"),
-    ]
-    return all(rv in (None, "0") for rv in rank_vars)
 
 
 def train_lstm(store):
@@ -140,11 +124,11 @@ def train_lstm(store):
     """
     from src.trainers.lstm_trainer import train_final_lstm as _train_final
 
-    primary = _is_primary_rank()
+    primary = is_primary_rank()
 
     logging.info("Starting final LSTM training...")
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
 
     best_params = store.load_best_params()
 
@@ -171,31 +155,16 @@ def train_lstm(store):
         if "lstm_scaler_y" in session_state:
             store.save_artifact("lstm_scaler_y.pkl", session_state["lstm_scaler_y"])
 
-        train_meta = {}
-        for key in ("lstm_features", "lstm_raw_features", "lstm_non_numeric_features",
-                    "lstm_categorical_features", "lstm_num_model_families", "lstm_num_regions",
-                    "lstm_sequence_length", "lstm_target_offset"):
-            if key in session_state:
-                train_meta[key] = session_state[key]
+        train_meta = {key: session_state[key] for key in _LSTM_TRAIN_META_KEYS if key in session_state}
         # Save category vocab so inference encodes consistently
         if splits.get("model_family_categories"):
             train_meta["lstm_model_family_categories"] = splits["model_family_categories"]
         if "lstm_config" in session_state:
+            # Every tunable, so a parameter added to the search cannot be
+            # silently dropped here and fall back to its default at predict time.
+            from src.trainers.lstm_trainer import LSTM_TUNABLE_PARAMS
             cfg = session_state["lstm_config"]
-            train_meta["lstm_config"] = {
-                "hidden_size": cfg.hidden_size,
-                "num_layers": cfg.num_layers,
-                "dropout": cfg.dropout,
-                "bidirectional": cfg.bidirectional,
-                "dense_hidden_size": cfg.dense_hidden_size,
-                "dense_dropout": cfg.dense_dropout,
-                "learning_rate": cfg.learning_rate,
-                "batch_size": cfg.batch_size,
-                "weight_decay": cfg.weight_decay,
-                "sequence_length": cfg.sequence_length,
-                "target_offset": cfg.target_offset,
-                "embedding_dim": cfg.embedding_dim,
-            }
+            train_meta["lstm_config"] = {name: getattr(cfg, name) for name in LSTM_TUNABLE_PARAMS}
         store.save_train_meta(train_meta)
 
         logging.info("Final LSTM training complete.")
@@ -208,9 +177,7 @@ def _build_predict_state(store, splits):
 
     if store.has_train_meta():
         meta = store.load_train_meta()
-        for key in ("lstm_features", "lstm_raw_features", "lstm_non_numeric_features",
-                    "lstm_categorical_features", "lstm_num_model_families", "lstm_num_regions",
-                    "lstm_sequence_length", "lstm_target_offset"):
+        for key in _LSTM_TRAIN_META_KEYS:
             if key in meta:
                 session_state[key] = meta[key]
         if "lstm_config" in meta:
@@ -231,7 +198,7 @@ def test_lstm(store):
 
     logging.info("Testing LSTM model...")
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
     session_state = _build_predict_state(store, splits)
 
     preds = _predict_lstm(session_state, store.run_id)
@@ -252,13 +219,39 @@ def test_lstm(store):
     return preds
 
 
+def _region_labels(frame, categories):
+    """Region labels for *frame*, whichever form its Region column is in.
+
+    Region survives as text in some frames and as embedding codes in others;
+    returning None where neither is available lets the caller decide, rather
+    than filtering against codes that match no region prefix.
+    """
+    import pandas as pd
+
+    from src.data.preprocess import decode_categorical_column
+
+    if "Region" not in frame.columns:
+        return None
+    if not pd.api.types.is_numeric_dtype(frame["Region"]):
+        return frame["Region"].astype(str)
+
+    vocabulary = (categories or {}).get("Region")
+    if not vocabulary:
+        logging.warning(
+            "Region is encoded but this run has no Region vocabulary; "
+            "SHAP cannot be filtered by region."
+        )
+        return None
+    return decode_categorical_column(frame["Region"], vocabulary)
+
+
 def plot_lstm(store):
     """Plot LSTM predictions and SHAP plots."""
     from src.visualization import plot_scatter, plot_lstm_shap
 
     logging.info("Plotting LSTM predictions...")
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
     pred_bundle = store.load_predictions()
     preds = pred_bundle["preds"]
     targets = splits["targets"]
@@ -296,4 +289,11 @@ def plot_lstm(store):
     if store.has_train_meta():
         meta = store.load_train_meta()
         sequence_length = meta.get("lstm_sequence_length", sequence_length)
-    plot_lstm_shap(store.run_id, test_data_for_shap, features, targets, sequence_length=sequence_length)
+
+    # The frame carries Region as the integer codes the embeddings were fit on,
+    # which no region prefix can match; hand SHAP the labels behind them.
+    plot_lstm_shap(
+        store.run_id, test_data_for_shap, features, targets,
+        sequence_length=sequence_length,
+        region_series=_region_labels(test_data_for_shap, splits["categories"]),
+    )

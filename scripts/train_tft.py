@@ -6,24 +6,34 @@ All heavy imports are lazy to avoid pulling in unnecessary dependencies.
 
 import logging
 
+from src.utils.utils import is_primary_rank
 
-def derive_splits(data, target_normalizer_mode=None):
+
+def derive_splits(data, store=None, target_normalizer_mode=None):
     """From cached processed_data, derive all TFT splits. Takes seconds.
 
     Returns the ephemeral dict that phase functions and trainers expect.
+    *store* supplies the run's category vocabularies; TFT encodes categoricals
+    with its own NaNLabelEncoders, so these are recorded for the dashboard and
+    inference rather than used for encoding here.
     """
     from configs.models.tft import TFTDatasetConfig
     from src.data.preprocess import (
         add_missingness_indicators,
         impute_with_train_medians,
-        prepare_features_and_targets_tft,
+        prepare_features_and_targets_sequence,
         split_data,
     )
 
     dataset_cfg = TFTDatasetConfig()
     context_length = max(0, dataset_cfg.target_offset)
 
-    prepared, features, targets = prepare_features_and_targets_tft(data)
+    split_assignment = None
+    if store is not None:
+        store.categories_for(data)
+        split_assignment = store.splits_for(data)
+
+    prepared, features, targets = prepare_features_and_targets_sequence(data)
     dataset_cfg.resolve_encoder_lengths()
     if context_length > 0:
         logging.info(
@@ -31,7 +41,7 @@ def derive_splits(data, target_normalizer_mode=None):
             context_length,
         )
     prepared, features = add_missingness_indicators(prepared, features)
-    train_data, val_data, test_data = split_data(prepared)
+    train_data, val_data, test_data = split_data(prepared, assignment=split_assignment)
     train_data, val_data, test_data = impute_with_train_medians(
         train_data, val_data, test_data, features
     )
@@ -58,24 +68,12 @@ def derive_splits(data, target_normalizer_mode=None):
     }
 
 
-def preprocess_tft(store, dataset=None):
-    """Run the expensive melt+pivot and cache as parquet."""
-    from src.data.preprocess import load_and_process_data
-
-    data = load_and_process_data(version=dataset)
-    store.save_processed_data(data)
-    return data
-
-
 def search_tft(store, target_normalizer_mode=None):
     """Run hyperparameter search and save best_params."""
     logging.info("Starting hyperparameter search for TFT...")
     data = store.load_processed_data()
-    splits = derive_splits(data, target_normalizer_mode=target_normalizer_mode)
+    splits = derive_splits(data, store, target_normalizer_mode=target_normalizer_mode)
 
-    from src.trainers.tft_dataset import build_datasets
-
-    # build_datasets expects a dict with train/val/test data
     best_params = _search_with_splits(splits, store)
     return best_params
 
@@ -92,19 +90,9 @@ def _search_with_splits(splits, store):
     )
     store.save_best_params(best_params)
     store.save_features(splits["features"], splits["targets"])
-    logging.info("Hyperparameter search complete. Best params: %s", best_params)
+    # The searcher already logged the winning parameters, and the phase banner
+    # marks the end of the phase; repeating both here said nothing new.
     return best_params
-
-
-def _is_primary_rank():
-    import os
-    rank_vars = [
-        os.getenv("LOCAL_RANK"),
-        os.getenv("PL_TRAINER_GLOBAL_RANK"),
-        os.getenv("GLOBAL_RANK"),
-        os.getenv("RANK"),
-    ]
-    return all(rv in (None, "0") for rv in rank_vars)
 
 
 def train_tft(store, target_normalizer_mode=None):
@@ -112,13 +100,13 @@ def train_tft(store, target_normalizer_mode=None):
     from src.trainers.tft_dataset import build_datasets
     from src.trainers.tft_trainer import train_final_tft as _train_final
 
-    primary = _is_primary_rank()
+    primary = is_primary_rank()
 
     if primary:
         logging.info("Starting final TFT training...")
 
     data = store.load_processed_data()
-    splits = derive_splits(data, target_normalizer_mode=target_normalizer_mode)
+    splits = derive_splits(data, store, target_normalizer_mode=target_normalizer_mode)
 
     best_params = store.load_best_params()
 
@@ -144,7 +132,7 @@ def train_tft(store, target_normalizer_mode=None):
 def test_tft(store, use_two_window=False):
     """Make predictions using trained TFT model."""
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
     session_state = dict(splits)
 
     if use_two_window:
@@ -178,7 +166,7 @@ def plot_tft(store):
 
     logging.info("Plotting TFT predictions...")
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
     pred_bundle = store.load_predictions()
     preds = pred_bundle["preds"]
     targets = splits["targets"]
@@ -190,7 +178,6 @@ def plot_tft(store):
     if horizon_df is not None and horizon_y_true is not None:
         logging.info("Using forecast horizon subset (%d rows) for plotting.", len(horizon_df))
         plot_scatter(store.run_id, horizon_df, horizon_y_true, preds, targets, model_name="TFT")
-        test_data_for_shap = horizon_df
     else:
         from src.data.preprocess import denormalize_by_population
         from configs.data import POPULATION_COLUMN
@@ -199,17 +186,7 @@ def plot_tft(store):
             test_data[targets].values, test_data[POPULATION_COLUMN].values
         )
         plot_scatter(store.run_id, test_data, test_targets, preds, targets, model_name="TFT")
-        test_data_for_shap = test_data
 
-    # Use full test data for SHAP (needs sufficient sequence length)
-    test_data_for_shap = splits["test_data"]
-    if test_data_for_shap is not None:
-        from configs.models.tft import TFTDatasetConfig
-        max_encoder_length = splits.get("tft_max_encoder_length", TFTDatasetConfig().max_encoder_length)
-        try:
-            plot_tft_shap(store.run_id, test_data_for_shap, features, targets, max_encoder_length=max_encoder_length)
-        except Exception as e:
-            logging.warning("TFT SHAP analysis failed: %s", e)
-            logging.info("SHAP analysis will be skipped.")
-    else:
-        logging.warning("No test data available for SHAP analysis")
+    # SHAP explains whole encoder windows, so it reads the full test split
+    # rather than the horizon rows; it reports its own failures.
+    plot_tft_shap(store.run_id, splits["test_data"], features, targets)

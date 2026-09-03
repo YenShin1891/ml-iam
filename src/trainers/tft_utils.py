@@ -3,7 +3,6 @@
 import os
 import logging
 from contextlib import contextmanager
-from typing import Dict, Optional
 
 import torch
 
@@ -63,19 +62,27 @@ def teardown_distributed() -> None:
 
 @contextmanager
 def single_gpu_env():
-    """Temporarily force single-GPU (device 0) inference.
+    """Temporarily restrict inference to one GPU.
 
-    Stores and restores CUDA_VISIBLE_DEVICES and distributed env vars. This avoids
-    potential DataLoader hangs or repeated loops caused by stale multi-process
-    environment when calling predict on a single-process Trainer.
+    Keeps the first GPU the process was already allowed to see rather than
+    forcing physical device 0, which a run pinned to CUDA_VISIBLE_DEVICES=3
+    may not be allowed to use.  Stores and restores CUDA_VISIBLE_DEVICES and
+    the distributed env vars; clearing the latter avoids DataLoader hangs or
+    repeated loops from a stale multi-process environment when predicting
+    with a single-process Trainer.
     """
     orig_cuda = os.environ.get("CUDA_VISIBLE_DEVICES")
     orig_dist = {k: os.environ.get(k) for k in _DIST_ENV_VARS}
+    if orig_cuda is None:
+        first_visible = "0"
+    else:
+        # "" stays "": it means no GPU at all, not the first one.
+        first_visible = orig_cuda.split(",")[0].strip()
     try:
-        os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+        os.environ["CUDA_VISIBLE_DEVICES"] = first_visible
         for k in _DIST_ENV_VARS:
             os.environ.pop(k, None)
-        logging.info("Forced single GPU inference with CUDA_VISIBLE_DEVICES=0")
+        logging.info("Forced single GPU inference with CUDA_VISIBLE_DEVICES=%s", first_visible)
         yield
     finally:
         if orig_cuda is None:

@@ -10,6 +10,7 @@ import argparse
 
 from src.visualization.trajectories import plot_trajectories, get_saved_plots_metadata
 from src.utils.utils import setup_logging
+from src.utils.regions import regions_ordered_by_scale
 from src.utils.run_store import RunStore
 from configs.data import REGION_CODE_TO_LABEL
 from configs.dashboard import DEFAULT_RUNS
@@ -38,13 +39,10 @@ def get_unique_values(test_data):
     """Cache unique values for filters."""
     scenario_categories = test_data['Scenario_Category'].unique()
 
-    regions = [r for r in test_data['Region'].dropna().astype(str).unique()]
-    R10 = [r for r in regions if r.startswith('R10')]
-    R6 = [r for r in regions if r.startswith('R6')]
-    R5 = [r for r in regions if r.startswith('R5')]
-    World = [r for r in regions if r.startswith('World')]
-    ISO = [r for r in regions if not (r.startswith('R10') or r.startswith('R6') or r.startswith('R5') or r.startswith('World'))]
-    new_region_order = ISO + R10 + R6 + R5 + World
+    # Countries first, then progressively coarser aggregates.
+    new_region_order = regions_ordered_by_scale(
+        test_data['Region'].dropna().astype(str).unique()
+    )
 
     model_families = test_data['Model_Family'].unique()
     return scenario_categories, new_region_order, model_families
@@ -62,7 +60,6 @@ def get_cached_saved_plots(run_id):
 
 def delete_saved_plot(plot_info):
     """Delete a saved plot and its metadata files."""
-    import os
     try:
         # Delete the plot image file
         if os.path.exists(plot_info['plot_path']):
@@ -79,29 +76,29 @@ def delete_saved_plot(plot_info):
         return False
 
 
+def _present(defaults, options):
+    """The defaults a multiselect may show: Streamlit rejects one not in *options*."""
+    available = set(options)
+    return [value for value in defaults if value in available]
+
+
 def make_filters(test_data):
     scenario_categories, regions, model_families = get_unique_values(test_data)
-    
-    selected_scenario_categories = st.multiselect(
-        "Select Scenario Categories", options=scenario_categories, default=["C3"]
-    )
-    if selected_scenario_categories != st.session_state.get("selected_scenario_categories", []):
-        st.session_state.selected_scenario_categories = selected_scenario_categories
 
-    selected_regions = st.multiselect(
-        "Select Regions", options=regions, default=["World"]
+    st.session_state.selected_scenario_categories = st.multiselect(
+        "Select Scenario Categories",
+        options=scenario_categories,
+        default=_present(["C3"], scenario_categories),
     )
-    if selected_regions != st.session_state.get("selected_regions", []):
-        st.session_state.selected_regions = selected_regions
-
-    selected_model_families = st.multiselect(
+    st.session_state.selected_regions = st.multiselect(
+        "Select Regions", options=regions, default=_present(["World"], regions)
+    )
+    st.session_state.selected_model_families = st.multiselect(
         "Select Model Families", options=model_families, default=model_families.tolist()
     )
-    if selected_model_families != st.session_state.get("selected_model_families", []):
-        st.session_state.selected_model_families = selected_model_families
 
     if st.button("Make New Plot"):
-            st.session_state.apply_filters_clicked = True
+        st.session_state.apply_filters_clicked = True
 
 def apply_filters():
     logging.info("Applying filters to test data...")
@@ -117,7 +114,7 @@ def apply_filters():
         test_data = horizon_df
         y_test = horizon_y_true
     # XGBoost / generic case: use full test split
-    elif hasattr(st.session_state, 'y_test') and st.session_state.y_test is not None:
+    elif st.session_state.get('y_test') is not None:
         y_test = st.session_state.y_test
         test_data = st.session_state.test_data
     else:
@@ -176,45 +173,11 @@ def filter_and_plot(run_id):
         'metrics': metrics_row
     }
 
-    # Get environment variables for individual plot saving
-    # If you want to save individual plots, use the following command:
-    # nohup bash -c "export SAVE_INDIVIDUAL_PLOTS=true && export INDIVIDUAL_PLOT_INDICES='[0]' && streamlit run scripts/dashboard.py --logger.level=info --server.runOnSave=false -- --run_id=run_37" &
-    import os
+    # `make dashboard` sets these; see the Makefile's SAVE_PLOTS.
     save_individual = os.getenv('SAVE_INDIVIDUAL_PLOTS', 'false').lower() == 'true'
-    logging.info(f"DEBUG: save_individual = {save_individual}")
-    
-    if save_individual:
-        individual_indices_str = os.getenv('INDIVIDUAL_PLOT_INDICES', '[0]')
-        # Safely parse indices from env var, preferring JSON then literal_eval
-        try:
-            individual_indices = json.loads(individual_indices_str)
-        except json.JSONDecodeError:
-            try:
-                individual_indices = ast.literal_eval(individual_indices_str)
-            except (ValueError, SyntaxError):
-                individual_indices = [0]
+    individual_indices = _individual_plot_indices() if save_individual else []
+    logging.debug("save_individual=%s individual_indices=%s", save_individual, individual_indices)
 
-        # Normalize to list of ints
-        if isinstance(individual_indices, (int, float, str)):
-            try:
-                individual_indices = [int(individual_indices)]
-            except Exception:
-                individual_indices = [0]
-        elif isinstance(individual_indices, (tuple, set)):
-            individual_indices = list(individual_indices)
-
-        if not isinstance(individual_indices, list):
-            individual_indices = [0]
-
-        try:
-            individual_indices = [int(x) for x in individual_indices]
-        except Exception:
-            individual_indices = [0]
-
-        logging.info(f"DEBUG: individual_indices (safe parsed) = {individual_indices}")
-    else:
-        individual_indices = []
-    
     plot_trajectories(
         filtered_test_data,
         filtered_y_test,
@@ -230,8 +193,26 @@ def filter_and_plot(run_id):
 
     # Metrics expander (appears after plot render)
     with st.expander("View Metrics", expanded=True):
-        metrics_df = _compute_filtered_metrics(filtered_y_test, filtered_preds, st.session_state.targets)
         st.dataframe(metrics_df, use_container_width=True)
+
+
+def _individual_plot_indices() -> list:
+    """Indices from INDIVIDUAL_PLOT_INDICES, e.g. "[0, 6]" or "6"; [0] when unparsable."""
+    raw = os.getenv('INDIVIDUAL_PLOT_INDICES', '[0]')
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        try:
+            parsed = ast.literal_eval(raw)
+        except (ValueError, SyntaxError):
+            return [0]
+    if not isinstance(parsed, (list, tuple, set)):
+        parsed = [parsed]
+    try:
+        return [int(x) for x in parsed]
+    except (TypeError, ValueError):
+        return [0]
+
 
 @st.cache_data(show_spinner=False)
 def _compute_filtered_metrics(y_true_filtered: np.ndarray, y_pred_filtered: np.ndarray, targets):
@@ -310,14 +291,16 @@ def display_recent_plots_sidebar(run_id):
                     metrics = metadata.get('metrics')
                     if metrics:
                         r2_disp = metrics.get('R2')
-                        mae_disp = metrics.get('MAE')
                         rmse_disp = metrics.get('RMSE')
+                        mae_disp = metrics.get('MAE')
                         # Format numbers if not None
                         def _fmt(v):
                             if v is None or (isinstance(v, float) and np.isnan(v)):
                                 return '—'
                             return f"{v:.3f}"
-                        metadata_text += f"  \nR2 {_fmt(r2_disp)} | RMSE {_fmt(rmse_disp)}"
+                        metadata_text += (
+                            f"  \nR2 {_fmt(r2_disp)} | RMSE {_fmt(rmse_disp)} | MAE {_fmt(mae_disp)}"
+                        )
                     
                     st.markdown(metadata_text)
                 
@@ -377,26 +360,56 @@ def display_selected_plot():
             img = load_plot_image(plot_info['plot_path'])
             st.image(img, caption="Temporal trajectories", use_container_width=True)
 
+def _code_maps(store):
+    """code -> label maps for this run, from the vocabularies it saved.
+
+    The vocabularies have to come from the run: this process never runs
+    preprocessing, so the configs.data globals are empty here and mapping
+    through them turns every region into NaN.
+    """
+    maps = {}
+    if store.has_categories():
+        for column, labels in store.load_categories().items():
+            maps[column] = {i: label for i, label in enumerate(labels)}
+
+    # Runs made before categories.json existed.
+    if 'Model_Family' not in maps and store.has_train_meta():
+        legacy = store.load_train_meta().get('lstm_model_family_categories')
+        if legacy:
+            maps['Model_Family'] = {i: label for i, label in enumerate(legacy)}
+    if 'Region' not in maps and REGION_CODE_TO_LABEL:
+        maps['Region'] = dict(REGION_CODE_TO_LABEL)
+
+    return maps
+
+
 def _decode_categorical_columns(store, session_state):
     """Decode integer-encoded Region/Model_Family columns back to string labels."""
-    # Build mappings
-    region_map = REGION_CODE_TO_LABEL
-    model_family_map = None
-    if store.has_train_meta():
-        meta = store.load_train_meta()
-        categories = meta.get('lstm_model_family_categories')
-        if categories:
-            model_family_map = {i: name for i, name in enumerate(categories)}
+    maps = _code_maps(store)
+    if not maps:
+        logging.warning(
+            "Run %s has no saved category vocabularies; integer-coded columns "
+            "cannot be decoded. Re-run the preprocess phase to write them.",
+            store.run_id,
+        )
+        return
 
     # Decode in all DataFrames that the dashboard uses for filtering
     for attr in ('test_data', 'horizon_df'):
         df = getattr(session_state, attr, None)
         if df is None:
             continue
-        if 'Region' in df.columns and pd.api.types.is_numeric_dtype(df['Region']):
-            df['Region'] = df['Region'].map(region_map)
-        if 'Model_Family' in df.columns and pd.api.types.is_numeric_dtype(df['Model_Family']) and model_family_map:
-            df['Model_Family'] = df['Model_Family'].map(model_family_map)
+        for column, code_map in maps.items():
+            if column not in df.columns or not pd.api.types.is_numeric_dtype(df[column]):
+                continue
+            decoded = df[column].map(code_map)
+            unmapped = int(decoded.isna().sum() - df[column].isna().sum())
+            if unmapped > 0:
+                logging.warning(
+                    "%s: %d/%d %s codes fell outside the saved vocabulary",
+                    attr, unmapped, len(df), column,
+                )
+            df[column] = decoded
 
 
 def setup_session_and_logging(run_id):
@@ -424,8 +437,10 @@ def setup_session_and_logging(run_id):
             st.session_state.targets = targets
         else:
             st.error(
-                "No test data artifacts found. Re-run the test phase to generate them.\n\n"
-                f"Run: `make test RUN_ID={run_id}`"
+                "No test data artifacts found. Re-run the test phase to generate them:\n\n"
+                "Set `run_id` and `resume: test` in a run config, then\n\n"
+                "`make train RUN=configs/runs/<your_config>.yaml`\n\n"
+                f"(run_id: `{run_id}`)"
             )
             return None
 
@@ -451,7 +466,7 @@ def handle_filtering_and_plotting(run_id):
     """Handle the filter application and plotting logic."""
     if st.session_state.get("apply_filters_clicked", False):
         apply_filters()
-        if not hasattr(st.session_state, 'target_mask') or st.session_state.target_mask is None:
+        if st.session_state.get('target_mask') is None:
             return
         if st.session_state.target_mask.sum() == 0:
             st.warning("No data selected with the current filters.")
@@ -471,26 +486,13 @@ def parse_args() -> argparse.Namespace:
 def resolve_run_id() -> str:
     # CLI run_id as fallback; allow URL ?run_id= to override; reflect final value
     args = parse_args()
-    run_id = args.run_id
-    try:
-        params = st.query_params  # New stable API replacing experimental_get_query_params
-        vals = params.get("run_id")
-        if isinstance(vals, list) and vals:
-            run_id = vals[0]
-        elif isinstance(vals, str) and vals:
-            run_id = vals
-    except Exception:
-        pass
+    run_id = st.query_params.get("run_id") or args.run_id
 
     # Resolve model-type shortcuts (e.g. "xgb" → "xgb_76")
     run_id = DEFAULT_RUNS.get(run_id, run_id)
 
     # Reflect chosen run_id in URL for bookmarking
-    try:
-        # Update query param using new API (assignment updates the URL)
-        st.query_params["run_id"] = run_id
-    except Exception:
-        pass
+    st.query_params["run_id"] = run_id
     return run_id
 
 def main():

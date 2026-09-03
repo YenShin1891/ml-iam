@@ -16,7 +16,9 @@ Metadata CSVs are expected under <repo_root>/metadata/.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List, Tuple, Optional, cast
 
@@ -113,7 +115,23 @@ def filter_by_selected_variables(df_list: List[pd.DataFrame], selected_vars: pd.
 
 
 def add_scenario_category(df: pd.DataFrame, scenario_cat: pd.DataFrame) -> pd.DataFrame:
+    """Attach the AR6 category of each scenario, dropping scenarios without one.
+
+    The drop is explicit here: it used to happen silently downstream, where
+    pivot_table discards rows whose index carries a NaN, with nothing in the
+    log about the 3-4% of series that went with them.  Keeping them instead
+    would take a fillna("Unknown") in place of the dropna.
+    """
     out = df.merge(scenario_cat[["Scenario", "Scenario_Category"]], on="Scenario", how="left")
+    uncategorised = out["Scenario_Category"].isna()
+    if uncategorised.any():
+        logging.warning(
+            "Dropping %d rows from %d scenarios that have no Scenario_Category in %s",
+            int(uncategorised.sum()),
+            out.loc[uncategorised, "Scenario"].nunique(),
+            SCENARIO_CATEGORY_CSV.name,
+        )
+        out = out.loc[~uncategorised]
     # Reorder: Model, Scenario, Scenario_Category, Region, Variable, Unit, years...
     cols = ["Model", "Scenario", "Scenario_Category", "Region"]
     remainder = [c for c in out.columns if c not in cols]
@@ -170,11 +188,21 @@ def resolve_units(df: pd.DataFrame):
         df.loc[mask, year_cols] = df.loc[mask, year_cols].apply(pd.to_numeric, errors="coerce") * 0.001
         df.loc[mask, "Unit"] = "bn pkm/yr"
 
-    # Unit consistency check per (Model, Scenario, Region, Variable)
-    unit_check = df.groupby(["Model", "Scenario", "Region", "Variable"])['Unit'].nunique()
-    if (unit_check > 1).any():
-        bad = unit_check[unit_check > 1]
-        raise ValueError(f"Unit mismatch found for {len(bad)} combinations. Sample: {bad.head(5)}")
+    # Every value of a variable ends up in one wide column, so a variable
+    # reported in two units mixes magnitudes there.  The AR6 files carry one
+    # row per (Model, Scenario, Region, Variable), so checking within those
+    # keys could never find anything; check per variable, across the file.
+    units_per_variable = df.groupby("Variable")["Unit"].nunique()
+    mixed = units_per_variable[units_per_variable > 1]
+    if not mixed.empty:
+        breakdown = (
+            df[df["Variable"].isin(mixed.index)]
+            .groupby("Variable")["Unit"].agg(lambda u: dict(u.value_counts()))
+        )
+        logging.warning(
+            "%d variable(s) are reported in more than one unit; their columns mix them: %s",
+            len(mixed), breakdown.to_dict(),
+        )
 
     # Keep all non-year columns (including Unit) for the unit table
     unit_table = df.loc[:, non_year_cols].copy()
@@ -195,12 +223,21 @@ def melt_and_pivot_year(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+ID_COLUMNS = ["Model", "Scenario", "Scenario_Category", "Region", "Year"]
+
+
 def apply_completeness_threshold(df: pd.DataFrame, selected_vars: pd.DataFrame, ratio: float) -> pd.DataFrame:
+    """Keep the year-rows that report at least *ratio* of the selected variables.
+
+    Only the variable columns count: the identity columns are never missing,
+    so counting them let a row through with five fewer variables than the
+    ratio asks for.
+    """
     if not (0.0 < ratio <= 1.0):
         raise ValueError("ratio must be in (0, 1]")
     threshold = int(len(selected_vars) * ratio)
-    kept = df.dropna(thresh=threshold)
-    return kept
+    value_cols = [c for c in df.columns if c not in ID_COLUMNS]
+    return df.dropna(subset=value_cols, thresh=threshold)
 
 
 def compute_missing_stats(df: pd.DataFrame, original_stat_table: pd.DataFrame) -> pd.DataFrame:
@@ -219,7 +256,8 @@ def load_model_base_years(csv_path: Path) -> pd.DataFrame:
             f"Model base year CSV not found: {csv_path}; add tag 'apply-base-year' only when the metadata CSV is available, or omit the tag to skip filtering."
         )
     df = pd.read_csv(csv_path, dtype=str)
-    assert not df.empty, "Base year metadata is empty"
+    if df.empty:
+        raise ValueError(f"Base year metadata is empty: {csv_path}")
     # Normalize column names by stripping whitespace
     df.columns = [c.strip() for c in df.columns]
     return df
@@ -242,7 +280,7 @@ def resolve_effective_base_year(model: str, meta: pd.DataFrame, available_years:
         try:
             if val and pd.notna(val):
                 base_candidate = int(val)
-        except Exception:
+        except (TypeError, ValueError):
             base_candidate = None
     if base_candidate is None:
         base_candidate = default_year
@@ -300,14 +338,12 @@ def to_series_wide(processed_df_year: pd.DataFrame) -> pd.DataFrame:
     # Insert Model_Family as the second column
     year_pivoted.insert(1, "Model_Family", year_pivoted["Model"].apply(get_model_family))
     # Insert Region_Scale after Region
-    from configs.data import REGION_SCALE_PREFIXES, REGION_SCALE_DEFAULT
-    def _region_scale(r):
-        for prefix, scale in REGION_SCALE_PREFIXES:
-            if r == prefix or r.startswith(prefix):
-                return scale
-        return REGION_SCALE_DEFAULT
+    from src.utils.regions import region_scales
+
     region_col_idx = year_pivoted.columns.get_loc("Region")
-    year_pivoted.insert(region_col_idx + 1, "Region_Scale", year_pivoted["Region"].apply(_region_scale))
+    year_pivoted.insert(
+        region_col_idx + 1, "Region_Scale", region_scales(year_pivoted["Region"]).to_numpy()
+    )
     return year_pivoted
 
 
@@ -400,7 +436,7 @@ def run_pipeline(
     # Unit normalization and capture unit table
     processed_list: List[pd.DataFrame] = []
     unit_tables: List[pd.DataFrame] = []
-    for i, d in enumerate(filtered, start=1):
+    for d in filtered:
         proc, unit_tbl = resolve_units(d)
         processed_list.append(proc)
         unit_tables.append(cast(pd.DataFrame, unit_tbl))
@@ -429,7 +465,7 @@ def run_pipeline(
     logging.info(f"Rows: {before_rows} -> {len(processed_df_year)} after completeness filter")
 
     # Missing stats
-    value_only = processed_df_year.drop(columns=["Model", "Scenario", "Scenario_Category", "Region", "Year"], errors="ignore")
+    value_only = processed_df_year.drop(columns=ID_COLUMNS, errors="ignore")
     stat_table_with_na = compute_missing_stats(value_only, stat_table)
     # Defer writing until versioned directory is known
 
@@ -441,7 +477,6 @@ def run_pipeline(
     logging.info(f"Final series shape: {final_series.shape}")
 
     # Build version label and versioned directory name
-    from datetime import datetime
     if dataset_name is None:
         parts = [dp.NAME_PREFIX, f"min{min_count or dp.MIN_COUNT}", f"comp{(completeness_ratio or dp.COMPLETENESS_RATIO):.1f}"]
         if tags:
@@ -468,7 +503,6 @@ def run_pipeline(
 
     # Write a small manifest for traceability
     try:
-        import json
         manifest = {
             "dataset": str(out_path.relative_to(version_dir)),
             "raw_dir": str(raw_dir),
@@ -503,11 +537,8 @@ def update_dataset_versions_list(data_dir, new_version_name):
     # Read existing versions if file exists
     existing_versions = []
     if versions_file.exists():
-        try:
-            with open(versions_file, 'r') as f:
-                existing_versions = [line.strip() for line in f if line.strip()]
-        except FileNotFoundError:
-            existing_versions = []
+        with open(versions_file, 'r') as f:
+            existing_versions = [line.strip() for line in f if line.strip()]
     
     # Only add if this version doesn't already exist
     if new_version_name not in existing_versions:
@@ -545,7 +576,6 @@ def main() -> None:
     logger = setup_console_logging(level=logging.INFO)
 
     # Also log to a per-run file under data_dir/logs
-    from datetime import datetime
     log_dir = Path(args.data_dir) / "logs"
     ensure_dirs(log_dir)
     log_file = log_dir / f"process_data_{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
@@ -558,7 +588,7 @@ def main() -> None:
     # Use OUTPUT_VARIABLES from unified config
     output_vars = dp.OUTPUT_VARIABLES
 
-    out_csv = run_pipeline(
+    run_pipeline(
         raw_dir=args.raw_dir,
         data_dir=args.data_dir,
         results_dir=args.results_dir,

@@ -7,15 +7,24 @@ All heavy imports are lazy to avoid pulling in unnecessary dependencies.
 import logging
 
 
-def derive_splits(data):
+def derive_splits(data, store=None):
     """From cached processed_data, derive all XGB splits. Takes seconds.
 
     Returns the ephemeral dict that phase functions and trainers expect.
+    *store* supplies the run's category vocabularies so codes stay identical
+    across phases and models.
     """
-    import numpy as np
-    import pandas as pd
-    from src.data.preprocess import prepare_data, prepare_features_and_targets
+    from src.data.preprocess import (
+        build_categorical_vocabularies,
+        prepare_data,
+        prepare_features_and_targets,
+    )
 
+    categories = (
+        store.categories_for(data) if store is not None
+        else build_categorical_vocabularies(data)
+    )
+    split_assignment = store.splits_for(data) if store is not None else None
     prepared, features, targets = prepare_features_and_targets(data, lag_required=True)
     (
         X_train, y_train, X_train_index_columns,
@@ -25,7 +34,11 @@ def derive_splits(data):
         x_scaler, y_scaler,
         train_groups, val_groups,
         obs_train, obs_val, obs_test,
-    ) = prepare_data(prepared, targets, features)
+        categories,
+    ) = prepare_data(
+        prepared, targets, features,
+        categories=categories, split_assignment=split_assignment,
+    )
 
     return {
         "features": features,
@@ -46,16 +59,8 @@ def derive_splits(data):
         "obs_train": obs_train,
         "obs_val": obs_val,
         "obs_test": obs_test,
+        "categories": categories,
     }
-
-
-def preprocess_xgb(store, dataset=None):
-    """Run the expensive melt+pivot and cache as parquet."""
-    from src.data.preprocess import load_and_process_data
-
-    data = load_and_process_data(version=dataset)
-    store.save_processed_data(data)
-    return data
 
 
 def search_xgb(store):
@@ -64,7 +69,7 @@ def search_xgb(store):
 
     logging.info("Starting hyperparameter search for XGBoost...")
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
 
     from src.trainers.xgb_trainer import hyperparameter_search
 
@@ -89,7 +94,8 @@ def search_xgb(store):
     )
     store.save_best_params(best_params)
     store.save_features(splits["features"], splits["targets"])
-    logging.info("Hyperparameter search complete. Best params: %s", best_params)
+    # The searcher already logged the winning parameters, and the phase banner
+    # marks the end of the phase; repeating both here said nothing new.
     return best_params
 
 
@@ -101,7 +107,7 @@ def train_xgb(store):
 
     logging.info("Starting final XGBoost training...")
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
 
     best_params = store.load_best_params()
 
@@ -109,20 +115,14 @@ def train_xgb(store):
 
     X_train = splits["X_train"]
     y_train = splits["y_train"]
-    X_train_index_columns = splits["X_train_index_columns"]
     train_groups = splits["train_groups"]
     X_val = splits["X_val"]
     y_val = splits["y_val"]
-    X_val_index_columns = splits["X_val_index_columns"]
     val_groups = splits["val_groups"]
     targets = splits["targets"]
 
-    X_train_with_index = pd.concat([X_train, X_train_index_columns], axis=1)
-    X_val_with_index = pd.concat([X_val, X_val_index_columns], axis=1)
-
     X_combined = pd.concat([X_train, X_val], axis=0, ignore_index=True)
     y_combined = np.concatenate([y_train, y_val], axis=0)
-    X_combined_with_index = pd.concat([X_train_with_index, X_val_with_index], axis=0, ignore_index=True)
     combined_groups = np.concatenate([train_groups, val_groups], axis=0)
 
     train_and_save_model(X_combined, y_combined, combined_groups, targets, best_params, store.run_id)
@@ -140,7 +140,7 @@ def test_xgb(store):
     """Test XGBoost model autoregressively."""
     logging.info("Testing the model...")
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
 
     X_test_with_index = splits["X_test_with_index"]
     y_test_scaled = splits["y_test"]
@@ -149,22 +149,20 @@ def test_xgb(store):
     y_scaler = splits["y_scaler"]
 
     from src.trainers.evaluation import test_xgb_autoregressively, save_metrics
-    from src.data.preprocess import denormalize_by_population, observed_mask_columns
+    from src.data.preprocess import denormalize_by_population, observed_mask_from_frame
     from configs.data import POPULATION_COLUMN
 
     preds_scaled = test_xgb_autoregressively(X_test_with_index, y_test_scaled, store.run_id)
 
-    # Convert scaled model outputs back to per-capita units, then multiply by
-    # Population to recover absolute values. Ground truth comes straight from
-    # test_data (raw, per-capita) rather than the scaled y_test array, matching
-    # how LSTM/TFT already source their ground truth.
+    # Undo the target scaling; denormalize_by_population then restores absolute
+    # units when the run predicts per-capita targets (and is a no-op otherwise).
+    # Ground truth comes straight from test_data rather than the scaled y_test
+    # array, matching how LSTM/TFT source theirs.
     population = test_data[POPULATION_COLUMN].values
     preds = denormalize_by_population(y_scaler.inverse_transform(preds_scaled), population)
     y_test = denormalize_by_population(test_data[targets].values, population)
 
-    # Extract observed mask from test_data if available
-    obs_cols = observed_mask_columns(targets)
-    obs_mask = test_data[obs_cols].values if all(c in test_data.columns for c in obs_cols) else None
+    obs_mask = observed_mask_from_frame(test_data, targets)
 
     store.save_predictions(preds)
     store.save_test_data(test_data, y_test)
@@ -178,7 +176,7 @@ def plot_xgb(store):
     from src.visualization import plot_scatter, plot_xgb_shap
 
     data = store.load_processed_data()
-    splits = derive_splits(data)
+    splits = derive_splits(data, store)
     pred_bundle = store.load_predictions()
     preds = pred_bundle["preds"]
 
@@ -191,4 +189,7 @@ def plot_xgb(store):
 
     plot_scatter(store.run_id, test_data, y_test, preds, targets, model_name="XGBoost")
     index_region = test_data['Region'] if isinstance(test_data, pd.DataFrame) and 'Region' in test_data.columns else None
-    plot_xgb_shap(store.run_id, X_test_with_index, features, targets, index_region=index_region)
+    plot_xgb_shap(
+        store.run_id, X_test_with_index, features, targets,
+        index_region=index_region, categories=splits["categories"],
+    )
