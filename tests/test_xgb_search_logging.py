@@ -106,3 +106,99 @@ def test_a_trial_without_gpu_or_params_still_logs(caplog):
     assert "Stage 2 1/4" in message
     assert "trial=-" in message and "gpu=-" in message
     assert message.endswith("best=0.2500")
+
+
+# ── what each stage is scored on ──────────────────────────────────────────
+#
+# XGBoost is the only one of the three models with a feedback loop: its lag
+# features are its own past predictions at test time.  So a trial scored on
+# one-step predictions from ground-truth lags is not measuring what the test
+# phase reports, and the two-stage protocol is what makes the real rollout
+# affordable -- ten trials pay for it, not fifty.
+
+import src.trainers.xgb_trainer as xgb_trainer
+from configs.models import XGBSearchSpace
+
+
+@pytest.fixture
+def recorded_stages(tmp_path, monkeypatch):
+    """Run the search driver with the trials themselves stubbed out."""
+    space = XGBSearchSpace(n_trials=4, stage2_top_k=2)
+    monkeypatch.setattr(xgb_trainer, "XGBSearchSpace", lambda **kw: space)
+    monkeypatch.setattr(xgb_trainer, "get_run_root", lambda _run_id: str(tmp_path))
+    monkeypatch.setattr(xgb_trainer, "_visible_gpu_pool", lambda: ["0"])
+
+    stages = []
+
+    def fake_run_trials(params_list, inputs, stage, num_boost_round, gpu_pool,
+                        use_autoregressive_eval=False):
+        stages.append({
+            "stage": stage,
+            "rounds": num_boost_round,
+            "autoregressive": use_autoregressive_eval,
+            "n": len(params_list),
+        })
+        return [
+            {**params, inputs.score_key: -float(i + 1), "best_iteration": 7,
+             "stage": stage, "status": "completed", "trial": i}
+            for i, params in enumerate(params_list)
+        ]
+
+    monkeypatch.setattr(xgb_trainer, "_run_xgb_trials", fake_run_trials)
+    return space, stages
+
+
+def _run_search():
+    import numpy as np
+    import pandas as pd
+
+    frame = pd.DataFrame({"f": [0.0]})
+    return xgb_trainer.hyperparameter_search(
+        frame, np.zeros((1, 1)), frame, np.zeros(1), ["A"], "xgb_01",
+        use_cv=False, X_val=frame, y_val=np.zeros((1, 1)), X_val_with_index=frame,
+    )
+
+
+def test_stage_one_ranks_cheaply_on_one_step_predictions(recorded_stages):
+    space, stages = recorded_stages
+
+    _run_search()
+
+    stage1 = next(s for s in stages if s["stage"] == "stage1")
+    assert stage1["autoregressive"] is False
+    assert stage1["n"] == space.n_trials
+    assert stage1["rounds"] == space.stage1_budget["num_boost_round"]
+
+
+def test_stage_two_is_scored_on_the_rollout_the_test_phase_reports(recorded_stages):
+    from configs.models import XGBTrainerConfig
+    space, stages = recorded_stages
+
+    _run_search()
+
+    stage2 = next(s for s in stages if s["stage"] == "stage2")
+    assert stage2["autoregressive"] is True
+    assert stage2["n"] == space.stage2_top_k
+    assert stage2["rounds"] == XGBTrainerConfig().num_boost_round
+
+
+def test_the_rollout_can_be_switched_off_without_touching_the_protocol(recorded_stages, monkeypatch):
+    """It costs ~50x a one-step evaluation; a quick run may not want it."""
+    from configs.models import XGBTrainerConfig
+
+    cfg = XGBTrainerConfig()
+    cfg.search_autoregressive_stage2 = False
+    monkeypatch.setattr(xgb_trainer, "XGBTrainerConfig", lambda: cfg)
+    _, stages = recorded_stages
+
+    _run_search()
+
+    assert next(s for s in stages if s["stage"] == "stage2")["autoregressive"] is False
+
+
+def test_the_final_round_count_comes_from_early_stopping(recorded_stages):
+    """num_boost_round is fitted, not searched: best_iteration + 1."""
+    best, _ = _run_search()
+
+    assert best["num_boost_round"] == 8
+    assert "best_iteration" not in best

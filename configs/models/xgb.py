@@ -20,6 +20,13 @@ class XGBTrainerConfig:
     # early stopping on the validation set picks the round count the final
     # model is trained for, the same way it picks best_epoch for LSTM and TFT.
     num_boost_round: int = 1500
+    # Score stage-2 trials on the same autoregressive rollout the test phase
+    # runs, where each step's prediction becomes the next step's lag feature.
+    # Stage 1 stays on one-step predictions: the rollout costs minutes per
+    # trial, which is why it was switched off for the whole search in e5b18d9,
+    # and the two-stage protocol is what makes it affordable again -- 10
+    # trials pay for it instead of 50.
+    search_autoregressive_stage2: bool = True
 
     # Diagnostics
     # When True, show tqdm progress bars inside autoregressive validation during search.

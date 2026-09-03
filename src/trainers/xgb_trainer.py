@@ -536,6 +536,7 @@ def _search_worker(
     stage: str,
     score_key: str,
     result_queue,
+    use_autoregressive_eval: bool = False,
     obs_train: Optional[np.ndarray] = None,
     obs_val: Optional[np.ndarray] = None,
 ) -> None:
@@ -560,7 +561,7 @@ def _search_worker(
                 trainer_cfg=trainer_cfg,
                 show_autoreg_progress=trainer_cfg.search_show_autoreg_progress,
                 n_jobs=1,
-                use_autoregressive_eval=False,
+                use_autoregressive_eval=use_autoregressive_eval,
                 obs_mask=obs_train,
                 obs_val_mask=obs_val,
             )
@@ -681,6 +682,7 @@ def _run_xgb_trials(
     stage: str,
     num_boost_round: int,
     gpu_pool: Sequence[str],
+    use_autoregressive_eval: bool = False,
 ) -> List[Dict]:
     """Run one stage of trials, fanning out over GPUs when there are several.
 
@@ -688,6 +690,11 @@ def _run_xgb_trials(
     stopping on the validation set decides how many of those rounds are
     actually used, and the winner's count is what the final model is trained
     for.  This is the same arrangement as ``best_epoch`` for LSTM and TFT.
+
+    *use_autoregressive_eval* selects what the trial is scored on: one-step
+    predictions from ground-truth lags (cheap), or the same 15-step rollout
+    the test phase runs, where each step's prediction becomes the next step's
+    lag feature (expensive, and the objective actually being reported).
     """
     if not params_list:
         return []
@@ -724,7 +731,7 @@ def _run_xgb_trials(
                     trainer_cfg=trainer_cfg,
                     show_autoreg_progress=trainer_cfg.search_show_autoreg_progress,
                     n_jobs=1,
-                    use_autoregressive_eval=False,
+                    use_autoregressive_eval=use_autoregressive_eval,
                     obs_mask=inputs.obs_train,
                     obs_val_mask=None if inputs.use_cv else inputs.obs_val,
                 )
@@ -778,6 +785,7 @@ def _run_xgb_trials(
                     'n_folds': trainer_cfg.n_folds,
                     'early_stopping_rounds': trainer_cfg.early_stopping_rounds,
                     'trainer_cfg': trainer_cfg,
+                    'use_autoregressive_eval': use_autoregressive_eval,
                     'stage': stage,
                     'score_key': score_key,
                     'result_queue': result_queue,
@@ -896,12 +904,15 @@ def hyperparameter_search(
         if sig in signature_to_params
     ]
     logging.info(
-        "XGB stage2: refitting the top %d of %d completed stage-1 trials at full budget (%d rounds)",
+        "XGB stage2: refitting the top %d of %d completed stage-1 trials at full budget "
+        "(%d rounds), scored on the %s",
         len(stage2_params), len(stage1_done), trainer_cfg.num_boost_round,
+        "autoregressive rollout" if trainer_cfg.search_autoregressive_stage2 else "one-step predictions",
     )
     stage2_started = time.monotonic()
     stage2_rows = _run_xgb_trials(
         stage2_params, inputs, "stage2", trainer_cfg.num_boost_round, gpu_pool,
+        use_autoregressive_eval=trainer_cfg.search_autoregressive_stage2,
     )
     logging.info(
         "XGB stage2 complete in %s (%d trials)",
@@ -910,8 +921,10 @@ def hyperparameter_search(
 
     all_rows = stage1_rows + stage2_rows
     completed = completed_trials(all_rows, space.param_keys, metric=score_key)
-    # Stage 2 measured its candidates under the full boosting budget, so it
-    # decides whenever it ran; stage 1 is only a fallback.
+    # Stage 2 measured its candidates under the full boosting budget and, by
+    # default, on the autoregressive rollout the test phase reports -- so its
+    # scores are not comparable with stage 1's, and it decides whenever it
+    # ran.  Stage 1 is a cheap ranking proxy and only a fallback.
     stage2_completed = [row for row in completed if row.get("stage") == "stage2"]
     best = best_trial(stage2_completed or completed, metric=score_key, mode="max")
 
