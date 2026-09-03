@@ -11,7 +11,7 @@ from pytorch_forecasting import TimeSeriesDataSet
 
 from src.utils.utils import get_run_root
 # TFTDatasetConfig imported locally in functions to match original pattern
-from configs.data import CATEGORICAL_COLUMNS, INDEX_COLUMNS
+from configs.data import CATEGORICAL_COLUMNS, INDEX_COLUMNS, MAX_CONTEXT_LENGTH
 
 
 from pytorch_forecasting.data.encoders import NaNLabelEncoder
@@ -145,10 +145,13 @@ def create_train_dataset(session_state: Dict) -> Tuple[TimeSeriesDataSet, Any]:
     pretrained_encoders = _build_union_encoders(session_state, categorical_cols, add_nan=False)
     config.pretrained_categorical_encoders = pretrained_encoders
 
-    min_encoder_length, _ = config.resolve_encoder_lengths()
+    # The threshold uses the longest context under comparison, not this
+    # config's, so a short-encoder run trains on exactly the groups a
+    # long-encoder run does.
+    config.resolve_encoder_lengths()
     train_data = drop_underlength_groups(
         train_data, config.group_ids, config.time_idx,
-        min_encoder_length + config.min_prediction_length,
+        MAX_CONTEXT_LENGTH + config.min_prediction_length,
     )
 
     params = config.build(features, targets, mode="train")
@@ -270,7 +273,9 @@ def from_train_template(
     )
     data = drop_underlength_groups(
         data, train_dataset.group_ids, train_dataset.time_idx,
-        train_dataset.min_encoder_length + prediction_length,
+        # Again the longest context, so every encoder length is scored on the
+        # same trajectories rather than on whichever ones its own window fits.
+        MAX_CONTEXT_LENGTH + prediction_length,
     )
     if isinstance(train_dataset, DatasetTemplate):
         return train_dataset.build(data, mode=mode)

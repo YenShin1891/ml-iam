@@ -467,9 +467,17 @@ def test_stratifying_by_an_unsearched_parameter_is_rejected():
         )
 
 
-def test_only_the_lstm_stratifies_and_it_does_so_by_context_length():
+def test_no_model_stratifies_stage_two_by_default():
+    """Stratifying is available but unused: the LSTM's per-sequence-length
+    comparison went away once explicit lag features did."""
     import configs.models as models
 
-    assert models.LSTMSearchSpace().stage2_stratify_by == "sequence_length"
-    assert models.TFTSearchSpace().stage2_stratify_by is None
-    assert models.XGBSearchSpace().stage2_stratify_by is None
+    for space in (models.LSTMSearchSpace(), models.TFTSearchSpace(), models.XGBSearchSpace()):
+        assert space.stage2_stratify_by is None
+
+
+def test_every_model_searches_the_same_context_lengths():
+    import configs.models as models
+    from configs.data import CONTEXT_LENGTHS
+
+    assert set(models.LSTMSearchSpace().distributions["sequence_length"].values) == set(CONTEXT_LENGTHS)

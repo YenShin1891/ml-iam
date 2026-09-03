@@ -76,15 +76,13 @@ class LSTMSearchSpace(SearchSpace):
                 # no penalty at all.
                 "weight_decay": LogUniform(1e-8, 1e-3),
                 "embedding_dim": IntLogUniform(4, 64, multiple_of=4),
-                # Structural, and only a handful of settings are meaningful.
-                "sequence_length": Choice([1, 2, 3, 4]),
+                # Context length, held to the two settings the three models
+                # are being compared at.  Structural, so genuinely discrete.
+                "sequence_length": Choice([2, 3]),
             },
             n_trials=50,
             stage1_budget={"max_epochs": 20, "patience": 3},
             stage2_top_k=10,
-            # Every context length gets a full-budget refit, so the
-            # per-sequence-length comparison comes from one schedule.
-            stage2_stratify_by="sequence_length",
             seed=0,
         )
         defaults.update(overrides)

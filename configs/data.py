@@ -64,6 +64,16 @@ CATEGORICAL_COLUMNS = ['Region', 'Model_Family']
 
 # Feature engineering knobs for downstream (kept here for single stop)
 MAX_SERIES_LENGTH = 15  # try not to exceed average length(=17) for tft
+
+# How much history each model may look back over, and the settings the three
+# are compared at.  A longer context leaves fewer usable windows in a series,
+# so every variant is scored on the geometry of the LONGEST one
+# (MAX_CONTEXT_LENGTH): same groups, same predicted steps, the only
+# difference being how much history the model was given.  Otherwise a longer
+# context looks better merely for being scored on fewer, easier elements.
+CONTEXT_LENGTHS = (2, 3)
+MAX_CONTEXT_LENGTH = max(CONTEXT_LENGTHS)
+
 N_LAG_FEATURES = 2
 MAX_YEAR = 2100  # Upper inclusive cutoff for usable year columns
 
