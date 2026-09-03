@@ -5,20 +5,10 @@ import json
 import pandas as pd
 import pytest
 
+import configs.data as data_config
 import src.utils.run_store as run_store_module
 from src.data.preprocess import resolve_categorical_vocabularies
 from src.utils.run_store import RunStore
-
-import configs.data as data_config
-
-
-@pytest.fixture(autouse=True)
-def _reset_region_globals():
-    data_config.REGION_CATEGORIES.clear()
-    data_config.REGION_CODE_TO_LABEL.clear()
-    yield
-    data_config.REGION_CATEGORIES.clear()
-    data_config.REGION_CODE_TO_LABEL.clear()
 
 
 @pytest.fixture

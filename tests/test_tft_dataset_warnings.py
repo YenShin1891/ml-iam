@@ -19,6 +19,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+pytest.importorskip("torch")
+pytest.importorskip("pytorch_forecasting")
+
 from configs.data import INDEX_COLUMNS, OUTPUT_VARIABLES
 from configs.models.tft import NamelessStandardScaler
 from src.data.preprocess import observed_mask_columns

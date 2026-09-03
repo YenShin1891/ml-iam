@@ -220,8 +220,7 @@ def test_the_search_and_the_final_fit_build_the_same_model_config():
     trial = lstm_config_from_params(params, max_epochs=20, patience=3, devices=1)
     final = lstm_config_from_params(params)
 
-    architecture = [n for n in LSTM_TUNABLE_PARAMS]
-    for name in architecture:
+    for name in LSTM_TUNABLE_PARAMS:
         assert getattr(trial, name) == getattr(final, name), name
     # ...and they differ only in how long they train.
     assert trial.max_epochs != final.max_epochs

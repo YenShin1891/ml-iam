@@ -9,6 +9,9 @@ into every call on its way to Lightning.
 
 import pytest
 
+pytest.importorskip("torch")
+pytest.importorskip("pytorch_forecasting")
+
 from src.trainers.tft_model import MaskedTFT, SyncedTFT
 
 

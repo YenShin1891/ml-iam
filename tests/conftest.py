@@ -1,13 +1,25 @@
 """Shared fixtures for the ml-iam test suite."""
 
 import os
-import sys
 
 import numpy as np
 import pandas as pd
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import configs.data as data_config
+
+# Plots are written to files; never try to open a window.
+os.environ.setdefault("MPLBACKEND", "Agg")
+
+
+@pytest.fixture(autouse=True)
+def _reset_region_globals():
+    """Vocabulary derivation fills these module globals; no test inherits another's."""
+    data_config.REGION_CATEGORIES.clear()
+    data_config.REGION_CODE_TO_LABEL.clear()
+    yield
+    data_config.REGION_CATEGORIES.clear()
+    data_config.REGION_CODE_TO_LABEL.clear()
 
 
 @pytest.fixture

@@ -15,15 +15,6 @@ from src.data.preprocess import (
 FEATURES = ["feat", "Region", "Model_Family"]
 
 
-@pytest.fixture(autouse=True)
-def _reset_region_categories():
-    data_config.REGION_CATEGORIES.clear()
-    data_config.REGION_CODE_TO_LABEL.clear()
-    yield
-    data_config.REGION_CATEGORIES.clear()
-    data_config.REGION_CODE_TO_LABEL.clear()
-
-
 @pytest.fixture
 def keep_partial(monkeypatch):
     monkeypatch.setattr(data_config, "KEEP_PARTIAL_TARGETS", True)

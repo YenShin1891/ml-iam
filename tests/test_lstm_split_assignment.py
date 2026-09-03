@@ -103,12 +103,10 @@ def test_a_label_keeps_one_code_across_the_splits(store, data):
     """Encoding each split against its own frame would renumber them."""
     splits = derive_splits(data, store)
 
-    seen = {}
+    vocabulary = store.load_categories()["Region"]
+    labels = data[["Model", "Scenario", "Region"]].drop_duplicates()
     for name in ("train_data", "val_data", "test_data"):
         frame = splits[name]
-        for code in frame["Region"].unique():
-            rows = frame[frame["Region"] == code]
-            seen.setdefault(int(code), set()).add(len(rows) > 0)
-
-    vocabulary = store.load_categories()["Region"]
-    assert all(0 <= code < len(vocabulary) for code in seen)
+        decoded = frame["Region"].map(lambda code: vocabulary[int(code)])
+        expected = frame[["Model", "Scenario"]].merge(labels, on=["Model", "Scenario"], how="left")["Region"]
+        assert decoded.tolist() == expected.tolist(), name
