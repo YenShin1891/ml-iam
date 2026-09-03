@@ -189,6 +189,14 @@ UNIT_ALIASES = {
 }
 
 
+# Labels that decline to say which unit the value is in.  A price whose
+# currency is unknown is a wrong number in a column of US$2010, not a missing
+# one, so these rows go rather than being assumed into the majority unit.
+AMBIGUOUS_UNITS = frozenset({
+    "US$2010/t CO2 or local currency/t CO2",
+})
+
+
 def resolve_units(df: pd.DataFrame):
     """Normalize units and return (df_without_unit, unit_table).
 
@@ -199,6 +207,15 @@ def resolve_units(df: pd.DataFrame):
     year_cols, non_year_cols = _split_year_and_non_year_columns(df)
 
     df["Unit"] = df["Unit"].replace(UNIT_ALIASES)
+
+    ambiguous = df["Unit"].isin(AMBIGUOUS_UNITS)
+    if ambiguous.any():
+        logging.warning(
+            "Dropping %d rows whose unit does not identify itself: %s",
+            int(ambiguous.sum()),
+            dict(df.loc[ambiguous, "Unit"].value_counts()),
+        )
+        df = df.loc[~ambiguous].copy()
 
     # EJ/yr → PJ/yr (×1000)
     mask = df["Unit"] == "EJ/yr"

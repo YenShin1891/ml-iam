@@ -79,3 +79,43 @@ def test_aliased_variables_no_longer_warn(caplog):
         resolve_units(df)
 
     assert "more than one unit" not in caplog.text
+
+
+def test_a_unit_that_will_not_name_itself_is_dropped(caplog):
+    # "or local currency" admits the value may not be US$2010 at all.
+    rows = make_frame([
+        ("Price|Carbon", "US$2010/t CO2", 50.0),
+        ("Price|Carbon", "US$2010/t CO2 or local currency/t CO2", 50.0),
+    ])
+
+    with caplog.at_level("WARNING"):
+        df, unit_table = resolve_units(rows)
+
+    assert list(unit_table["Unit"]) == ["US$2010/t CO2"]
+    assert list(df["2020"]) == [50.0]
+    assert "does not identify itself" in caplog.text
+
+
+def test_dropping_the_ambiguous_rows_settles_the_mixed_unit_warning(caplog):
+    rows = make_frame([
+        ("Price|Carbon", "US$2010/t CO2", 50.0),
+        ("Price|Carbon", "US$2010/t CO2 or local currency/t CO2", 50.0),
+    ])
+
+    with caplog.at_level("WARNING"):
+        resolve_units(rows)
+
+    assert "more than one unit" not in caplog.text
+
+
+def test_the_conversions_still_run_after_rows_are_dropped():
+    # The drop reindexes the frame; the rescales below must still land.
+    rows = make_frame([
+        ("Price|Carbon", "US$2010/t CO2 or local currency/t CO2", 50.0),
+        ("V", "EJ/yr", 2.0),
+    ])
+
+    df, unit_table = resolve_units(rows)
+
+    assert list(unit_table["Unit"]) == ["PJ/yr"]
+    assert list(df["2020"]) == [2000.0]
