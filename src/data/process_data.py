@@ -170,6 +170,25 @@ def _split_year_and_non_year_columns(df: pd.DataFrame) -> Tuple[List[str], List[
     return year_cols, non_year_cols
 
 
+# Labels that name a unit already spelled another way, so a variable is not
+# reported in two "different" units when only the spelling differs.  These
+# need relabelling, not rescaling:
+#
+#   Int$ at PPP is defined as the US dollar's purchasing power in the base
+#   year, and the AR6 World medians for GDP|PPP agree under both labels to
+#   within scenario spread, so they are the same quantity.
+#
+# The map is explicit rather than a case fold because folding would also
+# rewrite "PJ/yr" or "US$2010/GJ", which reach the unit table as they are,
+# and would collide with the exact-match conversions below.
+UNIT_ALIASES = {
+    "Million": "million",
+    "Million ha": "million ha",
+    "Million t DM/yr": "million t DM/yr",
+    "billion Int$2010/yr": "billion US$2010/yr",
+}
+
+
 def resolve_units(df: pd.DataFrame):
     """Normalize units and return (df_without_unit, unit_table).
 
@@ -178,6 +197,8 @@ def resolve_units(df: pd.DataFrame):
     df = df.copy(deep=True)
 
     year_cols, non_year_cols = _split_year_and_non_year_columns(df)
+
+    df["Unit"] = df["Unit"].replace(UNIT_ALIASES)
 
     # EJ/yr → PJ/yr (×1000)
     mask = df["Unit"] == "EJ/yr"
