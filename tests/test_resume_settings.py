@@ -26,7 +26,7 @@ def _args(**overrides):
         run_id="tft_91",
         keep_partial_targets=None,
         target_normalizer_mode=None,
-        two_window=False,
+        two_window=None,
         dataset=None,
     )
     defaults.update(overrides)
@@ -78,6 +78,19 @@ def test_runs_without_a_recorded_config_are_untouched(run_dir):
     _apply_run_settings(args)
 
     assert args == _args()
+
+
+def test_an_explicit_no_wins_over_the_record(run_dir, caplog):
+    """False is a choice (--no-keep-partial-targets), not an absent setting."""
+    _write_resolved(run_dir, keep_partial_targets=True, two_window=True)
+    args = _args(keep_partial_targets=False, two_window=False)
+
+    with caplog.at_level("WARNING"):
+        _apply_run_settings(args)
+
+    assert args.keep_partial_targets is False
+    assert args.two_window is False
+    assert caplog.text.count("overrides") == 2
 
 
 def test_unreadable_config_does_not_crash_the_phase(run_dir, caplog):

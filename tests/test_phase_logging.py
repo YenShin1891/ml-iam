@@ -22,7 +22,7 @@ def args():
     class Args:
         dataset = None
         target_normalizer_mode = None
-        two_window = False
+        two_window = None
         keep_partial_targets = None
         note = None
 

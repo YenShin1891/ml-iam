@@ -153,7 +153,9 @@ def _apply_run_settings(args) -> None:
         current = getattr(args, name, None)
         if recorded is None:
             continue
-        if current is None or current is False:
+        # Only None means "not given": --no-keep-partial-targets and
+        # --no-two-window are explicit choices that must win over the record.
+        if current is None:
             if current != recorded:
                 logging.info("Using %s=%r recorded for run %s", name, recorded, args.run_id)
                 setattr(args, name, recorded)
@@ -187,7 +189,7 @@ def _log_run_header(run_id: str, model: str, args, resolved: dict) -> None:
         value = getattr(args, name, None)
         if value is None:
             value = resolved.get(name)
-        if value not in (None, False):
+        if value is not None:
             lines.append(f"{name}={value}")
 
     logging.info("=== Run %s: %s ===", run_id, " | ".join(lines))
@@ -248,7 +250,12 @@ def parse_arguments(argv=None):
     parser.add_argument("--resume", type=str, choices=_ALLOWED_PHASES, help="Resume from a specific phase.")
     parser.add_argument("--note", type=str, help="Note describing the run.")
     parser.add_argument("--dataset", type=str, help="Dataset version subdirectory.")
-    parser.add_argument("--two-window", action="store_true", help="Two-window prediction (TFT only).")
+    parser.add_argument(
+        "--two-window",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Two-window prediction (TFT only; default from the run's recorded config).",
+    )
     parser.add_argument(
         "--target-normalizer-mode",
         type=str,

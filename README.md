@@ -173,7 +173,8 @@ Each run records its resolved settings in `meta/run_config.resolved.json`, and a
 resumed phase reads them back, so it runs under the same `dataset`,
 `two_window`, `target_normalizer_mode` and `keep_partial_targets` the run was
 created with. Passing one of those explicitly overrides the recorded value and
-logs that it did.
+logs that it did. A continuation never rewrites that file; it adds a
+`meta/run_config.resume.<timestamp>.json` beside it instead.
 
 ### Step 5: Train
 

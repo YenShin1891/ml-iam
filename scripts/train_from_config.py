@@ -19,28 +19,18 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-
-_ALLOWED_MODELS = {"xgb", "lstm", "tft"}
-_ALLOWED_PHASES = {"preprocess", "search", "train", "test", "plot"}
-
-def _assert_run_dir_exists(run_id: str) -> None:
-    from src.utils.utils import get_run_root
-
-    run_root = Path(get_run_root(run_id))
-    if not run_root.exists() or not run_root.is_dir():
-        raise FileNotFoundError(
-            f"Cannot resume run '{run_id}': run directory does not exist at {run_root}. "
-            "Check run_id or run preprocess/full pipeline first."
-        )
+from scripts.train import _ALLOWED_MODELS, _ALLOWED_PHASES, _assert_resume_run_exists
 
 
 @dataclass(frozen=True)
 class RunConfig:
     model: str
     phases: Tuple[str, ...]
+    resume: Optional[str] = None  # the phase 'resume' named, when it did
     run_id: Optional[str] = None
     dataset: Optional[str] = None
     cuda_visible_devices: Optional[str] = None
@@ -136,7 +126,7 @@ def _parse_cuda_by_phase(value: Any) -> Dict[str, Optional[str]]:
     return out
 
 
-def _parse_config(obj: Dict[str, Any], *, config_path: Path) -> RunConfig:
+def _parse_config(obj: Dict[str, Any]) -> RunConfig:
     model_raw = obj.get("model")
     if not isinstance(model_raw, str) or not model_raw.strip():
         raise ValueError("run config must include non-empty 'model'")
@@ -153,9 +143,12 @@ def _parse_config(obj: Dict[str, Any], *, config_path: Path) -> RunConfig:
     if resume_obj is not None:
         if not isinstance(resume_obj, str):
             raise ValueError("'resume' must be a string phase name")
-        phases = [resume_obj.strip().lower()]
+        resume_obj = resume_obj.strip().lower()
+        phases = [resume_obj]
     elif phases_obj is None:
-        phases = ["search", "train", "test", "plot"]
+        # A new run needs preprocess first: every later phase reads the
+        # cached data it writes.
+        phases = list(_ALLOWED_PHASES)
     else:
         if not isinstance(phases_obj, (list, tuple)):
             raise ValueError("'phases' must be a list of phase names")
@@ -209,6 +202,7 @@ def _parse_config(obj: Dict[str, Any], *, config_path: Path) -> RunConfig:
     return RunConfig(
         model=model,
         phases=tuple(phases),
+        resume=resume_obj,
         run_id=run_id,
         dataset=dataset,
         cuda_visible_devices=cuda_visible_devices,
@@ -245,6 +239,14 @@ def _build_phase_argv(cfg: RunConfig, *, phase: str, run_id: str) -> List[str]:
     return argv
 
 
+def _meta_dir(run_id: str) -> Path:
+    from src.utils.utils import get_run_root
+
+    meta_dir = Path(get_run_root(run_id)) / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    return meta_dir
+
+
 def _write_run_metadata(
     cfg: RunConfig,
     *,
@@ -253,13 +255,8 @@ def _write_run_metadata(
     env: Dict[str, str],
     cuda_by_phase_resolved: Dict[str, Optional[str]],
 ) -> None:
-    from src.utils.utils import get_run_root
-
-    run_root = Path(get_run_root(run_id))
-    run_root.mkdir(parents=True, exist_ok=True)
-
-    meta_dir = run_root / "meta"
-    meta_dir.mkdir(parents=True, exist_ok=True)
+    """Record a new run's settings: what scripts/train.py reads back on resume."""
+    meta_dir = _meta_dir(run_id)
 
     # Copy the original run file for provenance
     try:
@@ -304,9 +301,46 @@ def _write_run_metadata(
     )
 
 
-def _effective_phases(cfg: RunConfig) -> Tuple[str, ...]:
-    """Return the phases that will actually execute."""
-    return tuple(cfg.phases)
+def _write_resume_record(
+    cfg: RunConfig,
+    *,
+    run_id: str,
+    config_path: Path,
+    cuda_by_phase_resolved: Dict[str, Optional[str]],
+) -> None:
+    """Record a continuation without touching the run's original settings.
+
+    run_config.resolved.json is what a resumed phase inherits its dataset,
+    two_window, target_normalizer_mode and keep_partial_targets from.
+    Rewriting it from a resume YAML that only names run_id and the phase
+    used to blank those settings before the phase could read them.
+    """
+    record = {
+        "config_path": str(config_path),
+        "phases": list(cfg.phases),
+        "cuda_visible_devices_resolved_by_phase": dict(cuda_by_phase_resolved),
+        "overrides": {
+            name: getattr(cfg, name)
+            for name in ("dataset", "two_window", "target_normalizer_mode", "keep_partial_targets", "note")
+            if getattr(cfg, name) not in (None, False)
+        },
+        "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _meta_dir(run_id).joinpath(f"run_config.resume.{stamp}.json").write_text(
+        json.dumps(record, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def _continues_existing_run(cfg: RunConfig) -> bool:
+    """Whether the config picks up a run that already exists on disk.
+
+    That is any 'resume', and any explicit run_id whose phases do not start
+    from preprocess: everything after preprocess reads what an earlier phase
+    of that run cached.
+    """
+    return cfg.resume is not None or (cfg.run_id is not None and cfg.phases[0] != "preprocess")
 
 
 def _validate_model_constraints(cfg: RunConfig) -> None:
@@ -315,10 +349,11 @@ def _validate_model_constraints(cfg: RunConfig) -> None:
             f"run_id '{cfg.run_id}' does not match model '{cfg.model}'. Expected prefix '{cfg.model}_'."
         )
 
-    # When using resume (single phase) without run_id, it cannot work.
-    if len(cfg.phases) == 1 and cfg.phases[0] in _ALLOWED_PHASES and cfg.run_id is None and cfg.phases[0] != "search":
-        # search could create a new run_id; other phases require an existing run.
-        raise ValueError("run_id is required when running a single resume phase other than 'search'")
+    if cfg.run_id is None and cfg.phases[0] != "preprocess":
+        raise ValueError(
+            f"phases start with '{cfg.phases[0]}' but no run_id is set: a new run must begin "
+            "with 'preprocess', and any later phase needs the run_id of a run that already ran it."
+        )
 
 
 def _allocate_run_id(cfg: RunConfig) -> str:
@@ -365,16 +400,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     config_path = (repo_root / args.run).resolve() if not os.path.isabs(args.run) else Path(args.run).resolve()
 
     obj = _load_run_file(config_path)
-    has_resume_field = obj.get("resume") is not None
-    cfg = _parse_config(obj, config_path=config_path)
+    cfg = _parse_config(obj)
     _validate_model_constraints(cfg)
 
     run_id = _allocate_run_id(cfg)
+    phases = cfg.phases
 
-    phases = _effective_phases(cfg)
-
-    if has_resume_field:
-        _assert_run_dir_exists(run_id)
+    continuing = _continues_existing_run(cfg)
+    if continuing:
+        # Before anything below creates the directory, which would let the
+        # child's own existence check pass on an empty run.
+        _assert_resume_run_exists(run_id)
 
     # Prepare env for subprocesses
     child_env = dict(os.environ)
@@ -395,15 +431,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if has_override:
             cuda_resolved[phase] = value
 
-    # Persist resolved config/env snapshot under the run directory
-    # (We write this before phases so a crashed run still records intent.)
-    _write_run_metadata(
-        cfg,
-        run_id=run_id,
-        config_path=config_path,
-        env=child_env,
-        cuda_by_phase_resolved=cuda_resolved,
-    )
+    # Persist the run's settings before any phase runs, so a crashed run
+    # still records intent.  A continuation keeps the original record.
+    if continuing:
+        _write_resume_record(
+            cfg, run_id=run_id, config_path=config_path, cuda_by_phase_resolved=cuda_resolved,
+        )
+    else:
+        _write_run_metadata(
+            cfg,
+            run_id=run_id,
+            config_path=config_path,
+            env=child_env,
+            cuda_by_phase_resolved=cuda_resolved,
+        )
 
     print(run_id, flush=True)
 
