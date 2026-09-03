@@ -1,6 +1,6 @@
-import inspect
 import logging
 import os
+import sys
 from datetime import datetime
 from typing import Optional
 
@@ -77,7 +77,7 @@ def _make_formatter(fmt: str = '%(asctime)s - %(levelname)s - %(message)s') -> l
 
 
 def _make_stream_handler(level: int = logging.INFO, fmt: Optional[str] = None) -> logging.Handler:
-    """Create a StreamHandler with KST formatting."""
+    """Create a StreamHandler with local-time formatting."""
     h = logging.StreamHandler()
     if fmt is None:
         fmt = '%(asctime)s - %(levelname)s - %(message)s'
@@ -87,7 +87,7 @@ def _make_stream_handler(level: int = logging.INFO, fmt: Optional[str] = None) -
 
 
 def _make_file_handler(file_path: str, level: int = logging.INFO, fmt: Optional[str] = None) -> logging.Handler:
-    """Create a FileHandler with KST formatting."""
+    """Create a FileHandler with local-time formatting."""
     h = logging.FileHandler(file_path)
     if fmt is None:
         fmt = '%(asctime)s - %(levelname)s - %(message)s'
@@ -98,7 +98,7 @@ def _make_file_handler(file_path: str, level: int = logging.INFO, fmt: Optional[
 
 def setup_console_logging(level: int = logging.INFO, logger_name: Optional[str] = None) -> logging.Logger:
     """
-    Configure a logger to log to console only using the same KST format as training.
+    Configure a logger to log to console only using the same format as training.
 
     Args:
         level: Logging level (default INFO)
@@ -119,12 +119,17 @@ def setup_console_logging(level: int = logging.INFO, logger_name: Optional[str] 
 
 
 def setup_logging(run_id, log_file=None):
-    """
-    Set up logging with a log file under the specified run directory.
+    """Log to the console and to logs/<caller>.log under the run directory.
+
+    Re-entrant: a process that switches runs (the dashboard) gets the new
+    file rather than basicConfig's silent no-op once handlers exist.
+    Lightning attaches its own stream handler and stops propagating when it
+    is imported before the root logger has handlers, so it is pointed back
+    at the root here either way.
     """
     if log_file is None:
-        caller_filename = inspect.stack()[1].filename
-        log_file = os.path.basename(caller_filename).split('.')[0] + ".log"
+        caller_filename = sys._getframe(1).f_code.co_filename
+        log_file = os.path.splitext(os.path.basename(caller_filename))[0] + ".log"
 
     log_dir = os.path.join(get_run_root(run_id), "logs")
     os.makedirs(log_dir, exist_ok=True)
@@ -134,7 +139,11 @@ def setup_logging(run_id, log_file=None):
         _make_file_handler(os.path.join(log_dir, log_file), logging.INFO),
     ]
 
-    logging.basicConfig(level=logging.INFO, handlers=handlers)
+    logging.basicConfig(level=logging.INFO, handlers=handlers, force=True)
+    for name in ("lightning.pytorch", "lightning.fabric"):
+        library_logger = logging.getLogger(name)
+        library_logger.handlers.clear()
+        library_logger.propagate = True
     # Every phase runs in its own process and sets logging up again; the phase
     # banner marks where each one starts, so this only needs to be findable
     # when debugging the logging itself.
@@ -159,17 +168,8 @@ def get_next_run_id(model_type: str) -> str:
         for d in os.listdir(model_results_dir)
         if os.path.isdir(os.path.join(model_results_dir, d)) and d.startswith(f"{model_type}_")
     ]
-    run_numbers = []
-    for d in existing_runs:
-        try:
-            suffix = d.split("_", 1)[1]
-        except Exception:
-            continue
-        if suffix.isdigit():
-            try:
-                run_numbers.append(int(suffix))
-            except Exception:
-                continue
+    suffixes = (d.split("_", 1)[1] for d in existing_runs)
+    run_numbers = [int(suffix) for suffix in suffixes if suffix.isdigit()]
     candidate = max(run_numbers, default=0) + 1
 
     # Atomically reserve a unique run directory.

@@ -18,7 +18,12 @@ _ALLOWED_MODELS = ("xgb", "lstm", "tft")
 _ALLOWED_PHASES = ("preprocess", "search", "train", "test", "plot")
 
 def _seed(model: str) -> None:
-    """Set reproducibility seeds. Lazy-imports to avoid pulling in torch for XGB."""
+    """Set reproducibility seeds. Lazy-imports to avoid pulling in torch for XGB.
+
+    Call it after setup_logging: Lightning, imported here, attaches its own
+    stream handler and stops propagating to the root logger when the root has
+    no handlers yet, and then none of its messages reach train.log.
+    """
     import numpy as np
     np.random.seed(0)
     if model in ("lstm", "tft"):
@@ -283,8 +288,6 @@ def main(argv=None):
     args = parse_arguments(argv)
     model = args.model
 
-    _seed(model)
-
     from src.utils.utils import setup_logging, get_next_run_id, is_primary_rank
     from src.utils.run_store import RunStore
 
@@ -309,6 +312,7 @@ def main(argv=None):
             )
         run_id = get_next_run_id(model)
         setup_logging(run_id)
+        _seed(model)
 
         store = RunStore(run_id)
         _log_run_header(run_id, model, args, {"phases": list(_ALLOWED_PHASES)})
@@ -322,6 +326,7 @@ def main(argv=None):
     _assert_resume_run_exists(run_id)
     if is_primary_rank():
         setup_logging(run_id)
+    _seed(model)
 
     store = RunStore(run_id)
 
