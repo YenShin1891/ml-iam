@@ -28,8 +28,8 @@ STAGE_3_PARAMS: Dict[str, Any] = {
     'max_depth': None,  # Will be set from stage 1 best
     'min_child_weight': None,  # Will be set from stage 1 best
     'gamma': [0, 0.1],
-    'eta': None,  # Will be set from stage 3 best
-    'num_boost_round': None,  # Will be set from stage 3 best
+    'eta': None,  # Will be set from stage 2 best
+    'num_boost_round': None,  # Will be set from stage 2 best
     'reg_alpha': [0, 1, 5, 10],
     'reg_lambda': [0.1, 1, 10]
 }

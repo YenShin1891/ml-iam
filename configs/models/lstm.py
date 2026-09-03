@@ -2,11 +2,6 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Union, Optional
 
 
-
-@dataclass
-class LSTMDatasetConfig:
-    """Configuration for LSTM dataset feature separation."""
-
 @dataclass
 class LSTMTrainerConfig:
     """Training configuration for LSTM model, following TFT pattern."""
@@ -52,33 +47,6 @@ class LSTMTrainerConfig:
     # Early stopping
     monitor: str = "val_loss"
     mode: str = "min"
-
-    # Logging
-    log_every_n_steps: int = 10
-
-    def build_optimizer_params(self) -> Dict[str, Any]:
-        """Build optimizer parameters."""
-        params = {
-            "lr": self.learning_rate,
-        }
-
-        if self.optimizer.lower() == "adam":
-            params["weight_decay"] = self.weight_decay
-        elif self.optimizer.lower() == "sgd":
-            params["momentum"] = self.scheduler_params.get("momentum", 0.9)
-            params["weight_decay"] = self.weight_decay
-
-        return params
-
-    def build_scheduler_params(self) -> Optional[Dict[str, Any]]:
-        """Build scheduler parameters."""
-        if self.scheduler is None:
-            return None
-
-        base_params = {"optimizer": None}  # Will be set by trainer
-        base_params.update(self.scheduler_params)
-
-        return base_params
 
 
 @dataclass
@@ -130,7 +98,6 @@ class LSTMSearchSpace:
 
 
 __all__ = [
-    "LSTMDatasetConfig",
     "LSTMTrainerConfig",
     "LSTMSearchSpace",
 ]

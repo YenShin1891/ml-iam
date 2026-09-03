@@ -14,7 +14,6 @@ _SUBMODULE_BY_NAME = {
     "TFTSearchSpace": "tft_search",
     "XGBTrainerConfig": "xgb",
     "XGBSearchSpace": "xgb_search",
-    "LSTMDatasetConfig": "lstm",
     "LSTMTrainerConfig": "lstm",
     "LSTMSearchSpace": "lstm",
 }
@@ -40,7 +39,7 @@ def __dir__():
 
 
 if TYPE_CHECKING:  # keep the names visible to type checkers and IDEs
-    from .lstm import LSTMDatasetConfig, LSTMSearchSpace, LSTMTrainerConfig
+    from .lstm import LSTMSearchSpace, LSTMTrainerConfig
     from .tft import TFTDatasetConfig, TFTTrainerConfig
     from .tft_search import TFTSearchSpace
     from .xgb import XGBTrainerConfig

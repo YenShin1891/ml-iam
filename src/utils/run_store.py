@@ -18,6 +18,7 @@ import pickle
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 from src.utils.utils import get_run_root
@@ -35,21 +36,28 @@ class RunStore:
     # ------------------------------------------------------------------
 
     def _cache_dir(self) -> Path:
-        d = self.root / "cache"
-        d.mkdir(parents=True, exist_ok=True)
-        return d
+        return self.root / "cache"
 
     def _artifacts_dir(self) -> Path:
-        d = self.root / "artifacts"
-        d.mkdir(parents=True, exist_ok=True)
-        return d
+        return self.root / "artifacts"
+
+    @staticmethod
+    def _writable(path: Path) -> Path:
+        """*path* with its directory in place; only the save_* methods create one.
+
+        Probing a run (has_*, load_*) must not create it: get_next_run_id
+        numbers runs by the directories that exist, so a mistyped dashboard
+        URL would otherwise reserve a run id.
+        """
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
 
     # ------------------------------------------------------------------
     # Cache: expensive preprocessing (melt + pivot_table)
     # ------------------------------------------------------------------
 
     def save_processed_data(self, df: pd.DataFrame) -> None:
-        path = self._cache_dir() / "processed_data.parquet"
+        path = self._writable(self._cache_dir() / "processed_data.parquet")
         df.to_parquet(path, index=False)
         logging.info("Saved processed data (%d rows) to %s", len(df), path)
 
@@ -71,7 +79,7 @@ class RunStore:
     # ------------------------------------------------------------------
 
     def save_best_params(self, params: dict) -> None:
-        path = self._artifacts_dir() / "best_params.json"
+        path = self._writable(self._artifacts_dir() / "best_params.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(params, f, indent=2, default=str)
         logging.info("Saved best_params to %s", path)
@@ -91,7 +99,7 @@ class RunStore:
     # ------------------------------------------------------------------
 
     def save_features(self, features: List[str], targets: List[str]) -> None:
-        path = self._artifacts_dir() / "features.json"
+        path = self._writable(self._artifacts_dir() / "features.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"features": features, "targets": targets}, f, indent=2)
         logging.info("Saved features (%d) and targets (%d) to %s", len(features), len(targets), path)
@@ -109,7 +117,7 @@ class RunStore:
     # ------------------------------------------------------------------
 
     def save_categories(self, categories: Dict[str, List[str]]) -> None:
-        path = self._artifacts_dir() / "categories.json"
+        path = self._writable(self._artifacts_dir() / "categories.json")
         payload = {col: list(values) for col, values in categories.items()}
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
@@ -176,7 +184,7 @@ class RunStore:
     # ------------------------------------------------------------------
 
     def save_splits(self, assignment: pd.DataFrame) -> None:
-        path = self._artifacts_dir() / "splits.parquet"
+        path = self._writable(self._artifacts_dir() / "splits.parquet")
         assignment.to_parquet(path, index=False)
         counts = assignment["split"].value_counts().to_dict()
         logging.info("Saved split assignment (%d groups: %s) to %s", len(assignment), counts, path)
@@ -294,7 +302,7 @@ class RunStore:
     # ------------------------------------------------------------------
 
     def save_train_meta(self, meta: dict) -> None:
-        path = self._artifacts_dir() / "train_meta.json"
+        path = self._writable(self._artifacts_dir() / "train_meta.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2, default=str)
         logging.info("Saved train metadata to %s", path)
@@ -315,8 +323,7 @@ class RunStore:
 
     def save_test_data(self, test_data: pd.DataFrame, y_test) -> None:
         """Save test split and targets for dashboard use."""
-        import numpy as np
-        td_path = self._cache_dir() / "test_data.parquet"
+        td_path = self._writable(self._cache_dir() / "test_data.parquet")
         test_data.to_parquet(td_path, index=False)
         yt_path = self._cache_dir() / "y_test.npy"
         np.save(yt_path, y_test)
@@ -324,9 +331,10 @@ class RunStore:
 
     def load_test_data(self):
         """Load cached test split and targets."""
-        import numpy as np
         td_path = self._cache_dir() / "test_data.parquet"
         yt_path = self._cache_dir() / "y_test.npy"
+        if not (td_path.exists() and yt_path.exists()):
+            raise FileNotFoundError(f"No cached test data under {self._cache_dir()}. Run the test phase first.")
         test_data = pd.read_parquet(td_path)
         y_test = np.load(yt_path)
         return test_data, y_test
@@ -344,7 +352,7 @@ class RunStore:
         horizon_df: Optional[pd.DataFrame] = None,
         horizon_y_true=None,
     ) -> None:
-        path = self._artifacts_dir() / "predictions.pkl"
+        path = self._writable(self._artifacts_dir() / "predictions.pkl")
         payload: Dict[str, Any] = {"preds": preds}
         if horizon_df is not None:
             payload["horizon_df"] = horizon_df
@@ -369,7 +377,7 @@ class RunStore:
     # ------------------------------------------------------------------
 
     def save_artifact(self, name: str, obj: Any) -> None:
-        path = self._artifacts_dir() / name
+        path = self._writable(self._artifacts_dir() / name)
         with open(path, "wb") as f:
             pickle.dump(obj, f)
         logging.info("Saved artifact '%s' to %s", name, path)

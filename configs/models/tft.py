@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple, Union
 
-import numpy as np
 import pandas as pd
 import torch
 from pytorch_forecasting.data import EncoderNormalizer
@@ -66,7 +65,7 @@ class TFTDatasetConfig:
     """
 
     time_idx: str = "Step"
-    group_ids: List[str] = field(default_factory=lambda: INDEX_COLUMNS)
+    group_ids: List[str] = field(default_factory=lambda: list(INDEX_COLUMNS))
     max_encoder_length: int = 3
     min_encoder_length: int = 3
     max_prediction_length: int = MAX_SERIES_LENGTH - 3

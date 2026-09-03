@@ -76,29 +76,29 @@ def delete_saved_plot(plot_info):
         return False
 
 
+def _present(defaults, options):
+    """The defaults a multiselect may show: Streamlit rejects one not in *options*."""
+    available = set(options)
+    return [value for value in defaults if value in available]
+
+
 def make_filters(test_data):
     scenario_categories, regions, model_families = get_unique_values(test_data)
-    
-    selected_scenario_categories = st.multiselect(
-        "Select Scenario Categories", options=scenario_categories, default=["C3"]
-    )
-    if selected_scenario_categories != st.session_state.get("selected_scenario_categories", []):
-        st.session_state.selected_scenario_categories = selected_scenario_categories
 
-    selected_regions = st.multiselect(
-        "Select Regions", options=regions, default=["World"]
+    st.session_state.selected_scenario_categories = st.multiselect(
+        "Select Scenario Categories",
+        options=scenario_categories,
+        default=_present(["C3"], scenario_categories),
     )
-    if selected_regions != st.session_state.get("selected_regions", []):
-        st.session_state.selected_regions = selected_regions
-
-    selected_model_families = st.multiselect(
+    st.session_state.selected_regions = st.multiselect(
+        "Select Regions", options=regions, default=_present(["World"], regions)
+    )
+    st.session_state.selected_model_families = st.multiselect(
         "Select Model Families", options=model_families, default=model_families.tolist()
     )
-    if selected_model_families != st.session_state.get("selected_model_families", []):
-        st.session_state.selected_model_families = selected_model_families
 
     if st.button("Make New Plot"):
-            st.session_state.apply_filters_clicked = True
+        st.session_state.apply_filters_clicked = True
 
 def apply_filters():
     logging.info("Applying filters to test data...")
@@ -114,7 +114,7 @@ def apply_filters():
         test_data = horizon_df
         y_test = horizon_y_true
     # XGBoost / generic case: use full test split
-    elif hasattr(st.session_state, 'y_test') and st.session_state.y_test is not None:
+    elif st.session_state.get('y_test') is not None:
         y_test = st.session_state.y_test
         test_data = st.session_state.test_data
     else:
@@ -173,44 +173,11 @@ def filter_and_plot(run_id):
         'metrics': metrics_row
     }
 
-    # Get environment variables for individual plot saving
-    # If you want to save individual plots, use the following command:
-    # nohup bash -c "export SAVE_INDIVIDUAL_PLOTS=true && export INDIVIDUAL_PLOT_INDICES='[0]' && streamlit run scripts/dashboard.py --logger.level=info --server.runOnSave=false -- --run_id=run_37" &
+    # `make dashboard` sets these; see the Makefile's SAVE_PLOTS.
     save_individual = os.getenv('SAVE_INDIVIDUAL_PLOTS', 'false').lower() == 'true'
-    logging.info(f"DEBUG: save_individual = {save_individual}")
-    
-    if save_individual:
-        individual_indices_str = os.getenv('INDIVIDUAL_PLOT_INDICES', '[0]')
-        # Safely parse indices from env var, preferring JSON then literal_eval
-        try:
-            individual_indices = json.loads(individual_indices_str)
-        except json.JSONDecodeError:
-            try:
-                individual_indices = ast.literal_eval(individual_indices_str)
-            except (ValueError, SyntaxError):
-                individual_indices = [0]
+    individual_indices = _individual_plot_indices() if save_individual else []
+    logging.debug("save_individual=%s individual_indices=%s", save_individual, individual_indices)
 
-        # Normalize to list of ints
-        if isinstance(individual_indices, (int, float, str)):
-            try:
-                individual_indices = [int(individual_indices)]
-            except Exception:
-                individual_indices = [0]
-        elif isinstance(individual_indices, (tuple, set)):
-            individual_indices = list(individual_indices)
-
-        if not isinstance(individual_indices, list):
-            individual_indices = [0]
-
-        try:
-            individual_indices = [int(x) for x in individual_indices]
-        except Exception:
-            individual_indices = [0]
-
-        logging.info(f"DEBUG: individual_indices (safe parsed) = {individual_indices}")
-    else:
-        individual_indices = []
-    
     plot_trajectories(
         filtered_test_data,
         filtered_y_test,
@@ -226,8 +193,26 @@ def filter_and_plot(run_id):
 
     # Metrics expander (appears after plot render)
     with st.expander("View Metrics", expanded=True):
-        metrics_df = _compute_filtered_metrics(filtered_y_test, filtered_preds, st.session_state.targets)
         st.dataframe(metrics_df, use_container_width=True)
+
+
+def _individual_plot_indices() -> list:
+    """Indices from INDIVIDUAL_PLOT_INDICES, e.g. "[0, 6]" or "6"; [0] when unparsable."""
+    raw = os.getenv('INDIVIDUAL_PLOT_INDICES', '[0]')
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        try:
+            parsed = ast.literal_eval(raw)
+        except (ValueError, SyntaxError):
+            return [0]
+    if not isinstance(parsed, (list, tuple, set)):
+        parsed = [parsed]
+    try:
+        return [int(x) for x in parsed]
+    except (TypeError, ValueError):
+        return [0]
+
 
 @st.cache_data(show_spinner=False)
 def _compute_filtered_metrics(y_true_filtered: np.ndarray, y_pred_filtered: np.ndarray, targets):
@@ -481,7 +466,7 @@ def handle_filtering_and_plotting(run_id):
     """Handle the filter application and plotting logic."""
     if st.session_state.get("apply_filters_clicked", False):
         apply_filters()
-        if not hasattr(st.session_state, 'target_mask') or st.session_state.target_mask is None:
+        if st.session_state.get('target_mask') is None:
             return
         if st.session_state.target_mask.sum() == 0:
             st.warning("No data selected with the current filters.")
@@ -501,26 +486,13 @@ def parse_args() -> argparse.Namespace:
 def resolve_run_id() -> str:
     # CLI run_id as fallback; allow URL ?run_id= to override; reflect final value
     args = parse_args()
-    run_id = args.run_id
-    try:
-        params = st.query_params  # New stable API replacing experimental_get_query_params
-        vals = params.get("run_id")
-        if isinstance(vals, list) and vals:
-            run_id = vals[0]
-        elif isinstance(vals, str) and vals:
-            run_id = vals
-    except Exception:
-        pass
+    run_id = st.query_params.get("run_id") or args.run_id
 
     # Resolve model-type shortcuts (e.g. "xgb" → "xgb_76")
     run_id = DEFAULT_RUNS.get(run_id, run_id)
 
     # Reflect chosen run_id in URL for bookmarking
-    try:
-        # Update query param using new API (assignment updates the URL)
-        st.query_params["run_id"] = run_id
-    except Exception:
-        pass
+    st.query_params["run_id"] = run_id
     return run_id
 
 def main():

@@ -9,6 +9,14 @@ import logging
 from src.utils.utils import is_primary_rank
 
 
+# Trainer-produced metadata persisted for the test and plot phases.
+_LSTM_TRAIN_META_KEYS = (
+    "lstm_features", "lstm_raw_features", "lstm_non_numeric_features",
+    "lstm_categorical_features", "lstm_num_model_families", "lstm_num_regions",
+    "lstm_sequence_length", "lstm_target_offset",
+)
+
+
 def _default_best_params_from_config() -> dict:
     """Hyperparameters to train with when the search phase is skipped."""
     from src.trainers.lstm_trainer import default_lstm_params
@@ -147,31 +155,16 @@ def train_lstm(store):
         if "lstm_scaler_y" in session_state:
             store.save_artifact("lstm_scaler_y.pkl", session_state["lstm_scaler_y"])
 
-        train_meta = {}
-        for key in ("lstm_features", "lstm_raw_features", "lstm_non_numeric_features",
-                    "lstm_categorical_features", "lstm_num_model_families", "lstm_num_regions",
-                    "lstm_sequence_length", "lstm_target_offset"):
-            if key in session_state:
-                train_meta[key] = session_state[key]
+        train_meta = {key: session_state[key] for key in _LSTM_TRAIN_META_KEYS if key in session_state}
         # Save category vocab so inference encodes consistently
         if splits.get("model_family_categories"):
             train_meta["lstm_model_family_categories"] = splits["model_family_categories"]
         if "lstm_config" in session_state:
+            # Every tunable, so a parameter added to the search cannot be
+            # silently dropped here and fall back to its default at predict time.
+            from src.trainers.lstm_trainer import LSTM_TUNABLE_PARAMS
             cfg = session_state["lstm_config"]
-            train_meta["lstm_config"] = {
-                "hidden_size": cfg.hidden_size,
-                "num_layers": cfg.num_layers,
-                "dropout": cfg.dropout,
-                "bidirectional": cfg.bidirectional,
-                "dense_hidden_size": cfg.dense_hidden_size,
-                "dense_dropout": cfg.dense_dropout,
-                "learning_rate": cfg.learning_rate,
-                "batch_size": cfg.batch_size,
-                "weight_decay": cfg.weight_decay,
-                "sequence_length": cfg.sequence_length,
-                "target_offset": cfg.target_offset,
-                "embedding_dim": cfg.embedding_dim,
-            }
+            train_meta["lstm_config"] = {name: getattr(cfg, name) for name in LSTM_TUNABLE_PARAMS}
         store.save_train_meta(train_meta)
 
         logging.info("Final LSTM training complete.")
@@ -184,9 +177,7 @@ def _build_predict_state(store, splits):
 
     if store.has_train_meta():
         meta = store.load_train_meta()
-        for key in ("lstm_features", "lstm_raw_features", "lstm_non_numeric_features",
-                    "lstm_categorical_features", "lstm_num_model_families", "lstm_num_regions",
-                    "lstm_sequence_length", "lstm_target_offset"):
+        for key in _LSTM_TRAIN_META_KEYS:
             if key in meta:
                 session_state[key] = meta[key]
         if "lstm_config" in meta:
