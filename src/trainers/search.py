@@ -274,7 +274,13 @@ class SearchSpace:
         ``{"max_epochs": 25, "patience": 6}``.  Model-specific by necessity:
         an epoch of TFT is not an epoch of LSTM, and XGBoost counts rounds.
     stage2_top_k:
-        Stage-1 leaders refit under the trainer config's full budget.
+        Stage-1 leaders refit under the trainer config's full budget.  Held to
+        8 across the three models -- the protocol has to be one procedure, so
+        this moves for all of them or none.  Eight is also one wave on an
+        eight-GPU host, which is why it is not ten: the wave count, not the
+        shortlist, is what stage 2 costs in wall-clock.  Raise it to 16 (two
+        waves) if the top 8 of 50 turns out to be too narrow a shortlist for
+        the full-budget refit to pick a clear winner from.
     stage2_stratify_by:
         Parameter whose every sampled value is guaranteed a full-budget refit
         before the remaining stage-2 slots go to the global leaders.  The LSTM
@@ -290,7 +296,7 @@ class SearchSpace:
     distributions: Mapping[str, _DistLike]
     n_trials: int
     stage1_budget: Dict[str, Any] = field(default_factory=dict)
-    stage2_top_k: int = 10
+    stage2_top_k: int = 8
     stage2_stratify_by: Optional[str] = None
     seed: int = 0
 

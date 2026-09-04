@@ -78,7 +78,7 @@ class XGBSearchSpace(SearchSpace):
             },
             n_trials=50,
             stage1_budget={"num_boost_round": 300},
-            stage2_top_k=10,
+            stage2_top_k=8,
             seed=0,
         )
         defaults.update(overrides)

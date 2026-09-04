@@ -82,7 +82,7 @@ class LSTMSearchSpace(SearchSpace):
             },
             n_trials=50,
             stage1_budget={"max_epochs": 20, "patience": 3},
-            stage2_top_k=10,
+            stage2_top_k=8,
             seed=0,
         )
         defaults.update(overrides)
