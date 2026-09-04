@@ -7,7 +7,7 @@ import os
 import queue
 import time
 from functools import lru_cache
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -16,6 +16,7 @@ from lightning.pytorch.callbacks import EarlyStopping
 
 from configs.models import TFTSearchSpace, TFTTrainerConfig
 from .search import (
+    allocate_pool,
     best_trial,
     canonicalize_params,
     completed_trials,
@@ -277,6 +278,18 @@ def _search_worker(gpu_id, trials, train_dataset, val_dataset, n_targets, traine
         )
 
 
+def _build_trials(params_list: List[Dict], stage: str) -> List[Dict]:
+    """Pair each configuration with the identity its rows and logs are filed under."""
+    return [
+        {
+            "params": params,
+            "signature": _params_signature(params),
+            "trial_id": f"{stage}_{_trial_dirname_from_params(params)}",
+        }
+        for params in params_list
+    ]
+
+
 def _run_trials_once(
     train_dataset,
     val_dataset,
@@ -290,14 +303,7 @@ def _run_trials_once(
     if not params_list:
         return []
 
-    trials = []
-    for p in params_list:
-        sig = _params_signature(p)
-        trials.append({
-            "params": p,
-            "signature": sig,
-            "trial_id": f"{stage}_{_trial_dirname_from_params(p)}",
-        })
+    trials = _build_trials(params_list, stage)
 
     gpu_ids = _get_search_gpu_ids()
     if len(gpu_ids) <= 1:
@@ -337,14 +343,41 @@ def _run_trials_once(
     import torch.multiprocessing as mp
 
     logging.info("[%s] Parallel search across %d GPUs: %s", stage, len(gpu_ids), gpu_ids)
-    gpu_trials: List[List[Dict]] = [[] for _ in gpu_ids]
-    for i, trial in enumerate(trials):
-        gpu_trials[i % len(gpu_ids)].append(trial)
-
     ctx = mp.get_context("spawn")
     result_queue = ctx.Queue()
+    processes = _spawn_search_workers(
+        ctx, trials, train_dataset, val_dataset, n_targets,
+        trainer_cfg, result_queue, run_id, stage, gpu_ids,
+    )
+    results = _collect_search_results(processes, result_queue, run_id, stage)
+    _assert_something_was_scored(results, stage)
+    return results
+
+
+def _spawn_search_workers(
+    ctx,
+    trials: List[Dict],
+    train_dataset,
+    val_dataset,
+    n_targets: int,
+    trainer_cfg: TFTTrainerConfig,
+    result_queue,
+    run_id: str,
+    stage: str,
+    gpu_ids: Sequence[int],
+) -> List[Any]:
+    """Start one worker per GPU in *gpu_ids*, all reporting to *result_queue*.
+
+    Spawning is separated from collecting so that several groups of trials --
+    which cannot share a worker, because a worker is handed one prebuilt
+    TimeSeriesDataSet -- can still run at the same time against one queue.
+    """
+    per_gpu: List[List[Dict]] = [[] for _ in gpu_ids]
+    for position, trial in enumerate(trials):
+        per_gpu[position % len(gpu_ids)].append(trial)
+
     processes = []
-    for gpu_id, assigned in zip(gpu_ids, gpu_trials):
+    for gpu_id, assigned in zip(gpu_ids, per_gpu):
         if not assigned:
             continue
         p = ctx.Process(
@@ -353,8 +386,12 @@ def _run_trials_once(
         )
         p.start()
         processes.append(p)
+    return processes
 
-    results = []
+
+def _collect_search_results(processes, result_queue, run_id: str, stage: str) -> List[Dict]:
+    """Drain trial rows as workers produce them, writing each to the ledger."""
+    results: List[Dict] = []
 
     # Stream completed trial rows from workers and append to ledger in real time.
     while True:
@@ -385,16 +422,22 @@ def _run_trials_once(
     failed = [p for p in processes if p.exitcode != 0]
     if failed:
         raise RuntimeError(f"{len(failed)} search worker(s) crashed during {stage} — check logs.")
-
-    if not any(row.get("status") == "completed" for row in results):
-        # Every trial having OOMed still leaves rows behind, so "no results"
-        # would no longer be true; what matters is that nothing was scored.
-        raise RuntimeError(
-            f"TFT {stage} produced no completed trials ({len(results)} attempted). "
-            "Check the ledger's status column — an all-OOM stage means the batch size "
-            "or hidden_size range does not fit these GPUs."
-        )
     return results
+
+
+def _assert_something_was_scored(results: List[Dict], stage: str) -> None:
+    """Refuse a stage in which every trial OOMed.
+
+    Every trial having OOMed still leaves rows behind, so "no results" would
+    no longer be true; what matters is that nothing was scored.
+    """
+    if any(row.get("status") == "completed" for row in results):
+        return
+    raise RuntimeError(
+        f"TFT {stage} produced no completed trials ({len(results)} attempted). "
+        "Check the ledger's status column — an all-OOM stage means the batch size "
+        "or hidden_size range does not fit these GPUs."
+    )
 
 
 def _run_trials_by_encoder_length(
@@ -405,16 +448,22 @@ def _run_trials_by_encoder_length(
     run_id: str,
     stage: str,
 ) -> List[Dict]:
-    """Run one stage, one encoder length at a time.
+    """Run one stage, with every encoder length under way at once.
 
     Encoder length decides which prebuilt TimeSeriesDataSet a trial trains
-    on, so trials that disagree about it cannot share a batch -- the
-    multi-GPU workers are handed one dataset pair each.
+    on, so trials that disagree about it cannot share a worker -- a worker is
+    handed one dataset pair.  The lengths used to run back to back, which is
+    free only while each group is at least as wide as the GPU pool.  Stage 2
+    is not: a top-10 splitting 4/6 across eight GPUs runs as two waves that
+    never use more than six cards, and costs the sum of two maxima rather
+    than one.  So the pool is divided between the groups instead
+    (:func:`allocate_pool`) and they run together, each worker still holding
+    exactly one dataset pair.
     """
     if not params_list:
         return []
 
-    results: List[Dict] = []
+    groups = []
     for encoder_length in sorted({int(p["encoder_length"]) for p in params_list}):
         batch = [p for p in params_list if int(p["encoder_length"]) == encoder_length]
         datasets = datasets_by_encoder_length.get(encoder_length)
@@ -423,11 +472,48 @@ def _run_trials_by_encoder_length(
                 f"No dataset built for encoder_length={encoder_length}; "
                 f"have {sorted(datasets_by_encoder_length)}."
             )
-        train_dataset, val_dataset = datasets
-        logging.info("[%s] %d trial(s) at encoder_length=%d", stage, len(batch), encoder_length)
-        results.extend(_run_trials_once(
-            train_dataset, val_dataset, n_targets, batch, trainer_cfg, run_id, stage,
+        groups.append((encoder_length, datasets, batch))
+
+    gpu_ids = _get_search_gpu_ids()
+    allocation = (
+        allocate_pool([len(batch) for _, _, batch in groups], len(gpu_ids))
+        if len(gpu_ids) > 1 else []
+    )
+
+    if not allocation:
+        # One GPU, or fewer GPUs than encoder lengths: nothing to divide, so
+        # the groups run back to back with the whole pool each, as before.
+        results: List[Dict] = []
+        for encoder_length, (train_dataset, val_dataset), batch in groups:
+            logging.info("[%s] %d trial(s) at encoder_length=%d", stage, len(batch), encoder_length)
+            results.extend(_run_trials_once(
+                train_dataset, val_dataset, n_targets, batch, trainer_cfg, run_id, stage,
+            ))
+        return results
+
+    import torch.multiprocessing as mp
+
+    ctx = mp.get_context("spawn")
+    result_queue = ctx.Queue()
+    processes = []
+    offset = 0
+    for (encoder_length, (train_dataset, val_dataset), batch), count in zip(groups, allocation):
+        gpus = list(gpu_ids[offset:offset + count])
+        offset += count
+        logging.info(
+            "[%s] %d trial(s) at encoder_length=%d on %d GPU(s): %s",
+            stage, len(batch), encoder_length, len(gpus), gpus,
+        )
+        processes.extend(_spawn_search_workers(
+            ctx, _build_trials(batch, stage), train_dataset, val_dataset, n_targets,
+            trainer_cfg, result_queue, run_id, stage, gpus,
         ))
+
+    results = _collect_search_results(processes, result_queue, run_id, stage)
+    # Checked over the stage rather than per encoder length: one length whose
+    # trials all OOM is a finding the ledger records, not a reason to end a
+    # search the other length is scoring fine.
+    _assert_something_was_scored(results, stage)
     return results
 
 

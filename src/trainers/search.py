@@ -53,6 +53,7 @@ __all__ = [
     "select_top_k_signatures",
     "budget_curve",
     "Shard",
+    "allocate_pool",
     "StagePlan",
     "plan_two_stage_search",
     "write_search_report",
@@ -554,6 +555,64 @@ def budget_curve(
         curve.append(value if not curve else better(curve[-1], value))
     return curve
 
+
+
+# --------------------------------------------------------------------------
+# Spreading one stage's trials over the GPUs
+# --------------------------------------------------------------------------
+
+def allocate_pool(sizes: Sequence[int], pool_size: int) -> List[int]:
+    """Split *pool_size* GPUs between groups of trials that cannot share a worker.
+
+    XGBoost and the TFT both search a context length, and a trial's context
+    length decides which prepared dataset it trains on -- so trials that
+    disagree about it cannot be handed to the same worker process, which is
+    given exactly one dataset.  The groups used to run back to back, which is
+    free only while every group is at least as wide as the pool.  Stage 2 is
+    not: ten trials splitting 4/6 across eight GPUs ran as two waves that
+    never used more than six cards, and took the sum of two maxima rather
+    than one.
+
+    Allocation minimises the number of waves, ``max(ceil(size / gpus))``, by
+    handing each additional GPU to whichever group currently faces the most
+    waves.  Because a group's wave count is non-increasing in the GPUs it
+    holds, giving the next unit to the worst-off group is optimal, not just
+    reasonable.  No group is given more GPUs than it has trials -- an idle
+    worker would take a card another group could still be using.
+
+    Returns one GPU count per group, in the order the sizes were given, or an
+    empty list when the pool cannot seat every group at once (fewer GPUs than
+    groups).  The caller then runs the groups back to back as before: that is
+    the right answer there, since a group with no GPU cannot start anyway.
+    """
+    sizes = [int(size) for size in sizes]
+    if any(size < 0 for size in sizes):
+        raise ValueError(f"Group sizes must be non-negative, got {sizes}")
+    working = [index for index, size in enumerate(sizes) if size > 0]
+    if not working:
+        return [0] * len(sizes)
+    if pool_size < len(working):
+        return []
+
+    allocation = [1 if size > 0 else 0 for size in sizes]
+    for _ in range(pool_size - len(working)):
+        candidates = [
+            index for index in working if allocation[index] < sizes[index]
+        ]
+        if not candidates:
+            break  # Every group already has a GPU per trial; the rest would idle.
+        # Worst off by wave count first -- that is the objective -- and by
+        # trials per GPU to break ties, so cards that cannot remove a wave
+        # still land where the queue behind them is longest.
+        worst = max(
+            candidates,
+            key=lambda index: (
+                -(-sizes[index] // allocation[index]),
+                sizes[index] / allocation[index],
+            ),
+        )
+        allocation[worst] += 1
+    return allocation
 
 # --------------------------------------------------------------------------
 # The two-stage protocol

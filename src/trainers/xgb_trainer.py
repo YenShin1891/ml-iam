@@ -22,6 +22,7 @@ from configs.models import (
 from configs.data import N_LAG_FEATURES
 from src.trainers.evaluation import test_xgb_autoregressively
 from .search import (
+    allocate_pool,
     best_trial,
     completed_trials,
     params_signature,
@@ -616,6 +617,7 @@ def _collect_worker_results(
     expected: int,
     score_key: str,
     varied_params: Sequence[str] = (),
+    progress: Optional[Dict] = None,
 ) -> List[Dict]:
     """Drain worker results, logging each trial the moment it lands.
 
@@ -623,16 +625,25 @@ def _collect_worker_results(
     observable: workers finish minutes apart, but a stage-end loop stamped
     every line with the same timestamp, so a 40-minute stage read as 24 trials
     completing at once with no sign of life in between.
+
+    *progress* holds the count and best score for the stage as a whole.  It is
+    passed in rather than kept here because a stage's trials do not always
+    reach one queue: when the GPU pool cannot be divided, the lag groups run
+    back to back, and each call would otherwise restart the count at 1.
     """
     results: List[Dict] = []
-    best = float('inf')
+    if progress is None:
+        progress = {'done': 0, 'best': float('inf')}
 
     def record(result: Dict) -> None:
-        nonlocal best
         results.append(result)
         rmse = -float(result[score_key])
-        best = min(best, rmse)
-        _log_trial_result(stage_name, result, rmse, len(results), expected, best, varied_params)
+        progress['done'] += 1
+        progress['best'] = min(progress['best'], rmse)
+        _log_trial_result(
+            stage_name, result, rmse, progress['done'],
+            expected, progress['best'], varied_params,
+        )
 
     # Drain results while workers run (avoid queue backpressure).
     while True:
@@ -685,15 +696,155 @@ class _XGBTrialInputs:
         return 'mean_test_score' if self.use_cv else 'val_score'
 
 
-def _run_xgb_trials_for_inputs(
-    params_list: List[Dict],
+def _with_budget(params_list: Sequence[Dict], num_boost_round: int) -> List[Dict]:
+    """Attach the stage's boosting budget to each trial's parameters.
+
+    It rides along in the params because that is how it reaches XGBRegressor,
+    through get_xgb_params, which is where n_estimators is read from.
+    """
+    return [{**params, 'num_boost_round': int(num_boost_round)} for params in params_list]
+
+
+def _spawn_search_workers(
+    ctx,
+    trials: Sequence[Tuple[int, Dict]],
     inputs: _XGBTrialInputs,
+    stage: str,
+    gpus: Sequence[str],
+    result_queue,
+    use_autoregressive_eval: bool,
+) -> List[mp.Process]:
+    """Start one worker per GPU in *gpus*, all reporting to *result_queue*.
+
+    Spawning is separated from collecting so that several groups of trials --
+    which cannot share a worker, because a worker is given one prepared
+    feature frame -- can still run at the same time against one queue.
+    """
+    assignments: List[List[Tuple[int, Dict]]] = [[] for _ in gpus]
+    for position, trial in enumerate(trials):
+        assignments[position % len(gpus)].append(trial)
+
+    trainer_cfg = inputs.trainer_cfg
+    processes: List[mp.Process] = []
+    for gpu_token, assigned in zip(gpus, assignments):
+        if not assigned:
+            continue
+        process = ctx.Process(
+            target=_search_worker,
+            args=(
+                gpu_token,
+                assigned,
+                inputs.X_train,
+                inputs.y_train,
+                inputs.X_train_with_index,
+                inputs.train_groups,
+                inputs.targets,
+            ),
+            kwargs={
+                'use_cv': inputs.use_cv,
+                'X_val': inputs.X_val,
+                'y_val': inputs.y_val,
+                'X_val_with_index': inputs.X_val_with_index,
+                'n_folds': trainer_cfg.n_folds,
+                'early_stopping_rounds': trainer_cfg.early_stopping_rounds,
+                'trainer_cfg': trainer_cfg,
+                'use_autoregressive_eval': use_autoregressive_eval,
+                'stage': stage,
+                'score_key': inputs.score_key,
+                'result_queue': result_queue,
+                'obs_train': inputs.obs_train,
+                'obs_val': None if inputs.use_cv else inputs.obs_val,
+            },
+        )
+        process.start()
+        processes.append(process)
+    return processes
+
+
+def _search_context():
+    """A multiprocessing context that does not fork a CUDA-touched parent."""
+    try:
+        return mp.get_context('forkserver')
+    except Exception:
+        return mp.get_context('spawn')
+
+
+def _run_xgb_trials_sequentially(
+    trials: Sequence[Tuple[int, Dict]],
+    inputs: _XGBTrialInputs,
+    stage: str,
+    gpu_token: str,
+    expected: int,
+    varied_params: Sequence[str],
+    use_autoregressive_eval: bool,
+    progress: Dict,
+) -> List[Dict]:
+    """Run trials one at a time on one GPU, logging against the whole stage.
+
+    *progress* carries the running count and best score across groups, so the
+    log reads as one stage rather than restarting at 1/n for each group.
+    """
+    results: List[Dict] = []
+    with cuda_device(gpu_token):
+        _cap_search_cpu_threads()
+        for trial_idx, params in trials:
+            params_copy, score, best_iteration = train_and_evaluate_single_config(
+                inputs.X_train,
+                inputs.y_train,
+                inputs.X_train_with_index,
+                inputs.train_groups,
+                inputs.targets,
+                params,
+                use_cv=inputs.use_cv,
+                X_val=inputs.X_val,
+                y_val=inputs.y_val,
+                X_val_with_index=inputs.X_val_with_index,
+                n_folds=inputs.trainer_cfg.n_folds,
+                early_stopping_rounds=inputs.trainer_cfg.early_stopping_rounds,
+                trainer_cfg=inputs.trainer_cfg,
+                show_autoreg_progress=inputs.trainer_cfg.search_show_autoreg_progress,
+                n_jobs=1,
+                use_autoregressive_eval=use_autoregressive_eval,
+                obs_mask=inputs.obs_train,
+                obs_val_mask=None if inputs.use_cv else inputs.obs_val,
+            )
+            result = params_copy.copy()
+            result[inputs.score_key] = float(score)
+            result['best_iteration'] = int(best_iteration)
+            result['stage'] = stage
+            result['status'] = 'completed'
+            result['gpu'] = str(gpu_token)
+            result['trial'] = int(trial_idx)
+            results.append(result)
+
+            rmse = -float(score)
+            progress['done'] += 1
+            progress['best'] = min(progress['best'], rmse)
+            _log_trial_result(
+                stage, result, rmse, progress['done'],
+                expected, progress['best'], varied_params,
+            )
+    return results
+
+
+def _run_xgb_trials(
+    params_list: List[Dict],
+    inputs_by_n_lags: Dict[int, _XGBTrialInputs],
     stage: str,
     num_boost_round: int,
     gpu_pool: Sequence[str],
     use_autoregressive_eval: bool = False,
 ) -> List[Dict]:
-    """Run one stage of trials, fanning out over GPUs when there are several.
+    """Run one stage, with every lag count under way at once.
+
+    Lag count decides which feature frame a trial trains on, so trials that
+    disagree about it cannot share a worker: a worker is handed one set of
+    frames.  The groups used to run back to back, which is free only while
+    each is at least as wide as the GPU pool.  Stage 2 is not -- ten trials
+    splitting 4/6 across eight GPUs ran as two waves, never using more than
+    six cards, and cost the sum of two maxima instead of one.  So the pool is
+    divided between the groups instead (:func:`allocate_pool`) and they run
+    together, each worker still holding exactly one set of frames.
 
     *num_boost_round* is the stage's budget, not a searched parameter: early
     stopping on the validation set decides how many of those rounds are
@@ -708,149 +859,81 @@ def _run_xgb_trials_for_inputs(
     if not params_list:
         return []
 
-    trainer_cfg = inputs.trainer_cfg
-    score_key = inputs.score_key
-    # The budget rides along in the params so it reaches XGBRegressor through
-    # get_xgb_params, which is where n_estimators is read from.
-    params_list = [{**params, 'num_boost_round': int(num_boost_round)} for params in params_list]
-    expected_results = len(params_list)
+    params_list = _with_budget(params_list, num_boost_round)
+    expected = len(params_list)
     varied_params = sorted(set(params_list[0]) - {'num_boost_round'})
 
-    if len(gpu_pool) <= 1:
-        # Single GPU visible (or forced): run sequentially, but still cap threads.
-        gpu_token = _first_visible_gpu_token(gpu_pool)
-        stage_results: List[Dict] = []
-        stage_best_rmse = float('inf')
-        with cuda_device(gpu_token):
-            _cap_search_cpu_threads()
-            for i, params in enumerate(params_list):
-                params_copy, score, best_iteration = train_and_evaluate_single_config(
-                    inputs.X_train,
-                    inputs.y_train,
-                    inputs.X_train_with_index,
-                    inputs.train_groups,
-                    inputs.targets,
-                    params,
-                    use_cv=inputs.use_cv,
-                    X_val=inputs.X_val,
-                    y_val=inputs.y_val,
-                    X_val_with_index=inputs.X_val_with_index,
-                    n_folds=trainer_cfg.n_folds,
-                    early_stopping_rounds=trainer_cfg.early_stopping_rounds,
-                    trainer_cfg=trainer_cfg,
-                    show_autoreg_progress=trainer_cfg.search_show_autoreg_progress,
-                    n_jobs=1,
-                    use_autoregressive_eval=use_autoregressive_eval,
-                    obs_mask=inputs.obs_train,
-                    obs_val_mask=None if inputs.use_cv else inputs.obs_val,
-                )
-                result = params_copy.copy()
-                result[score_key] = float(score)
-                result['best_iteration'] = int(best_iteration)
-                result['stage'] = stage
-                result['status'] = 'completed'
-                result['gpu'] = str(gpu_token)
-                result['trial'] = i
-                stage_results.append(result)
+    def lags_of(params: Dict) -> int:
+        return int(params.get("n_lags", N_LAG_FEATURES))
 
-                rmse = -float(score)
-                stage_best_rmse = min(stage_best_rmse, rmse)
-                _log_trial_result(
-                    stage, result, rmse, len(stage_results),
-                    expected_results, stage_best_rmse, varied_params,
-                )
-    else:
-        # Multi-GPU: one worker process per GPU.
-        try:
-            ctx = mp.get_context('forkserver')
-        except Exception:
-            ctx = mp.get_context('spawn')
-
-        result_queue = ctx.Queue()
-        assignments: List[List[Tuple[int, Dict]]] = [[] for _ in gpu_pool]
-        for i, params in enumerate(params_list):
-            assignments[i % len(gpu_pool)].append((i, params))
-
-        processes: List[mp.Process] = []
-        for gpu_token, trials in zip(gpu_pool, assignments):
-            if not trials:
-                continue
-            process = ctx.Process(
-                target=_search_worker,
-                args=(
-                    gpu_token,
-                    trials,
-                    inputs.X_train,
-                    inputs.y_train,
-                    inputs.X_train_with_index,
-                    inputs.train_groups,
-                    inputs.targets,
-                ),
-                kwargs={
-                    'use_cv': inputs.use_cv,
-                    'X_val': inputs.X_val,
-                    'y_val': inputs.y_val,
-                    'X_val_with_index': inputs.X_val_with_index,
-                    'n_folds': trainer_cfg.n_folds,
-                    'early_stopping_rounds': trainer_cfg.early_stopping_rounds,
-                    'trainer_cfg': trainer_cfg,
-                    'use_autoregressive_eval': use_autoregressive_eval,
-                    'stage': stage,
-                    'score_key': score_key,
-                    'result_queue': result_queue,
-                    'obs_train': inputs.obs_train,
-                    'obs_val': None if inputs.use_cv else inputs.obs_val,
-                },
-            )
-            process.start()
-            processes.append(process)
-
-        stage_results = _collect_worker_results(
-            processes,
-            result_queue,
-            stage_name=stage,
-            expected=expected_results,
-            score_key=score_key,
-            varied_params=varied_params,
-        )
-
-    if len(stage_results) != expected_results:
-        raise RuntimeError(
-            f"XGB search {stage} produced {len(stage_results)}/{expected_results} results"
-        )
-    return stage_results
-
-
-def _run_xgb_trials(
-    params_list: List[Dict],
-    inputs_by_n_lags: Dict[int, _XGBTrialInputs],
-    stage: str,
-    num_boost_round: int,
-    gpu_pool: Sequence[str],
-    use_autoregressive_eval: bool = False,
-) -> List[Dict]:
-    """Run one stage, one lag count at a time.
-
-    Lag count decides which feature frame a trial trains on, so trials that
-    disagree about it cannot share a batch: the multi-GPU workers are handed
-    one set of frames each.  Grouping here keeps that hand-off unchanged and
-    costs nothing, since the groups run back to back either way.
-    """
-    if not params_list:
-        return []
-
-    results: List[Dict] = []
-    for n_lags in sorted({int(p.get("n_lags", N_LAG_FEATURES)) for p in params_list}):
-        batch = [p for p in params_list if int(p.get("n_lags", N_LAG_FEATURES)) == n_lags]
+    # Trial ids number the whole stage rather than restarting per group: the
+    # groups now run at the same time, and two trials called 0 in one log
+    # cannot be told apart.
+    groups: List[Tuple[int, _XGBTrialInputs, List[Tuple[int, Dict]]]] = []
+    for n_lags in sorted({lags_of(p) for p in params_list}):
         inputs = inputs_by_n_lags.get(n_lags)
         if inputs is None:
             raise KeyError(
                 f"No prepared data for n_lags={n_lags}; have {sorted(inputs_by_n_lags)}."
             )
-        logging.info("[%s] %d trial(s) at n_lags=%d", stage, len(batch), n_lags)
-        results.extend(_run_xgb_trials_for_inputs(
-            batch, inputs, stage, num_boost_round, gpu_pool, use_autoregressive_eval,
-        ))
+        trials = [(i, p) for i, p in enumerate(params_list) if lags_of(p) == n_lags]
+        groups.append((n_lags, inputs, trials))
+
+    score_key = groups[0][1].score_key
+    # One running count and one running best across the whole stage, however
+    # the groups end up being scheduled.
+    progress = {'done': 0, 'best': float('inf')}
+    results: List[Dict] = []
+
+    allocation = (
+        allocate_pool([len(trials) for _, _, trials in groups], len(gpu_pool))
+        if len(gpu_pool) > 1 else []
+    )
+
+    if allocation:
+        ctx = _search_context()
+        result_queue = ctx.Queue()
+        processes: List[mp.Process] = []
+        offset = 0
+        for (n_lags, inputs, trials), count in zip(groups, allocation):
+            gpus = list(gpu_pool[offset:offset + count])
+            offset += count
+            logging.info(
+                "[%s] %d trial(s) at n_lags=%d on %d GPU(s): %s",
+                stage, len(trials), n_lags, len(gpus), ", ".join(gpus),
+            )
+            processes.extend(_spawn_search_workers(
+                ctx, trials, inputs, stage, gpus, result_queue, use_autoregressive_eval,
+            ))
+        results = _collect_worker_results(
+            processes, result_queue, stage_name=stage, expected=expected,
+            score_key=score_key, varied_params=varied_params, progress=progress,
+        )
+    else:
+        # One GPU, or fewer GPUs than groups: nothing to divide, so the groups
+        # run back to back with the whole pool each, as they always did.
+        for n_lags, inputs, trials in groups:
+            logging.info("[%s] %d trial(s) at n_lags=%d", stage, len(trials), n_lags)
+            if len(gpu_pool) <= 1:
+                results.extend(_run_xgb_trials_sequentially(
+                    trials, inputs, stage, _first_visible_gpu_token(gpu_pool),
+                    expected, varied_params, use_autoregressive_eval, progress,
+                ))
+                continue
+            ctx = _search_context()
+            result_queue = ctx.Queue()
+            processes = _spawn_search_workers(
+                ctx, trials, inputs, stage, gpu_pool, result_queue, use_autoregressive_eval,
+            )
+            results.extend(_collect_worker_results(
+                processes, result_queue, stage_name=stage, expected=expected,
+                score_key=score_key, varied_params=varied_params, progress=progress,
+            ))
+
+    if len(results) != expected:
+        raise RuntimeError(
+            f"XGB search {stage} produced {len(results)}/{expected} results"
+        )
     return results
 
 

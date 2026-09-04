@@ -44,6 +44,12 @@ def small_search(tmp_path, monkeypatch):
     space = TFTSearchSpace(n_trials=4, stage2_top_k=2)
     monkeypatch.setattr(tft_trainer, "TFTSearchSpace", lambda **kw: space)
     monkeypatch.setattr(tft_trainer, "get_run_root", lambda _run_id: str(tmp_path))
+    # One GPU, so the stage runs its encoder lengths through _run_trials_once
+    # whatever machine the suite is on.  Left to the real device count these
+    # tests took the single- or multi-GPU path depending on the host, and the
+    # stub below only covers one of them; how the pool is divided between the
+    # encoder lengths is tested in test_search_group_concurrency.py.
+    monkeypatch.setattr(tft_trainer, "_get_search_gpu_ids", lambda: [0])
 
     calls = []
 
