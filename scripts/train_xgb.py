@@ -111,8 +111,6 @@ def search_xgb(store):
 
 def train_xgb(store):
     """Final training using best_params."""
-    import numpy as np
-    import pandas as pd
     from src.trainers.xgb_trainer import train_and_save_model
 
     logging.info("Starting final XGBoost training...")
@@ -124,19 +122,13 @@ def train_xgb(store):
 
     logging.info("Training with best params: %s", best_params)
 
-    X_train = splits["X_train"]
-    y_train = splits["y_train"]
-    train_groups = splits["train_groups"]
-    X_val = splits["X_val"]
-    y_val = splits["y_val"]
-    val_groups = splits["val_groups"]
-    targets = splits["targets"]
-
-    X_combined = pd.concat([X_train, X_val], axis=0, ignore_index=True)
-    y_combined = np.concatenate([y_train, y_val], axis=0)
-    combined_groups = np.concatenate([train_groups, val_groups], axis=0)
-
-    train_and_save_model(X_combined, y_combined, combined_groups, targets, best_params, store.run_id)
+    # Train on the training split alone and keep val for early stopping, the
+    # regime the search scored in and the one the LSTM and TFT finals use.
+    train_and_save_model(
+        splits["X_train"], splits["y_train"],
+        splits["X_val"], splits["y_val"],
+        splits["targets"], best_params, store.run_id,
+    )
 
     # Save scalers for autoregressive test
     store.save_artifact("x_scaler.pkl", splits["x_scaler"])

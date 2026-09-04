@@ -208,12 +208,19 @@ def test_the_rollout_can_be_switched_off_per_stage_without_touching_the_protocol
     assert next(s for s in stages if s["stage"] == "stage2")["autoregressive"] is True
 
 
-def test_the_final_round_count_comes_from_early_stopping(recorded_stages):
-    """num_boost_round is fitted, not searched: best_iteration + 1."""
-    best, _ = _run_search()
+def test_no_round_count_rides_along_in_best_params(recorded_stages):
+    """The round count is the trial's, not a parameter of the final fit.
 
-    assert best["num_boost_round"] == 8
+    It shares a name with a booster argument, so a number left in
+    best_params would reach XGBRegressor; the final fit early-stops on the
+    validation set instead, the way the LSTM and TFT finals do.
+    """
+    best, rows_by_stage = _run_search()
+
+    assert "num_boost_round" not in best
     assert "best_iteration" not in best
+    # Still recorded per trial, which is where the search report reads it.
+    assert all("best_iteration" in row for rows in rows_by_stage.values() for row in rows)
 
 
 def test_the_winning_lag_count_is_reported_with_the_parameters(recorded_stages):

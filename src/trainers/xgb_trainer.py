@@ -1006,9 +1006,11 @@ def hyperparameter_search(
     Returns
     -------
     Tuple[Dict, Dict]
-        The winning hyperparameters -- including ``n_lags`` and the
-        ``num_boost_round`` early stopping settled on, which the final fit
-        trains for -- and the per-stage trial rows.
+        The winning hyperparameters -- including ``n_lags``, which decides
+        the feature set the later phases rebuild -- and the per-stage trial
+        rows.  The round count is not among them: it is a property of the
+        trial, recorded per row as ``best_iteration``, and the final fit
+        early-stops for itself.
     """
     space = XGBSearchSpace()
     trainer_cfg = XGBTrainerConfig()
@@ -1107,10 +1109,6 @@ def hyperparameter_search(
     best = best_trial(stage2_completed or completed, metric=score_key, mode="max")
 
     best_params = {key: best[key] for key in space.param_keys}
-    # The round count is a fitted quantity, not a searched one: hand the final
-    # fit the number early stopping actually reached, +1 because best_iteration
-    # is a 0-based index.
-    best_params['num_boost_round'] = int(best.get('best_iteration', 0)) + 1
 
     try:
         write_search_report(
@@ -1120,10 +1118,15 @@ def hyperparameter_search(
     except Exception as exc:  # noqa: BLE001 - a report must not sink a search
         logging.warning("Failed to write XGB search report: %s", exc)
 
+    # The winner's round count belongs to the trial, not to best_params: the
+    # final fit sees a different amount of data and early-stops for itself, so
+    # carrying a number named after a booster argument would only invite it
+    # back into the model.  Report it here, where it is a search result.
     logging.info(
-        "XGB search complete (%s) -> best RMSE %.4f with %s",
+        "XGB search complete (%s) -> best RMSE %.4f at round %d with %s",
         "stage2" if stage2_completed else "stage1",
         -float(best[score_key]),
+        int(best.get('best_iteration', 0)) + 1,
         best_params,
     )
     return best_params, {"stage1": stage1_rows, "stage2": stage2_rows}
@@ -1132,11 +1135,21 @@ def hyperparameter_search(
 def train_and_save_model(
     X_train: pd.DataFrame,
     y_train: np.array,
-    train_groups: np.array,
+    X_val: pd.DataFrame,
+    y_val: np.array,
     targets: List[str],
     best_params: Dict,
     run_id: str,
     ) -> None:
+    """Train the final model on the training split alone, holding out val.
+
+    Uses X_train/y_train for the boosting updates and X_val/y_val for early
+    stopping and best-round selection, matching the data regime the search
+    scored its trials in -- and the one train_final_lstm and train_final_tft
+    fit their finals in.  The model used to be fitted on train and val
+    concatenated, which left XGBoost with strictly more data than the other
+    two models and no genuinely held-out split of its own.
+    """
     logging.info("Training final model with best parameters...")
 
     from configs.data import KEEP_PARTIAL_TARGETS
@@ -1144,23 +1157,51 @@ def train_and_save_model(
     with cuda_device(_first_visible_gpu_token()):
         try:
             y_train_df = pd.DataFrame(y_train, columns=targets)
+            y_val_df = pd.DataFrame(y_val, columns=targets)
             trainer_cfg = XGBTrainerConfig()
+            # Runs searched before the round count stopped being written into
+            # best_params still have one saved on disk.  It is not a parameter
+            # of this fit -- which sees a different amount of data and early-
+            # stops for itself -- and it shares a name with a booster
+            # argument, so drop it from a copy before it can reach one.
+            best_params = dict(best_params)
+            stale_num_boost_round = best_params.pop('num_boost_round', None)
+            if stale_num_boost_round is not None:
+                logging.info(
+                    "Ignoring num_boost_round=%s from saved best_params; early "
+                    "stopping picks the round count.", stale_num_boost_round,
+                )
             xgb_params = get_xgb_params(best_params, trainer_cfg=trainer_cfg)
-            num_boost_round = xgb_params.pop('num_boost_round')
+            num_boost_round = trainer_cfg.num_boost_round
+            early_stopping_rounds = trainer_cfg.final_early_stopping_rounds
+            logging.info(
+                "XGB final training: train=%d val=%d rows, up to %d rounds "
+                "with early stopping (patience=%d)",
+                len(X_train), len(X_val), num_boost_round, early_stopping_rounds,
+            )
 
             if KEEP_PARTIAL_TARGETS:
                 model = PerTargetXGBRegressor(
                     targets=targets,
                     n_estimators=num_boost_round,
+                    early_stopping_rounds=early_stopping_rounds,
                     **xgb_params,
                 )
             else:
                 model = XGBRegressor(
                     n_estimators=num_boost_round,
+                    early_stopping_rounds=early_stopping_rounds,
                     **xgb_params,
                 )
 
-            model.fit(X_train, y_train_df, verbose=25)
+            model.fit(X_train, y_train_df, eval_set=[(X_val, y_val_df)], verbose=25)
+            # save_model carries best_iteration into the saved JSON, and
+            # predict() honours it, so the test phase scores the best round
+            # rather than the last -- the counterpart of loading best.ckpt.
+            logging.info(
+                "XGB final training done -> best iteration %d of %d rounds",
+                int(getattr(model, "best_iteration", 0) or 0), num_boost_round,
+            )
 
             run_root = get_run_root(run_id)
             os.makedirs(os.path.join(run_root, "checkpoints"), exist_ok=True)
@@ -1173,5 +1214,4 @@ def train_and_save_model(
             # reports the training complete, and the missing model surfaces
             # only when the test phase looks for it.
             logging.error("Final XGBoost training failed", exc_info=True)
-            raise
             raise

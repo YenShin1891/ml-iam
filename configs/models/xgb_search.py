@@ -16,14 +16,15 @@ from src.trainers.search import (
 class XGBDefaultParams:
     """Default XGBoost hyperparameters used when search is skipped.
 
-    The previous search's winner; independent of the space below.
+    The previous search's winner; independent of the space below.  No round
+    count: like a searched run, the final fit early-stops on the validation
+    set rather than training for a number fixed in advance.
     """
 
     max_depth: int = 9
     min_child_weight: int = 10
     gamma: float = 0.0
     eta: float = 0.1
-    num_boost_round: int = 700
     reg_alpha: float = 1.0
     reg_lambda: float = 10.0
 
@@ -33,7 +34,6 @@ class XGBDefaultParams:
             "min_child_weight": self.min_child_weight,
             "gamma": self.gamma,
             "eta": self.eta,
-            "num_boost_round": self.num_boost_round,
             "reg_alpha": self.reg_alpha,
             "reg_lambda": self.reg_lambda,
         }

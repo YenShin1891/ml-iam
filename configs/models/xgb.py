@@ -15,6 +15,10 @@ class XGBTrainerConfig:
 
     # Training loop controls
     early_stopping_rounds: int = 15
+    # Patience for the final fit, which trains longer than a search trial and
+    # so can afford to wait longer before calling a plateau -- the same reason
+    # LSTM and TFT raise theirs from patience to final_patience.
+    final_early_stopping_rounds: int = 50
     n_folds: int = 5
     # Full-budget ceiling on boosting rounds.  A budget, not a hyperparameter:
     # early stopping on the validation set picks the round count the final
