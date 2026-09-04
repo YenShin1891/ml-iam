@@ -119,15 +119,16 @@ def autoregressive_predictions(model, group_indices, group_matrix, start_pos, y_
         isinstance(y_means_attr, (list, np.ndarray)) and isinstance(y_scales_attr, (list, np.ndarray)) and
         _safe_len(x_means_attr) == _safe_len(feature_columns)
     )
+    if not use_scalers and (x_scaler is not None or y_scaler is not None):
+        # A wrong-scale feedback loop yields a plausible number, so it must
+        # not be allowed to run.
+        raise ValueError(
+            "Scalers provided but unusable (x_scaler.mean_ length "
+            f"{_safe_len(x_means_attr)} != feature_columns length {_safe_len(feature_columns)}); "
+            "lag updates would insert y-scaled values into x-scaled columns"
+        )
     if not use_scalers:
-        if x_scaler is not None or y_scaler is not None:
-            logging.warning(
-                "Scalers provided but unusable (x_scaler.mean_ length %d != feature_columns length %d); "
-                "lag updates will insert y-scaled values into x-scaled columns",
-                _safe_len(x_means_attr), _safe_len(feature_columns),
-            )
-        else:
-            logging.debug("No scalers provided; lag updates will insert predictions as-is")
+        logging.debug("No scalers provided; lag updates will insert predictions as-is")
     if use_scalers:
         y_means = np.asarray(y_means_attr)[:num_targets]
         y_scales = np.asarray(y_scales_attr)[:num_targets]
@@ -199,6 +200,14 @@ def test_xgb_autoregressively(
         store = RunStore(run_id)
         y_scaler = store.load_artifact("y_scaler.pkl")
         x_scaler = store.load_artifact("x_scaler.pkl")
+    if y_scaler is None or x_scaler is None:
+        # Refused, not warned about: the search ran this way for a whole
+        # stage 2 and picked its winner on the resulting numbers.
+        raise ValueError(
+            "The autoregressive rollout needs both the x and y scalers: it writes "
+            "predictions (target units) into lag columns (feature units).  Pass "
+            "y_scaler and x_scaler, or a run_id whose artifacts hold them."
+        )
 
     group_indices_list, group_matrices = group_test_data(X_test_with_index, cache)
     full_preds = np.full(y_test.shape, np.nan, dtype=float)

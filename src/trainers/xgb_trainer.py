@@ -6,7 +6,7 @@ import subprocess
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import multiprocessing as mp
 import numpy as np
@@ -313,9 +313,17 @@ def train_and_evaluate_single_config(
     use_autoregressive_eval: bool = True,
     obs_mask: Optional[np.ndarray] = None,
     obs_val_mask: Optional[np.ndarray] = None,
+    x_scaler=None,
+    y_scaler=None,
 ) -> Tuple[Dict, float, int]:
     """
     Train and evaluate a single parameter configuration using either k-fold CV or single validation set.
+
+    *x_scaler* and *y_scaler* are the split's fitted scalers.  The rollout
+    needs both: it writes each step's prediction, which is in target units,
+    into the next step's lag column, which is in feature units, and the two
+    standardisations differ (by 15% in scale for Solar).  Without them the
+    search scored stage 2 on a rollout the test phase never runs.
     
     Parameters:
     -----------
@@ -385,6 +393,8 @@ def train_and_evaluate_single_config(
                     use_autoregressive_eval=use_autoregressive_eval,
                     obs_train=obs_t,
                     obs_val=obs_v,
+                    x_scaler=x_scaler,
+                    y_scaler=y_scaler,
                 )
                 scores.append(fold_rmse)
                 best_iterations.append(fold_best_iteration)
@@ -413,6 +423,8 @@ def train_and_evaluate_single_config(
                 use_autoregressive_eval=use_autoregressive_eval,
                 obs_train=obs_mask,
                 obs_val=obs_val_mask,
+                x_scaler=x_scaler,
+                y_scaler=y_scaler,
             )
             score = -rmse
             best_iterations = [best_iteration]
@@ -436,6 +448,8 @@ def _train_single_fold(
     use_autoregressive_eval: bool = True,
     obs_train: Optional[np.ndarray] = None,
     obs_val: Optional[np.ndarray] = None,
+    x_scaler=None,
+    y_scaler=None,
 ):
     """
     Helper function to train and evaluate a single fold/validation set.
@@ -495,6 +509,8 @@ def _train_single_fold(
             max_workers=1,
             cache=cache,
             n_lags=int(params.get('n_lags', N_LAG_FEATURES)),
+            y_scaler=y_scaler,
+            x_scaler=x_scaler,
         )
         ar_dt = time.perf_counter() - ar_t0
         logging.info(
@@ -549,6 +565,8 @@ def _search_worker(
     use_autoregressive_eval: bool = False,
     obs_train: Optional[np.ndarray] = None,
     obs_val: Optional[np.ndarray] = None,
+    x_scaler=None,
+    y_scaler=None,
 ) -> None:
     """Worker process: pinned to exactly one GPU via CUDA_VISIBLE_DEVICES."""
     with cuda_device(gpu_token):
@@ -574,6 +592,8 @@ def _search_worker(
                 use_autoregressive_eval=use_autoregressive_eval,
                 obs_mask=obs_train,
                 obs_val_mask=obs_val,
+                x_scaler=x_scaler,
+                y_scaler=y_scaler,
             )
             result = params_copy.copy()
             result[score_key] = float(score)
@@ -690,6 +710,10 @@ class _XGBTrialInputs:
     trainer_cfg: XGBTrainerConfig
     obs_train: Optional[np.ndarray]
     obs_val: Optional[np.ndarray]
+    # The split's fitted scalers.  The stage-2 rollout cannot run without
+    # them: see train_and_evaluate_single_config.
+    x_scaler: Any = None
+    y_scaler: Any = None
 
     @property
     def score_key(self) -> str:
@@ -754,6 +778,8 @@ def _spawn_search_workers(
                 'result_queue': result_queue,
                 'obs_train': inputs.obs_train,
                 'obs_val': None if inputs.use_cv else inputs.obs_val,
+                'x_scaler': inputs.x_scaler,
+                'y_scaler': inputs.y_scaler,
             },
         )
         process.start()
@@ -807,6 +833,8 @@ def _run_xgb_trials_sequentially(
                 use_autoregressive_eval=use_autoregressive_eval,
                 obs_mask=inputs.obs_train,
                 obs_val_mask=None if inputs.use_cv else inputs.obs_val,
+                x_scaler=inputs.x_scaler,
+                y_scaler=inputs.y_scaler,
             )
             result = params_copy.copy()
             result[inputs.score_key] = float(score)
@@ -1000,6 +1028,8 @@ def hyperparameter_search(
             trainer_cfg=trainer_cfg,
             obs_train=splits.get("obs_train"),
             obs_val=splits.get("obs_val"),
+            x_scaler=splits.get("x_scaler"),
+            y_scaler=splits.get("y_scaler"),
         )
     score_key = next(iter(inputs_by_n_lags.values())).score_key
 
