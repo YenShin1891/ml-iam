@@ -5,7 +5,9 @@ import json
 import logging
 import os
 import queue
-from typing import Dict, List, Optional
+import time
+from functools import lru_cache
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -21,8 +23,10 @@ from .search import (
     params_signature,
     plan_two_stage_search,
     select_top_k_signatures,
+    Shard,
     write_search_report,
 )
+from .provenance import trial_provenance
 from src.utils.utils import get_run_root, is_primary_rank
 from .tft_dataset import (
     build_datasets,
@@ -94,6 +98,82 @@ def _append_trials_ledger(run_id: str, rows: List[Dict]) -> None:
             f.write(json.dumps(r, sort_keys=True) + "\n")
 
 
+@lru_cache(maxsize=4)
+def _provenance(run_id: str) -> Dict[str, Any]:
+    """Cached per process: shelling out to git once per trial is wasteful."""
+    return trial_provenance(run_id)
+
+
+def _trial_row(
+    params: Dict,
+    *,
+    run_id: str,
+    trial_id: str,
+    signature: str,
+    stage: str,
+    status: str,
+    wall_seconds: float,
+    val_loss: Optional[float] = None,
+    best_epoch: Optional[int] = None,
+    epochs_run: Optional[int] = None,
+) -> Dict:
+    """One ledger row: the result, what produced it, and what it cost.
+
+    Rows are written for failed trials too, with a status other than
+    "completed".  ``is_completed_trial`` rejects those, so they never enter a
+    ranking, but they leave a trace of a configuration that was attempted and
+    did not yield a score.  Without one, a trial that OOMed is indis-
+    tinguishable from a trial nobody has reached yet, and a search that
+    silently evaluated 47 of its 50 configurations reports as a complete one.
+    """
+    row = {
+        **_canonicalize_search_params(params),
+        "trial_id": trial_id,
+        "signature": signature,
+        "status": status,
+        "stage": stage,
+        "wall_seconds": round(float(wall_seconds), 3),
+        **_provenance(run_id),
+    }
+    if val_loss is not None:
+        row["val_loss"] = float(val_loss)
+    if best_epoch is not None:
+        row["best_epoch"] = int(best_epoch)
+    if epochs_run is not None:
+        row["epochs_run"] = int(epochs_run)
+    return row
+
+
+def _record(run_id: str, row: Dict, results: List[Dict]) -> None:
+    """Keep a trial row in memory and persist it immediately.
+
+    Persisting per trial rather than per stage is what makes a search
+    resumable at trial granularity, and -- once several machines are running
+    slices of the same search -- what lets a ledger be collected from a
+    machine that has not finished.
+    """
+    results.append(row)
+    try:
+        _append_trials_ledger(run_id, [row])
+    except Exception as exc:  # noqa: BLE001 - a lost row must not end the search
+        logging.warning("Failed to write trial to ledger (result kept in memory): %s", exc)
+
+
+def _search_shard() -> Optional[Shard]:
+    """This machine's slice of the search, from the SEARCH_SHARD env var.
+
+    Set by scripts/train_from_config.py out of the run config's
+    ``search_shard`` key, the same route CUDA_VISIBLE_DEVICES already takes:
+    which slice a machine runs is a fact about the machine, not about the
+    model, and every phase runs in its own subprocess.
+    """
+    raw = os.environ.get("SEARCH_SHARD", "").strip()
+    if not raw:
+        return None
+    shard = Shard.parse(raw)
+    return None if shard.is_whole else shard
+
+
 def _get_search_gpu_ids() -> List[int]:
     """Get physical GPU IDs available for search from CUDA_VISIBLE_DEVICES."""
     cuda_env = os.environ.get("CUDA_VISIBLE_DEVICES", "")
@@ -119,8 +199,15 @@ def _get_best_score(trainer):
     return trainer.current_epoch - 1, trainer.callback_metrics["val_loss"].item()
 
 
-def _fit_search_trial(train_dataset, params, n_targets, trainer_cfg, log_dir, train_loader, val_loader):
-    """Fit one configuration and return (best_epoch, best_val_loss).
+def _fit_search_trial(
+    train_dataset, params, n_targets, trainer_cfg, log_dir, train_loader, val_loader,
+) -> Tuple[int, float, int]:
+    """Fit one configuration; return (best_epoch, best_val_loss, epochs_run).
+
+    ``epochs_run`` is what the wall time paid for: early stopping means two
+    trials of the same nominal budget can differ severalfold in cost, so a
+    per-epoch rate -- the only figure comparable across machines whose
+    schedules ended at different points -- cannot be derived without it.
 
     The model and trainer are locals, so they are released on return; the
     caller empties the CUDA cache before the next trial.
@@ -129,7 +216,8 @@ def _fit_search_trial(train_dataset, params, n_targets, trainer_cfg, log_dir, tr
     os.makedirs(log_dir, exist_ok=True)
     trainer = create_search_trainer(trainer_cfg, log_dir=log_dir)
     trainer.fit(model=tft, train_dataloaders=train_loader, val_dataloaders=val_loader)
-    return _get_best_score(trainer)
+    best_epoch, best_val_loss = _get_best_score(trainer)
+    return best_epoch, best_val_loss, int(trainer.current_epoch)
 
 
 def _search_worker(gpu_id, trials, train_dataset, val_dataset, n_targets, trainer_cfg, result_queue, run_id, stage):
@@ -155,6 +243,7 @@ def _search_worker(gpu_id, trials, train_dataset, val_dataset, n_targets, traine
         trial_id = trial["trial_id"]
         logging.info("[%s] GPU %d - Trial %d/%d - Params: %s", stage, gpu_id, i + 1, len(trials), params)
         log_dir = os.path.join(get_run_root(run_id), "search", "trials", trial_id)
+        started = time.monotonic()
         try:
             best = _fit_search_trial(
                 train_dataset, params, n_targets, trainer_cfg, log_dir, train_loader, val_loader,
@@ -166,24 +255,25 @@ def _search_worker(gpu_id, trials, train_dataset, val_dataset, n_targets, traine
                 stage, gpu_id, i + 1, len(trials), trial_id,
             )
             best = None
+        elapsed = time.monotonic() - started
         # The trial's model and trainer were locals of _fit_search_trial and
         # are gone by now; hand their cached blocks back before the next one.
         torch.cuda.empty_cache()
         if best is None:
+            result_queue.put(_trial_row(
+                params, run_id=run_id, trial_id=trial_id, signature=trial["signature"],
+                stage=stage, status="oom", wall_seconds=elapsed,
+            ))
             continue
-        best_epoch, best_val_loss = best
-        result_queue.put({
-            **_canonicalize_search_params(params),
-            "val_loss": float(best_val_loss),
-            "best_epoch": int(best_epoch),
-            "trial_id": trial_id,
-            "signature": trial["signature"],
-            "status": "completed",
-            "stage": stage,
-        })
+        best_epoch, best_val_loss, epochs_run = best
+        result_queue.put(_trial_row(
+            params, run_id=run_id, trial_id=trial_id, signature=trial["signature"],
+            stage=stage, status="completed", wall_seconds=elapsed,
+            val_loss=best_val_loss, best_epoch=best_epoch, epochs_run=epochs_run,
+        ))
         logging.info(
-            "[%s] GPU %d - Trial %d/%d - best_val_loss: %.4f best_epoch: %d",
-            stage, gpu_id, i + 1, len(trials), best_val_loss, best_epoch,
+            "[%s] GPU %d - Trial %d/%d - best_val_loss: %.4f best_epoch: %d in %.0f s",
+            stage, gpu_id, i + 1, len(trials), best_val_loss, best_epoch, elapsed,
         )
 
 
@@ -217,31 +307,30 @@ def _run_trials_once(
             params = trial["params"]
             logging.info("[%s] Trial %d/%d - Params: %s", stage, i + 1, len(trials), params)
             log_dir = os.path.join(get_run_root(run_id), "search", "trials", trial["trial_id"])
+            started = time.monotonic()
             try:
-                epoch, val_loss = _fit_search_trial(
+                epoch, val_loss, epochs_run = _fit_search_trial(
                     train_dataset, params, n_targets, trainer_cfg, log_dir, train_loader, val_loader,
                 )
             except torch.cuda.OutOfMemoryError:
                 # Same policy as the multi-GPU workers: one configuration that
-                # does not fit must not end the search.
+                # does not fit must not end the search.  It is still recorded,
+                # so the merged ledger shows a configuration that was never
+                # scored rather than one nobody has started.
                 logging.warning("[%s] Trial %d/%d OOM — skipping trial %s.", stage, i + 1, len(trials), trial["trial_id"])
                 torch.cuda.empty_cache()
+                _record(run_id, _trial_row(
+                    params, run_id=run_id, trial_id=trial["trial_id"], signature=trial["signature"],
+                    stage=stage, status="oom", wall_seconds=time.monotonic() - started,
+                ), results)
                 continue
+            elapsed = time.monotonic() - started
             torch.cuda.empty_cache()
-            results.append({
-                **_canonicalize_search_params(params),
-                "val_loss": float(val_loss),
-                "best_epoch": int(epoch),
-                "trial_id": trial["trial_id"],
-                "signature": trial["signature"],
-                "status": "completed",
-                "stage": stage,
-            })
-            # Persist immediately so progress tracking and resume are up-to-date.
-            try:
-                _append_trials_ledger(run_id, [results[-1]])
-            except Exception as exc:
-                logging.warning("Failed to write trial to ledger (result kept in memory): %s", exc)
+            _record(run_id, _trial_row(
+                params, run_id=run_id, trial_id=trial["trial_id"], signature=trial["signature"],
+                stage=stage, status="completed", wall_seconds=elapsed,
+                val_loss=val_loss, best_epoch=epoch, epochs_run=epochs_run,
+            ), results)
         return results
 
     # Multi-GPU parallel run
@@ -271,11 +360,7 @@ def _run_trials_once(
     while True:
         try:
             row = result_queue.get(timeout=1)
-            results.append(row)
-            try:
-                _append_trials_ledger(run_id, [row])
-            except Exception as exc:
-                logging.warning("Failed to write trial to ledger (result kept in memory): %s", exc)
+            _record(run_id, row, results)
         except queue.Empty:
             pass
 
@@ -293,11 +378,7 @@ def _run_trials_once(
     while True:
         try:
             row = result_queue.get_nowait()
-            results.append(row)
-            try:
-                _append_trials_ledger(run_id, [row])
-            except Exception as exc:
-                logging.warning("Failed to write trial to ledger (result kept in memory): %s", exc)
+            _record(run_id, row, results)
         except queue.Empty:
             break
 
@@ -305,8 +386,14 @@ def _run_trials_once(
     if failed:
         raise RuntimeError(f"{len(failed)} search worker(s) crashed during {stage} — check logs.")
 
-    if not results:
-        raise RuntimeError(f"TFT {stage} produced no results.")
+    if not any(row.get("status") == "completed" for row in results):
+        # Every trial having OOMed still leaves rows behind, so "no results"
+        # would no longer be true; what matters is that nothing was scored.
+        raise RuntimeError(
+            f"TFT {stage} produced no completed trials ({len(results)} attempted). "
+            "Check the ledger's status column — an all-OOM stage means the batch size "
+            "or hidden_size range does not fit these GPUs."
+        )
     return results
 
 
@@ -373,11 +460,19 @@ def hyperparameter_search_tft(
             skipped_rows,
         )
 
-    plan = plan_two_stage_search(space, existing_ledger_rows)
+    shard = _search_shard()
+    if shard is not None:
+        logging.info(
+            "Search shard %s: this machine runs %d of the %d sampled configurations. "
+            "Merge every machine's search/trials.jsonl before stage 2 decides anything.",
+            shard, len(shard.members(space.sample())), space.n_trials,
+        )
+
+    plan = plan_two_stage_search(space, existing_ledger_rows, shard=shard)
     if plan.stage1_done or plan.stage2_done:
         logging.info(
-            "TFT resume: %d stage-1 and %d stage-2 trial(s) already on disk; %d/%d remain for stage 1.",
-            plan.stage1_done, plan.stage2_done, len(plan.stage1_pending), len(plan.all_params),
+            "TFT resume: %d stage-1 and %d stage-2 trial(s) already on disk; %d of this shard's %d remain for stage 1.",
+            plan.stage1_done, plan.stage2_done, len(plan.stage1_pending), plan.stage1_mine,
         )
     else:
         logging.info("No prior completed TFT trials detected; starting two-stage search.")
@@ -420,13 +515,25 @@ def hyperparameter_search_tft(
     stage2_signatures = select_top_k_signatures(
         stage1_pool, space.stage2_top_k, _SEARCH_PARAM_KEYS
     )
+    if len(stage1_pool) < space.n_trials:
+        # Under a shard this is the normal state of a machine that ran its
+        # slice and has not merged the others' rows in yet.  Ranking that
+        # pool would refit the best of a fraction of the search.
+        logging.warning(
+            "Ranking stage 2 on %d completed stage-1 trial(s), fewer than the %d the space samples. "
+            "%s",
+            len(stage1_pool), space.n_trials,
+            "Merge the other machines' ledgers first, or these are the wrong candidates."
+            if shard is not None else "Some trials are missing — check the ledger's status column.",
+        )
+    stage2_shortlist = shard.members(stage2_signatures) if shard is not None else stage2_signatures
     stage2_pending = [
-        sig_to_params[sig] for sig in stage2_signatures
+        sig_to_params[sig] for sig in stage2_shortlist
         if sig in sig_to_params and sig not in already_stage2
     ]
     logging.info(
-        "TFT stage2 candidates: %d (top_k=%d), remaining to run: %d",
-        len(stage2_signatures), space.stage2_top_k, len(stage2_pending),
+        "TFT stage2 candidates: %d (top_k=%d), assigned to this shard: %d, remaining to run: %d",
+        len(stage2_signatures), space.stage2_top_k, len(stage2_shortlist), len(stage2_pending),
     )
 
     stage2_new = _run_trials_by_encoder_length(

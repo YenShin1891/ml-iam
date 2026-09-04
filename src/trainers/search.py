@@ -52,6 +52,7 @@ __all__ = [
     "best_trial",
     "select_top_k_signatures",
     "budget_curve",
+    "Shard",
     "StagePlan",
     "plan_two_stage_search",
     "write_search_report",
@@ -558,13 +559,85 @@ def budget_curve(
 # The two-stage protocol
 # --------------------------------------------------------------------------
 
+@dataclass(frozen=True)
+class Shard:
+    """One machine's slice of a search that several machines run at once.
+
+    Sharding is possible at all because :meth:`SearchSpace.sample` is a pure
+    function of the seed: every machine running the same commit derives the
+    same configurations in the same order without talking to each other, so a
+    slice can be named by position rather than handed out by a scheduler.
+
+    Membership is round-robin (``position % count == index``) rather than
+    contiguous blocks.  Trial cost is not uniform across the space -- a TFT
+    trial at ``encoder_length=3`` and ``hidden_size=512`` costs several times
+    one at 2 and 64 -- and the sampled order is arbitrary, so contiguous
+    blocks hand one machine a run several times longer than another's.
+    Round-robin gives every shard the same mix.
+
+    Overlap is a waste of GPU time but never a wrong answer: trials are
+    identified by :func:`params_signature`, the ledger is append-only, and
+    both the resume plan and :func:`select_top_k_signatures` deduplicate by
+    signature.  So a machine that dies mid-shard can have its whole slice
+    reassigned to someone else with no reconciliation.
+    """
+
+    index: int
+    count: int
+
+    def __post_init__(self):
+        if self.count < 1:
+            raise ValueError(f"Shard count must be >= 1, got {self.count}")
+        if not 0 <= self.index < self.count:
+            raise ValueError(
+                f"Shard index must be in [0, {self.count}), got {self.index}"
+            )
+
+    @classmethod
+    def parse(cls, text: str) -> "Shard":
+        """Read the ``"index/count"`` spelling used by configs and env vars."""
+        parts = str(text).strip().split("/")
+        if len(parts) != 2:
+            raise ValueError(f"Expected a shard of the form 'index/count', got {text!r}")
+        try:
+            index, count = int(parts[0]), int(parts[1])
+        except ValueError:
+            raise ValueError(f"Shard 'index/count' must be integers, got {text!r}") from None
+        return cls(index, count)
+
+    @property
+    def is_whole(self) -> bool:
+        """True when the shard is the entire search, so it can be ignored."""
+        return self.count == 1
+
+    def members(self, items: Sequence[Any]) -> List[Any]:
+        """This shard's slice of *items*, in the order they were given.
+
+        The caller decides *which* sequence: stage 1 slices the full sampled
+        list, so a machine's assignment does not move as other machines
+        report trials, while stage 2 slices the ranked shortlist, which is
+        balanced only in that order.
+        """
+        if self.is_whole:
+            return list(items)
+        return [item for position, item in enumerate(items) if position % self.count == self.index]
+
+    def __str__(self) -> str:
+        return f"{self.index}/{self.count}"
+
+
 @dataclass
 class StagePlan:
     """What a (possibly resumed) two-stage search still has to run.
 
     ``stage1_pending`` and ``stage2_pending`` are parameter dicts; everything
     already in the ledger is excluded, so re-entering a search after a crash
-    picks up where it stopped rather than repeating hours of trials.
+    picks up where it stopped rather than repeating hours of trials.  Under a
+    :class:`Shard` they are further restricted to this machine's slice, while
+    ``stage1_done`` and ``stage2_done`` keep counting the whole search: the
+    ledger they are read from is the merged one, and a machine reporting
+    progress against its own slice alone would say the search was finished
+    when only a quarter of it was.
     """
 
     all_params: List[Dict[str, Any]]
@@ -572,6 +645,14 @@ class StagePlan:
     stage2_pending: List[Dict[str, Any]]
     stage1_done: int
     stage2_done: int
+    shard: Optional[Shard] = None
+
+    @property
+    def stage1_mine(self) -> int:
+        """Configurations this shard is responsible for across the search."""
+        if self.shard is None:
+            return len(self.all_params)
+        return len(self.shard.members(self.all_params))
 
     @property
     def signature_to_params(self) -> Dict[str, Dict[str, Any]]:
@@ -585,6 +666,7 @@ def plan_two_stage_search(
     ledger_rows: Iterable[Mapping[str, Any]],
     metric: str = "val_loss",
     mode: str = "min",
+    shard: Optional[Shard] = None,
 ) -> StagePlan:
     """Work out what stage 1 and stage 2 still owe, given the trials on disk.
 
@@ -592,6 +674,14 @@ def plan_two_stage_search(
     returns stage 2's pending list computed from the trials *already*
     recorded.  Callers run stage 1, append its results, and call again (or use
     :func:`select_top_k_signatures` directly) to get the final stage-2 list.
+
+    With a *shard*, stage 1 is sliced by position in the sampled list and
+    stage 2 by position in the ranked shortlist -- taken before the ledger is
+    consulted, so a machine's assignment is a property of the seed alone and
+    does not move as other machines report their trials.  Stage 2 is only
+    meaningful once every machine's stage-1 rows have been merged into the
+    ledger this reads; run against one machine's own rows it would rank a
+    quarter of the search and refit the wrong configurations.
     """
     keys = space.param_keys
     all_params = space.sample()
@@ -609,15 +699,19 @@ def plan_two_stage_search(
 
     # A signature that reached stage 2 necessarily cleared stage 1.
     explored = stage1_sigs | stage2_sigs
-    stage1_pending = [p for sig, p in sig_to_params.items() if sig not in explored]
+    mine = shard.members(all_params) if shard is not None else all_params
+    stage1_pending = [p for p in mine if params_signature(p, keys) not in explored]
 
     stage1_rows = [row for row in done if row.get("stage") != "stage2"]
     stage2_pending: List[Dict[str, Any]] = []
     if stage1_rows:
-        for signature in select_top_k_signatures(
+        shortlist = select_top_k_signatures(
             stage1_rows, space.stage2_top_k, keys, metric, mode,
             stratify_by=space.stage2_stratify_by,
-        ):
+        )
+        if shard is not None:
+            shortlist = shard.members(shortlist)
+        for signature in shortlist:
             if signature in sig_to_params and signature not in stage2_sigs:
                 stage2_pending.append(sig_to_params[signature])
 
@@ -627,6 +721,7 @@ def plan_two_stage_search(
         stage2_pending=stage2_pending,
         stage1_done=len(stage1_sigs),
         stage2_done=len(stage2_sigs),
+        shard=shard,
     )
     plan._sig_to_params = sig_to_params
     return plan

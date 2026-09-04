@@ -38,6 +38,7 @@ class RunConfig:
     two_window: bool = False
     keep_partial_targets: Optional[bool] = None
     target_normalizer_mode: Optional[str] = None  # TFT: "encoder_floored" or "global"
+    search_shard: Optional[str] = None  # "index/count" when several machines split one search
     note: Optional[str] = None
 
 
@@ -126,6 +127,41 @@ def _parse_cuda_by_phase(value: Any) -> Dict[str, Optional[str]]:
     return out
 
 
+def _parse_search_shard(value: Any) -> Optional[str]:
+    """Read the ``search_shard`` key into the canonical "index/count" string.
+
+    Accepts either spelling, because both read naturally in a YAML that one
+    co-author edits by hand:
+
+      search_shard: "2/4"
+      search_shard: {index: 2, count: 4}
+
+    Validation happens here rather than in the trainer so a typo fails before
+    a machine spends a day exploring the wrong slice -- or, worse, the same
+    slice someone else is already running.
+    """
+    if value is None:
+        return None
+
+    from src.trainers.search import Shard
+
+    if isinstance(value, dict):
+        missing = {"index", "count"} - set(value)
+        if missing:
+            raise ValueError(f"search_shard mapping needs 'index' and 'count'; missing {sorted(missing)}")
+        unknown = set(value) - {"index", "count"}
+        if unknown:
+            raise ValueError(f"Unknown search_shard key(s) {sorted(unknown)}; expected 'index' and 'count'")
+        try:
+            shard = Shard(int(value["index"]), int(value["count"]))
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"Invalid search_shard {value!r}: {e}") from None
+    else:
+        shard = Shard.parse(str(value))
+
+    return str(shard)
+
+
 def _parse_config(obj: Dict[str, Any]) -> RunConfig:
     model_raw = obj.get("model")
     if not isinstance(model_raw, str) or not model_raw.strip():
@@ -195,6 +231,8 @@ def _parse_config(obj: Dict[str, Any]) -> RunConfig:
     if keep_partial_targets is not None and not isinstance(keep_partial_targets, bool):
         raise ValueError("'keep_partial_targets' must be boolean when provided")
 
+    search_shard = _parse_search_shard(obj.get("search_shard"))
+
     note = obj.get("note")
     if note is not None and not isinstance(note, str):
         raise ValueError("'note' must be a string when provided")
@@ -210,6 +248,7 @@ def _parse_config(obj: Dict[str, Any]) -> RunConfig:
         two_window=two_window,
         keep_partial_targets=keep_partial_targets,
         target_normalizer_mode=target_normalizer_mode,
+        search_shard=search_shard,
         note=note,
     )
 
@@ -277,6 +316,7 @@ def _write_run_metadata(
         "cuda_visible_devices_resolved_by_phase": dict(cuda_by_phase_resolved),
         "two_window": cfg.two_window,
         "target_normalizer_mode": cfg.target_normalizer_mode,
+        "search_shard": cfg.search_shard,
         "keep_partial_targets": cfg.keep_partial_targets,
         "note": cfg.note,
         "phases": list(cfg.phases),
@@ -289,6 +329,7 @@ def _write_run_metadata(
     env_snapshot = {
         "global": {
             "CUDA_VISIBLE_DEVICES": env.get("CUDA_VISIBLE_DEVICES"),
+            "SEARCH_SHARD": env.get("SEARCH_SHARD"),
             "DL_NUM_WORKERS": env.get("DL_NUM_WORKERS"),
             "OMP_NUM_THREADS": env.get("OMP_NUM_THREADS"),
             "MKL_NUM_THREADS": env.get("MKL_NUM_THREADS"),
@@ -321,7 +362,7 @@ def _write_resume_record(
         "cuda_visible_devices_resolved_by_phase": dict(cuda_by_phase_resolved),
         "overrides": {
             name: getattr(cfg, name)
-            for name in ("dataset", "two_window", "target_normalizer_mode", "keep_partial_targets", "note")
+            for name in ("dataset", "two_window", "target_normalizer_mode", "search_shard", "keep_partial_targets", "note")
             if getattr(cfg, name) not in (None, False)
         },
         "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -424,6 +465,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             child_env["CUDA_VISIBLE_DEVICES"] = default_cuda
     elif cfg.cuda_visible_devices is not None:
         child_env["CUDA_VISIBLE_DEVICES"] = cfg.cuda_visible_devices
+
+    # Which slice of a search this machine runs travels the same way
+    # CUDA_VISIBLE_DEVICES does: it is a fact about the machine rather than
+    # about the model, and every phase runs in its own subprocess.
+    if cfg.search_shard is not None:
+        child_env["SEARCH_SHARD"] = cfg.search_shard
+    else:
+        child_env.pop("SEARCH_SHARD", None)
 
     cuda_resolved: Dict[str, Optional[str]] = {}
     for phase in phases:
