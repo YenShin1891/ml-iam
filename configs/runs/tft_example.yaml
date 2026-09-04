@@ -19,6 +19,19 @@ two_window: true
 #   "global" — single global μ/σ per target from all training data
 target_normalizer_mode: global
 
+# Splitting one search across machines.  Every machine derives the same 50
+# configurations from the same seed, so a slice can be named rather than
+# handed out: set a different index on each, with count = number of machines.
+# Omit the key to run the whole search here.
+#
+#   search_shard: "0/3"          # or {index: 0, count: 3}
+#
+# Stage 1 slices the sampled list; stage 2 slices the ranked shortlist and is
+# only correct once every machine's search/trials.jsonl has been pooled with
+#   python scripts/merge_search_ledgers.py --model tft --out <run>/search/trials.jsonl *.jsonl
+# Overlap wastes GPU time but never corrupts a result: trials are identified
+# by their parameters, so duplicates collapse on merge.
+
 # Omit 'search' to skip hyperparameter search and use defaults instead.
 phases: [preprocess, search, train, test, plot]
 
