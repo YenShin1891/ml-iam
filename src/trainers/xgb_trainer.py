@@ -352,13 +352,15 @@ def train_and_evaluate_single_config(
         
     Returns:
     --------
-    Tuple[Dict, float, int]: the parameters, the negative RMSE score, and the
-    boosting round early stopping settled on (the round count the final model
-    needs, in place of searching for one).
+    Tuple[Dict, float, int, Optional[float]]: the parameters, the negative
+    RMSE score, the boosting round early stopping settled on (the round count
+    the final model needs, in place of searching for one), and the negative
+    one-step RMSE when the score came from the rollout, else None.
     """
     try:
         if use_cv:
             scores: List[float] = []
+            one_steps: List[float] = []
             best_iterations: List[int] = []
             fold_cache: Dict[str, Dict] = {}
             for fold, (train_idx, val_idx) in enumerate(
@@ -376,7 +378,7 @@ def train_and_evaluate_single_config(
                 if cache_key not in fold_cache:
                     fold_cache[cache_key] = {}
 
-                fold_rmse, fold_best_iteration = _train_single_fold(
+                fold_rmse, fold_best_iteration, fold_one_step = _train_single_fold(
                     X_train,
                     y_train,
                     X_val_fold,
@@ -398,15 +400,18 @@ def train_and_evaluate_single_config(
                 )
                 scores.append(fold_rmse)
                 best_iterations.append(fold_best_iteration)
+                if fold_one_step is not None:
+                    one_steps.append(fold_one_step)
 
             avg_rmse = float(np.mean(scores))
             score = -avg_rmse
+            one_step_score = -float(np.mean(one_steps)) if one_steps else None
         else:
             if X_val is None or y_val is None or X_val_with_index is None:
                 raise ValueError("X_val, y_val, and X_val_with_index must be provided when use_cv=False")
 
             logging.info("Training with params: %s", params)
-            rmse, best_iteration = _train_single_fold(
+            rmse, best_iteration, one_step_rmse = _train_single_fold(
                 X,
                 y,
                 X_val,
@@ -428,8 +433,9 @@ def train_and_evaluate_single_config(
             )
             score = -rmse
             best_iterations = [best_iteration]
+            one_step_score = -one_step_rmse if one_step_rmse is not None else None
 
-        return params, float(score), max(best_iterations) if best_iterations else 0
+        return params, float(score), max(best_iterations) if best_iterations else 0, one_step_score
     except Exception as e:
         logging.error("Error training config %s: %s", params, str(e), exc_info=True)
         raise
@@ -456,8 +462,11 @@ def _train_single_fold(
     
     Returns:
     --------
-    Tuple[float, int]: RMSE for this fold, and the boosting round early
-    stopping settled on.
+    Tuple[float, int, Optional[float]]: RMSE for this fold, the boosting
+    round early stopping settled on, and -- when the fold is scored on the
+    rollout -- the one-step RMSE as well.  One-step error is what stage 1
+    used to rank on; keeping it next to the rollout score is what lets the
+    paper say how well the cheap proxy predicted the objective.
     """
     from configs.data import KEEP_PARTIAL_TARGETS
 
@@ -499,14 +508,29 @@ def _train_single_fold(
         str(params.get('num_boost_round')),
     )
 
+    # RMSE on observed elements only.  Unobserved targets are NaN (see
+    # prepare_data), so fall back to finiteness when no mask is supplied.
+    y_flat = np.asarray(y_val, dtype=float).flatten()
+    if obs_val is not None:
+        mask = obs_val.astype(bool).flatten() & np.isfinite(y_flat)
+    else:
+        mask = np.isfinite(y_flat)
+    if not mask.any():
+        raise ValueError("No observed validation targets to score this fold on")
+
+    def observed_rmse(predictions) -> float:
+        pred_flat = np.asarray(predictions, dtype=float).flatten()
+        return float(np.sqrt(mean_squared_error(y_flat[mask], pred_flat[mask])))
+
+    one_step_rmse: Optional[float] = None
     ar_t0 = time.perf_counter()
     if use_autoregressive_eval:
+        one_step_rmse = observed_rmse(regular_model.predict(X_val))
         predictions = test_xgb_autoregressively(
             X_val_with_index,
             y_val,
             model=regular_model,
             disable_progress=(not show_autoreg_progress),
-            max_workers=1,
             cache=cache,
             n_lags=int(params.get('n_lags', N_LAG_FEATURES)),
             y_scaler=y_scaler,
@@ -523,24 +547,14 @@ def _train_single_fold(
         predictions = regular_model.predict(X_val)
         ar_dt = time.perf_counter() - ar_t0
         logging.info("Fold %d standard validation done in %.2fs", fold_num, ar_dt)
-    
-    # Calculate RMSE on observed elements only.  Unobserved targets are NaN
-    # (see prepare_data), so fall back to finiteness when no mask is supplied.
-    y_flat = np.asarray(y_val, dtype=float).flatten()
-    pred_flat = np.asarray(predictions, dtype=float).flatten()
-    if obs_val is not None:
-        mask = obs_val.astype(bool).flatten() & np.isfinite(y_flat)
-    else:
-        mask = np.isfinite(y_flat)
-    if not mask.any():
-        raise ValueError("No observed validation targets to score this fold on")
-    rmse = np.sqrt(mean_squared_error(y_flat[mask], pred_flat[mask]))
+
+    rmse = observed_rmse(predictions)
     best_iteration = int(getattr(regular_model, "best_iteration", 0) or 0)
     logging.info("Fold %d RMSE: %.4f (best iteration %d)", fold_num, rmse, best_iteration)
 
     del regular_model, predictions
 
-    return float(rmse), best_iteration
+    return rmse, best_iteration, one_step_rmse
 
 
 def _search_worker(
@@ -573,7 +587,7 @@ def _search_worker(
         _cap_search_cpu_threads()
 
         for trial_idx, params in assignments:
-            params_copy, score, best_iteration = train_and_evaluate_single_config(
+            params_copy, score, best_iteration, one_step = train_and_evaluate_single_config(
                 X_train,
                 y_train,
                 X_train_with_index,
@@ -602,6 +616,8 @@ def _search_worker(
             result['status'] = 'completed'
             result['gpu'] = str(gpu_token)
             result['trial'] = int(trial_idx)
+            if one_step is not None:
+                result['val_score_one_step'] = float(one_step)
             result_queue.put(result)
 
 
@@ -814,7 +830,7 @@ def _run_xgb_trials_sequentially(
     with cuda_device(gpu_token):
         _cap_search_cpu_threads()
         for trial_idx, params in trials:
-            params_copy, score, best_iteration = train_and_evaluate_single_config(
+            params_copy, score, best_iteration, one_step = train_and_evaluate_single_config(
                 inputs.X_train,
                 inputs.y_train,
                 inputs.X_train_with_index,
@@ -843,6 +859,8 @@ def _run_xgb_trials_sequentially(
             result['status'] = 'completed'
             result['gpu'] = str(gpu_token)
             result['trial'] = int(trial_idx)
+            if one_step is not None:
+                result['val_score_one_step'] = float(one_step)
             results.append(result)
 
             rmse = -float(score)
@@ -973,9 +991,9 @@ def hyperparameter_search(
     """Two-stage random search, the same protocol the LSTM and TFT searches run.
 
     Stage 1 ranks every sampled configuration under a shortened boosting
-    budget, scored on one-step predictions; stage 2 refits the leaders at the
-    full budget and scores them on the autoregressive rollout the test phase
-    reports.  This replaces three sequential stages that each swept a small
+    budget; stage 2 refits the leaders at the full budget.  Both are scored
+    on the autoregressive rollout the test phase reports (see
+    XGBTrainerConfig).  This replaces three sequential stages that each swept a small
     grid exhaustively while holding the other parameters fixed -- coordinate
     descent, which cannot see interactions between parameters and made "a
     trial" mean something different here than for the other two models.
@@ -1034,10 +1052,16 @@ def hyperparameter_search(
     score_key = next(iter(inputs_by_n_lags.values())).score_key
 
     all_params = space.sample()
+    logging.info(
+        "XGB stage1: %d trials at %d rounds, scored on the %s",
+        len(all_params), int(space.stage1_budget["num_boost_round"]),
+        "autoregressive rollout" if trainer_cfg.search_autoregressive_stage1 else "one-step predictions",
+    )
     stage1_started = time.monotonic()
     stage1_rows = _run_xgb_trials(
         all_params, inputs_by_n_lags, "stage1",
         int(space.stage1_budget["num_boost_round"]), gpu_pool,
+        use_autoregressive_eval=trainer_cfg.search_autoregressive_stage1,
     )
     logging.info(
         "XGB stage1 complete in %s (%d trials)",

@@ -91,7 +91,7 @@ def test_the_search_rollout_is_the_test_phase_rollout(monkeypatch):
     cfg.device = "cpu"
     x_scaler, y_scaler = _Scaler([0, 0], [1, 1]), _Scaler([0], [1])
 
-    xgb_trainer._train_single_fold(
+    rollout_rmse, _, one_step_rmse = xgb_trainer._train_single_fold(
         X, y, X, y, pd.concat([X, index], axis=1), ["Primary Energy|Coal"],
         {"max_depth": 2, "eta": 0.3, "num_boost_round": 3}, {}, 1,
         trainer_cfg=cfg, use_autoregressive_eval=True,
@@ -100,6 +100,27 @@ def test_the_search_rollout_is_the_test_phase_rollout(monkeypatch):
 
     assert seen["x_scaler"] is x_scaler
     assert seen["y_scaler"] is y_scaler
+    # The one-step error rides along so the proxy can be compared with the
+    # objective afterwards; the score itself is the rollout's.
+    assert one_step_rmse is not None and one_step_rmse != rollout_rmse
+
+
+def test_a_fold_scored_one_step_reports_no_rollout_companion(monkeypatch):
+    from configs.models import XGBTrainerConfig
+
+    rng = np.random.RandomState(0)
+    X = pd.DataFrame(rng.rand(40, 2), columns=["a", "prev_Primary Energy|Coal"])
+    y = rng.rand(40, 1)
+    cfg = XGBTrainerConfig()
+    cfg.device = "cpu"
+
+    _, _, one_step_rmse = xgb_trainer._train_single_fold(
+        X, y, X, y, X, ["Primary Energy|Coal"],
+        {"max_depth": 2, "eta": 0.3, "num_boost_round": 3}, {}, 1,
+        trainer_cfg=cfg, use_autoregressive_eval=False,
+    )
+
+    assert one_step_rmse is None
 
 
 def test_the_trial_inputs_carry_the_scalers_from_the_splits(monkeypatch):

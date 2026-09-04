@@ -20,12 +20,19 @@ class XGBTrainerConfig:
     # early stopping on the validation set picks the round count the final
     # model is trained for, the same way it picks best_epoch for LSTM and TFT.
     num_boost_round: int = 1500
-    # Score stage-2 trials on the same autoregressive rollout the test phase
-    # runs, where each step's prediction becomes the next step's lag feature.
-    # Stage 1 stays on one-step predictions: the rollout costs minutes per
-    # trial, which is why it was switched off for the whole search in e5b18d9,
-    # and the two-stage protocol is what makes it affordable again -- 10
-    # trials pay for it instead of 50.
+    # Score every search trial on the same autoregressive rollout the test
+    # phase runs, where each step's prediction becomes the next step's lag
+    # feature.  One-step predictions from ground-truth lags measure a
+    # different quantity -- a model can track the truth and still compound
+    # its own errors -- and XGBoost is the only one of the three models with
+    # that gap, since the LSTM and TFT validate on what they report.  The
+    # rollout used to cost minutes per trial (28,000 single-row predicts), so
+    # it was switched off in e5b18d9 and restored for stage 2 alone in
+    # 3169031; rolling every trajectory forward together made it seconds, so
+    # both stages now score what the paper reports.  The one-step error is
+    # still recorded per trial (val_score_one_step) so how well it predicts
+    # the rollout can be reported.
+    search_autoregressive_stage1: bool = True
     search_autoregressive_stage2: bool = True
 
     # Diagnostics

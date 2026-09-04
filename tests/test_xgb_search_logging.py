@@ -113,8 +113,9 @@ def test_a_trial_without_gpu_or_params_still_logs(caplog):
 # XGBoost is the only one of the three models with a feedback loop: its lag
 # features are its own past predictions at test time.  So a trial scored on
 # one-step predictions from ground-truth lags is not measuring what the test
-# phase reports, and the two-stage protocol is what makes the real rollout
-# affordable -- ten trials pay for it, not fifty.
+# phase reports.  Both stages score the rollout; now that every trajectory
+# rolls forward in one batch it costs seconds, so there is nothing to save
+# by ranking stage 1 on a proxy.
 
 import src.trainers.xgb_trainer as xgb_trainer
 from configs.models import XGBSearchSpace
@@ -170,13 +171,13 @@ def _run_search():
     )
 
 
-def test_stage_one_ranks_cheaply_on_one_step_predictions(recorded_stages):
+def test_stage_one_is_scored_on_the_rollout_at_the_reduced_budget(recorded_stages):
     space, stages = recorded_stages
 
     _run_search()
 
     stage1 = next(s for s in stages if s["stage"] == "stage1")
-    assert stage1["autoregressive"] is False
+    assert stage1["autoregressive"] is True
     assert stage1["n"] == space.n_trials
     assert stage1["rounds"] == space.stage1_budget["num_boost_round"]
 
@@ -193,18 +194,18 @@ def test_stage_two_is_scored_on_the_rollout_the_test_phase_reports(recorded_stag
     assert stage2["rounds"] == XGBTrainerConfig().num_boost_round
 
 
-def test_the_rollout_can_be_switched_off_without_touching_the_protocol(recorded_stages, monkeypatch):
-    """It costs ~50x a one-step evaluation; a quick run may not want it."""
+def test_the_rollout_can_be_switched_off_per_stage_without_touching_the_protocol(recorded_stages, monkeypatch):
     from configs.models import XGBTrainerConfig
 
     cfg = XGBTrainerConfig()
-    cfg.search_autoregressive_stage2 = False
+    cfg.search_autoregressive_stage1 = False
     monkeypatch.setattr(xgb_trainer, "XGBTrainerConfig", lambda: cfg)
     _, stages = recorded_stages
 
     _run_search()
 
-    assert next(s for s in stages if s["stage"] == "stage2")["autoregressive"] is False
+    assert next(s for s in stages if s["stage"] == "stage1")["autoregressive"] is False
+    assert next(s for s in stages if s["stage"] == "stage2")["autoregressive"] is True
 
 
 def test_the_final_round_count_comes_from_early_stopping(recorded_stages):

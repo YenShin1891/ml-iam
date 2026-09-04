@@ -13,9 +13,6 @@ import logging
 import time
 import numpy as np
 import pandas as pd
-import concurrent.futures
-
-from typing import Optional
 
 from configs.data import INDEX_COLUMNS, NON_FEATURE_COLUMNS, N_LAG_FEATURES
 from src.utils.regions import SCALE_ORDER_COARSEST_FIRST, scale_of_frame
@@ -170,6 +167,71 @@ def autoregressive_predictions(model, group_indices, group_matrix, start_pos, y_
     return preds_target
 
 
+def rollout_all_groups(model, group_matrices, feature_columns, y_scaler, x_scaler, n_lags: int = N_LAG_FEATURES):
+    """Roll every group forward together, one predict call per time step.
+
+    The same computation as :func:`autoregressive_predictions` applied to each
+    group in turn -- XGBoost predicts row by row, so a row's prediction does
+    not depend on what else is in the batch -- but every group's step *t* is
+    one call instead of one call per group.  A test set of 2,346 trajectories
+    costs 12 predict calls rather than 28,000, which is what makes the rollout
+    cheap enough to score every search trial on.  The per-group function is
+    kept as the reference the tests check this one against.
+
+    Returns ``(preds, lengths)``: *preds* is ``(groups, max_length, targets)``
+    in the model's (y-scaled) units, NaN past each group's length.
+    """
+    from configs.data import OUTPUT_VARIABLES
+
+    lengths = np.array([len(matrix) for matrix in group_matrices], dtype=int)
+    if len(lengths) == 0:
+        return np.zeros((0, 0, 0), dtype=float), lengths
+
+    x_means = np.asarray(getattr(x_scaler, "mean_", None), dtype=float)
+    x_scales = np.asarray(getattr(x_scaler, "scale_", None), dtype=float)
+    if x_means.shape != (len(feature_columns),) or x_scales.shape != (len(feature_columns),):
+        # A wrong-scale feedback loop yields a plausible number, so it must
+        # not be allowed to run.
+        raise ValueError(
+            f"x_scaler was fitted on {x_means.size} columns but the rollout frame has "
+            f"{len(feature_columns)}; lag updates would insert y-scaled values into "
+            "x-scaled columns"
+        )
+
+    max_length = int(lengths.max())
+    preds = None
+    lag_columns = {}
+    y_means = y_scales = None
+    for t in range(max_length):
+        active = np.flatnonzero(lengths > t)
+        rows = np.stack([group_matrices[g][t] for g in active]).astype(float, copy=True)
+        if t > 0:
+            for lag in range(1, n_lags + 1):
+                source = t - lag
+                if source < 0:
+                    break  # further back than the first prediction: ground truth stays
+                for j, column in enumerate(lag_columns[lag]):
+                    if column is None:
+                        continue
+                    raw = preds[active, source, j] * y_scales[j] + y_means[j]
+                    rows[:, column] = (raw - x_means[column]) / x_scales[column]
+        out = np.asarray(model.predict(rows), dtype=float).reshape(len(active), -1)
+        if preds is None:
+            num_targets = out.shape[1]
+            preds = np.full((len(lengths), max_length, num_targets), np.nan, dtype=float)
+            y_means = np.asarray(y_scaler.mean_, dtype=float)[:num_targets]
+            y_scales = np.asarray(y_scaler.scale_, dtype=float)[:num_targets]
+            for lag in range(1, n_lags + 1):
+                lag_columns[lag] = []
+                for var in OUTPUT_VARIABLES[:num_targets]:
+                    name = f"prev_{var}" if lag == 1 else f"prev{lag}_{var}"
+                    lag_columns[lag].append(
+                        feature_columns.index(name) if name in feature_columns else None
+                    )
+        preds[active, t, :] = out
+    return preds, lengths
+
+
 def test_xgb_autoregressively(
     X_test_with_index,
     y_test,
@@ -179,18 +241,16 @@ def test_xgb_autoregressively(
     cache=None,
     y_scaler=None,
     x_scaler=None,
-    max_workers: Optional[int] = None,
     n_lags: int = N_LAG_FEATURES,
 ):
     """Test the model autoregressively on the test set.
 
-    *disable_progress* silences the periodic progress line and the closing
-    RMSE; the search sets it, where one line per trial is enough and these
-    would arrive once per fold.
+    *disable_progress* silences the timing line and the closing RMSE; the
+    search sets it, where one line per trial is enough.
     """
     if cache is None:
         cache = {}
-    
+
     # Load the run's scalers when the caller did not pass them.  Without them
     # the lag columns would receive y-scaled predictions in x-scaled units, a
     # wrong-scale feedback loop that yields a plausible but wrong RMSE, so a
@@ -210,8 +270,7 @@ def test_xgb_autoregressively(
         )
 
     group_indices_list, group_matrices = group_test_data(X_test_with_index, cache)
-    full_preds = np.full(y_test.shape, np.nan, dtype=float)
-    
+
     if model is None:
         if run_id is None:
             raise ValueError("Either provide a preloaded `model` or a valid `run_id` to load from disk.")
@@ -221,47 +280,23 @@ def test_xgb_autoregressively(
         n_targets = y_test.shape[1] if y_test.ndim > 1 else 1
         model = load_final_xgb_model(run_id, OUTPUT_VARIABLES[:n_targets])
 
-    # Get feature column names
     feature_columns = [col for col in X_test_with_index.columns if col not in NON_FEATURE_COLUMNS]
 
-    def process_group(args):
-        group_indices, group_matrix = args
-        # With no nan values in y_test, we always use the first instance as seed.
-        start_pos = 0
-        preds_target = autoregressive_predictions(
-            model, group_indices, group_matrix, start_pos, y_scaler, x_scaler,
-            feature_columns, n_lags=n_lags,
-        )
-        return group_indices, preds_target
-
+    started = time.monotonic()
+    preds, lengths = rollout_all_groups(
+        model, group_matrices, feature_columns, y_scaler, x_scaler, n_lags=n_lags,
+    )
+    full_preds = np.full(y_test.shape, np.nan, dtype=float)
     index_to_pos = {idx: pos for pos, idx in enumerate(X_test_with_index.index)}
-    groups = list(zip(group_indices_list, group_matrices))
-    futures = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for group in groups:
-            futures.append(executor.submit(process_group, group))
-            
-        total = len(futures)
-        completed = 0
-        last_logged = time.monotonic()
-
-        for future in concurrent.futures.as_completed(futures):
-            group_indices, preds_target = future.result()
-            pos = [index_to_pos[idx] for idx in group_indices]
-            full_preds[pos, :] = preds_target
-
-            completed += 1
-            # Reported to the log rather than a progress bar: the bar reached
-            # only a terminal, so train.log had nothing for the six minutes
-            # this takes, while its redraws filled the console log instead.
-            now = time.monotonic()
-            if not disable_progress and (
-                completed == total or now - last_logged >= PROGRESS_LOG_SECONDS
-            ):
-                logging.info("Autoregressive prediction: %d/%d groups", completed, total)
-                last_logged = now
+    for g, group_indices in enumerate(group_indices_list):
+        positions = [index_to_pos[idx] for idx in group_indices]
+        full_preds[positions, :] = preds[g, :lengths[g], :]
 
     if not disable_progress:
+        logging.info(
+            "Autoregressive prediction: %d groups rolled out over %d steps in %.1fs",
+            len(lengths), int(lengths.max()) if len(lengths) else 0, time.monotonic() - started,
+        )
         # y_test carries NaN at unobserved targets; score the observed ones.
         finite = np.isfinite(np.asarray(y_test, dtype=float)) & np.isfinite(full_preds)
         if finite.any():
