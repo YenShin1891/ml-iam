@@ -44,6 +44,10 @@ _SPACES = {
 
 # The fields that must agree across ledgers for their scores to be comparable.
 _PROVENANCE_KEYS = ("git_commit", "dataset_version")
+# Settings that shape the validation loss without appearing in a trial row.
+# Two ledgers that disagree on the target normaliser are scored on different
+# scales, and no ranking across them means anything.
+_RUN_SETTINGS = ("dataset", "target_normalizer_mode", "two_window", "keep_partial_targets")
 
 
 def load_space(model: str) -> SearchSpace:
@@ -127,6 +131,35 @@ def check_provenance(rows: Sequence[Dict[str, Any]]) -> List[str]:
     dirty = sorted({row.get("git_commit") for row in rows if str(row.get("git_commit") or "").endswith("-dirty")})
     if dirty:
         problems.append(f"trials ran from uncommitted edits: {dirty}")
+    return problems
+
+
+def run_settings(ledger: Path) -> Optional[Dict[str, Any]]:
+    """What the run that wrote *ledger* was configured with, from its meta/.
+
+    A ledger still in its run directory has meta/run_config.resolved.json
+    two levels up.  One that has been copied elsewhere has no record, and
+    None says so rather than pretending the settings were checked.
+    """
+    meta = ledger.resolve().parent.parent / "meta" / "run_config.resolved.json"
+    try:
+        recorded = json.loads(meta.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return {key: recorded.get(key) for key in _RUN_SETTINGS}
+
+
+def check_run_settings(settings_by_ledger: Dict[str, Optional[Dict[str, Any]]]) -> List[str]:
+    """Complaints about runs whose recorded settings disagree."""
+    problems: List[str] = []
+    known = {path: found for path, found in settings_by_ledger.items() if found is not None}
+    for key in _RUN_SETTINGS:
+        by_value: Dict[str, set] = defaultdict(set)
+        for path, found in known.items():
+            by_value[json.dumps(found.get(key), sort_keys=True)].add(path)
+        if len(by_value) > 1:
+            detail = "; ".join(f"{value} in {sorted(paths)}" for value, paths in sorted(by_value.items()))
+            problems.append(f"{key} disagrees across runs: {detail}")
     return problems
 
 
@@ -233,6 +266,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     kept, dropped = merge(rows, space.param_keys)
     problems = check_provenance(kept)
+    settings = {str(path): run_settings(path) for path in args.ledgers}
+    for path, found in settings.items():
+        if found is None:
+            print(f"  ! {path} has no meta/run_config.resolved.json beside it; its run settings were not checked")
+    problems.extend(check_run_settings(settings))
     cover = coverage(space, kept)
     _print_report(space, kept, dropped, problems, cover)
 

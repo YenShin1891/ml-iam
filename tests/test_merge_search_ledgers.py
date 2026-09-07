@@ -207,3 +207,58 @@ def test_every_row_remembers_which_ledger_it_came_from(space, tmp_path):
     path = tmp_path / "trials.jsonl"
     path.write_text(json.dumps(row(space, space.sample()[0])) + "\n", encoding="utf-8")
     assert read_ledger(path)[0]["_source"] == str(path)
+
+
+# ── settings the rows do not carry ─────────────────────────────────────────
+#
+# target_normalizer_mode sets the scale of val_loss.  It is recorded in each
+# run's meta/, not in the trial rows, so the merge reads it from beside the
+# ledger.
+
+import json as _json
+from pathlib import Path as _Path
+
+from scripts.merge_search_ledgers import check_run_settings, run_settings
+
+
+def _run_dir(root, name, **settings):
+    run = _Path(root) / name
+    (run / "meta").mkdir(parents=True)
+    (run / "search").mkdir()
+    record = {"dataset": "d", "target_normalizer_mode": "global", "two_window": True, "keep_partial_targets": None}
+    record.update(settings)
+    (run / "meta" / "run_config.resolved.json").write_text(_json.dumps(record))
+    ledger = run / "search" / "trials.jsonl"
+    ledger.write_text("")
+    return ledger
+
+
+def test_the_settings_are_read_from_the_run_beside_the_ledger(tmp_path):
+    ledger = _run_dir(tmp_path, "tft_01", target_normalizer_mode="encoder_floored")
+
+    assert run_settings(ledger)["target_normalizer_mode"] == "encoder_floored"
+    assert run_settings(ledger)["two_window"] is True
+
+
+def test_a_ledger_copied_away_from_its_run_is_reported_not_guessed(tmp_path):
+    loose = tmp_path / "trials.jsonl"
+    loose.write_text("")
+
+    assert run_settings(loose) is None
+    assert check_run_settings({str(loose): None}) == []
+
+
+def test_runs_that_disagree_on_the_normaliser_are_refused():
+    problems = check_run_settings({
+        "egg": {"dataset": "d", "target_normalizer_mode": "global", "two_window": True, "keep_partial_targets": None},
+        "apple": {"dataset": "d", "target_normalizer_mode": "encoder_floored", "two_window": True, "keep_partial_targets": None},
+    })
+
+    assert len(problems) == 1
+    assert "target_normalizer_mode" in problems[0] and "apple" in problems[0]
+
+
+def test_runs_that_agree_raise_nothing(tmp_path):
+    ledgers = [_run_dir(tmp_path, name) for name in ("tft_01", "tft_02", "tft_03")]
+
+    assert check_run_settings({str(p): run_settings(p) for p in ledgers}) == []
