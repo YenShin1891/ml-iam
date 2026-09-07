@@ -95,6 +95,10 @@ def _search_with_splits(splits, store):
     best_params = hyperparameter_search_tft(
         datasets_by_encoder_length, splits["targets"], store.run_id,
     )
+    if best_params is None:
+        # One shard of stage 1 is done; the winner is chosen on the machine
+        # that resumes the search with the merged ledger.
+        return None
     store.save_best_params(best_params)
     store.save_features(splits["features"], splits["targets"])
     # The searcher already logged the winning parameters, and the phase banner

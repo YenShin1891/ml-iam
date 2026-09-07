@@ -528,6 +528,9 @@ def hyperparameter_search_tft(
     (train, val) TimeSeriesDataSet pair.  Every pair predicts the same steps
     of the same trajectories, so the encoder lengths are comparable.
 
+    Returns the winning parameters, or None on a machine that ran one shard
+    of stage 1 and has nothing to rank yet (see SEARCH_SHARD).
+
     When multiple GPUs are available, trials are distributed across GPUs
     in parallel (one trial per GPU at a time, each GPU runs its share
     sequentially).  Falls back to sequential search on a single GPU.
@@ -602,15 +605,24 @@ def hyperparameter_search_tft(
         stage1_pool, space.stage2_top_k, _SEARCH_PARAM_KEYS
     )
     if len(stage1_pool) < space.n_trials:
-        # Under a shard this is the normal state of a machine that ran its
-        # slice and has not merged the others' rows in yet.  Ranking that
-        # pool would refit the best of a fraction of the search.
+        if shard is not None:
+            # The normal state of a machine that ran its slice: the shortlist
+            # can only be ranked once every machine's rows are pooled, and
+            # refitting the best of a third of the search at the full budget
+            # would cost hours and put stage-2 rows for the wrong candidates
+            # in the ledger.  Stop here; there is no winner yet.
+            logging.info(
+                "Search shard %s: stage 1 finished on this machine (%d of %d stage-1 trials "
+                "are in this ledger).  Stage 2 waits for the merged ledger: pool every "
+                "machine's search/trials.jsonl with scripts/merge_search_ledgers.py, then "
+                "resume the search on one machine without a shard.",
+                shard, len(stage1_pool), space.n_trials,
+            )
+            return None
         logging.warning(
             "Ranking stage 2 on %d completed stage-1 trial(s), fewer than the %d the space samples. "
-            "%s",
+            "Some trials are missing — check the ledger's status column.",
             len(stage1_pool), space.n_trials,
-            "Merge the other machines' ledgers first, or these are the wrong candidates."
-            if shard is not None else "Some trials are missing — check the ledger's status column.",
         )
     stage2_shortlist = shard.members(stage2_signatures) if shard is not None else stage2_signatures
     stage2_pending = [

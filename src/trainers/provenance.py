@@ -25,15 +25,24 @@ from typing import Any, Dict, Optional
 __all__ = ["git_commit", "host_name", "gpu_name", "dataset_version", "trial_provenance"]
 
 
-@lru_cache(maxsize=1)
-def git_commit() -> Optional[str]:
+# Per-machine settings -- which GPUs, which shard, which note -- live here
+# and are meant to differ from the committed examples; each run records the
+# file it was launched from in meta/.  Edits there do not make the code
+# irreproducible, so they do not mark the tree dirty.
+_NOT_CODE = ("configs/runs",)
+
+
+@lru_cache(maxsize=4)
+def git_commit(root: Optional[str] = None) -> Optional[str]:
     """The commit the trial ran, or None outside a checkout.
 
     Dirty working trees are marked, because a search run from uncommitted
     edits is not reproducible from the hash alone and the merge report should
-    say so rather than quietly claiming it is.
+    say so rather than quietly claiming it is.  *root* is the checkout to
+    ask; it defaults to this repository.
     """
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if root is None:
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     try:
         head = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -45,7 +54,7 @@ def git_commit() -> Optional[str]:
         return None
     try:
         dirty = subprocess.run(
-            ["git", "status", "--porcelain"],
+            ["git", "status", "--porcelain", "--", ".", *(f":(exclude){path}" for path in _NOT_CODE)],
             cwd=root, capture_output=True, text=True, timeout=10, check=True,
         ).stdout.strip()
     except Exception:  # noqa: BLE001

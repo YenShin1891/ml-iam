@@ -169,3 +169,70 @@ def test_an_encoder_length_with_no_dataset_is_refused(small_search, monkeypatch)
 
     with pytest.raises(ValueError, match="no dataset was built"):
         tft_trainer.hyperparameter_search_tft({2: (None, None)}, ["A"], "tft_01")
+
+
+# ── one machine's shard of stage 1 ─────────────────────────────────────────
+
+
+def _rows(space, params_list, stage="stage1"):
+    return [
+        {
+            **tft_trainer._canonicalize_search_params(params),
+            "val_loss": float(i + 1), "best_epoch": 3, "status": "completed", "stage": stage,
+            "signature": tft_trainer._params_signature(params),
+        }
+        for i, params in enumerate(params_list)
+    ]
+
+
+def test_a_shard_stops_after_stage_one_until_the_ledgers_are_merged(small_search, monkeypatch):
+    """Refitting the best of half a search at the full budget is hours spent
+    on candidates the merged ranking may not even shortlist."""
+    space, calls = small_search
+    monkeypatch.setenv("SEARCH_SHARD", "0/2")
+
+    best = _search(space, monkeypatch=monkeypatch)
+
+    assert best is None
+    assert [call["stage"] for call in calls] == ["stage1"] * len(calls)
+    assert sum(len(call["params"]) for call in calls) == 2
+
+
+def test_a_shard_with_the_merged_ledger_goes_on_to_its_stage_two_slice(small_search, monkeypatch):
+    """Once every machine's rows are pooled, the same shard runs its share of stage 2."""
+    space, calls = small_search
+    monkeypatch.setenv("SEARCH_SHARD", "0/2")
+    merged = _rows(space, space.sample())  # all four stage-1 trials, from wherever they ran
+
+    best = _search(space, ledger=merged, monkeypatch=monkeypatch)
+
+    stage2 = [p for call in calls if call["stage"] == "stage2" for p in call["params"]]
+    assert not any(call["stage"] == "stage1" for call in calls)
+    assert len(stage2) == 1  # its half of a top-2 shortlist
+    assert best is not None
+
+
+def test_the_search_phase_saves_nothing_for_a_finished_shard(tmp_path, monkeypatch):
+    """No winner yet, so no best_params: the merged resume writes them."""
+    from scripts import train_tft
+
+    monkeypatch.setattr(train_tft, "hyperparameter_search_tft", lambda *a, **k: None, raising=False)
+
+    class Store:
+        run_id = "tft_01"
+        saved = []
+
+        def save_best_params(self, params):
+            self.saved.append(params)
+
+        def save_features(self, *a):
+            self.saved.append("features")
+
+    import src.trainers.tft_dataset as tft_dataset
+    monkeypatch.setattr(tft_dataset, "build_datasets", lambda state, encoder_length: (None, None))
+    import src.trainers.tft_trainer as trainer_module
+    monkeypatch.setattr(trainer_module, "hyperparameter_search_tft", lambda *a, **k: None)
+
+    store = Store()
+    assert train_tft._search_with_splits({"targets": ["A"], "features": ["f"]}, store) is None
+    assert store.saved == []

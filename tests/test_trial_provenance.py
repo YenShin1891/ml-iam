@@ -139,3 +139,43 @@ def test_a_missing_run_record_does_not_sink_a_search(monkeypatch, tmp_path):
     monkeypatch.undo()  # this one is about the real reader, not the stub
     monkeypatch.setattr(utils_module, "get_run_root", lambda run_id: str(tmp_path / run_id))
     assert provenance.dataset_version("tft_does_not_exist") is None
+
+
+# ── what counts as a dirty tree ────────────────────────────────────────────
+
+
+def _repo(tmp_path):
+    import subprocess
+
+    def git(*args):
+        subprocess.run(
+            ["git", "-c", "user.email=t@t", "-c", "user.name=t", *args],
+            cwd=tmp_path, check=True, capture_output=True,
+        )
+
+    (tmp_path / "configs" / "runs").mkdir(parents=True)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "configs" / "runs" / "tft.yaml").write_text("model: tft\n")
+    (tmp_path / "src" / "code.py").write_text("x = 1\n")
+    git("init", "-q")
+    git("add", ".")
+    git("commit", "-q", "-m", "init")
+    return tmp_path
+
+
+def test_editing_a_run_config_does_not_make_the_code_dirty(tmp_path, monkeypatch):
+    """Run configs are per-machine settings and are recorded in meta/ anyway."""
+    monkeypatch.undo()  # the autouse stub replaced git_commit; this is about the real one
+    root = _repo(tmp_path)
+    (root / "configs" / "runs" / "tft.yaml").write_text("model: tft\nsearch_shard: '1/3'\n")
+    (root / "configs" / "runs" / "apple.yaml").write_text("model: tft\n")
+
+    assert not provenance.git_commit(str(root)).endswith("-dirty")
+
+
+def test_editing_code_still_does(tmp_path, monkeypatch):
+    monkeypatch.undo()
+    root = _repo(tmp_path)
+    (root / "src" / "code.py").write_text("x = 2\n")
+
+    assert provenance.git_commit(str(root)).endswith("-dirty")
