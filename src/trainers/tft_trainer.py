@@ -6,6 +6,7 @@ import logging
 import os
 import queue
 import time
+import traceback
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -117,6 +118,7 @@ def _trial_row(
     val_loss: Optional[float] = None,
     best_epoch: Optional[int] = None,
     epochs_run: Optional[int] = None,
+    error: Optional[str] = None,
 ) -> Dict:
     """One ledger row: the result, what produced it, and what it cost.
 
@@ -142,6 +144,8 @@ def _trial_row(
         row["best_epoch"] = int(best_epoch)
     if epochs_run is not None:
         row["epochs_run"] = int(epochs_run)
+    if error is not None:
+        row["error"] = str(error)[:500]
     return row
 
 
@@ -245,6 +249,7 @@ def _search_worker(gpu_id, trials, train_dataset, val_dataset, n_targets, traine
         logging.info("[%s] GPU %d - Trial %d/%d - Params: %s", stage, gpu_id, i + 1, len(trials), params)
         log_dir = os.path.join(get_run_root(run_id), "search", "trials", trial_id)
         started = time.monotonic()
+        best, status, error = None, "completed", None
         try:
             best = _fit_search_trial(
                 train_dataset, params, n_targets, trainer_cfg, log_dir, train_loader, val_loader,
@@ -255,15 +260,38 @@ def _search_worker(gpu_id, trials, train_dataset, val_dataset, n_targets, traine
                 "Consider reducing batch_size or excluding this GPU if another process holds memory.",
                 stage, gpu_id, i + 1, len(trials), trial_id,
             )
-            best = None
+            status = "oom"
+        except Exception as exc:  # noqa: BLE001 - one trial's fault must not take the queue with it
+            # A CUDA fault, a dataloader worker killed, an I/O error on the
+            # run directory: whatever it was, a worker that died here took
+            # every trial still queued behind it, and the parent could only
+            # say "check logs" -- logs on another machine.  Record it where
+            # the run directory is, and move on.  A sticky GPU fault fails
+            # the remaining trials quickly; each is recorded, and the resume
+            # plan reruns them, on this machine or another.
+            status, error = "crashed", f"{type(exc).__name__}: {exc}"
+            crash_file = os.path.join(log_dir, "crash.txt")
+            try:
+                os.makedirs(log_dir, exist_ok=True)
+                with open(crash_file, "w", encoding="utf-8") as handle:
+                    handle.write(traceback.format_exc())
+            except OSError as write_exc:
+                crash_file = f"(could not write crash.txt: {write_exc})"
+            logging.error(
+                "[%s] GPU %d - Trial %d/%d crashed: %s — traceback in %s; moving on.",
+                stage, gpu_id, i + 1, len(trials), error, crash_file,
+            )
         elapsed = time.monotonic() - started
         # The trial's model and trainer were locals of _fit_search_trial and
         # are gone by now; hand their cached blocks back before the next one.
-        torch.cuda.empty_cache()
+        try:
+            torch.cuda.empty_cache()
+        except Exception as exc:  # noqa: BLE001 - after a CUDA fault this raises too
+            logging.warning("[%s] GPU %d - could not empty the CUDA cache: %s", stage, gpu_id, exc)
         if best is None:
             result_queue.put(_trial_row(
                 params, run_id=run_id, trial_id=trial_id, signature=trial["signature"],
-                stage=stage, status="oom", wall_seconds=elapsed,
+                stage=stage, status=status, wall_seconds=elapsed, error=error,
             ))
             continue
         best_epoch, best_val_loss, epochs_run = best
@@ -382,6 +410,7 @@ def _spawn_search_workers(
             continue
         p = ctx.Process(
             target=_search_worker,
+            name=f"gpu{gpu_id}",
             args=(gpu_id, assigned, train_dataset, val_dataset, n_targets, trainer_cfg, result_queue, run_id, stage),
         )
         p.start()
@@ -421,7 +450,16 @@ def _collect_search_results(processes, result_queue, run_id: str, stage: str) ->
 
     failed = [p for p in processes if p.exitcode != 0]
     if failed:
-        raise RuntimeError(f"{len(failed)} search worker(s) crashed during {stage} — check logs.")
+        detail = ", ".join(f"{p.name} exit={p.exitcode}" for p in failed)
+        raise RuntimeError(
+            f"{len(failed)} search worker(s) died during {stage} without reporting: {detail}.  "
+            "A negative code is a signal (-9 killed, usually the kernel's OOM killer; -11 segfault; "
+            "-7 bus error, often /dev/shm full); a positive one is a Python error whose traceback is "
+            "in the launcher's log on that machine (logs/train_*.log).  A trial that failed inside the "
+            "worker is instead recorded in the ledger with status 'crashed' and its traceback in "
+            "search/trials/<trial_id>/crash.txt.  Trials the dead workers had not finished are rerun "
+            "by resuming the search."
+        )
     return results
 
 
