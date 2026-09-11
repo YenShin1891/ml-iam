@@ -15,7 +15,10 @@ afterwards -- so the rows carry it, and this refuses to merge ledgers that
 disagree.  It then says which of the sampled configurations still have no
 score, separating the ones nobody reached from the ones that OOMed, since a
 search that silently evaluated 47 of 50 configurations otherwise reports as a
-complete one.
+complete one.  Each run records the slice it was told to run, so the report
+also says which ledger owed every configuration that has no score, and names a
+ledger that delivered fewer rows than its slice: its run died, is still going,
+or was never resumed.
 
 Usage:
   python scripts/merge_search_ledgers.py --model tft --out merged.jsonl \\
@@ -30,11 +33,11 @@ import statistics
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.trainers.search import SearchSpace, is_completed_trial, params_signature  # noqa: E402
+from src.trainers.search import SearchSpace, Shard, is_completed_trial, params_signature  # noqa: E402
 
 _SPACES = {
     "tft": ("configs.models.tft_search", "TFTSearchSpace"),
@@ -134,19 +137,35 @@ def check_provenance(rows: Sequence[Dict[str, Any]]) -> List[str]:
     return problems
 
 
-def run_settings(ledger: Path) -> Optional[Dict[str, Any]]:
-    """What the run that wrote *ledger* was configured with, from its meta/.
+def read_run_record(ledger: Path) -> Optional[Dict[str, Any]]:
+    """The resolved config of the run that wrote *ledger*, from its meta/.
 
     A ledger still in its run directory has meta/run_config.resolved.json
     two levels up.  One that has been copied elsewhere has no record, and
-    None says so rather than pretending the settings were checked.
+    None says so rather than pretending the run was checked.
     """
     meta = ledger.resolve().parent.parent / "meta" / "run_config.resolved.json"
     try:
-        recorded = json.loads(meta.read_text(encoding="utf-8"))
+        return json.loads(meta.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+def run_settings(ledger: Path) -> Optional[Dict[str, Any]]:
+    """What the run that wrote *ledger* was configured with, or None without a record."""
+    recorded = read_run_record(ledger)
+    if recorded is None:
+        return None
     return {key: recorded.get(key) for key in _RUN_SETTINGS}
+
+
+def shard_of(record: Mapping[str, Any]) -> Optional[Shard]:
+    """The slice of the search a run was told to run; None means all of it."""
+    raw = record.get("search_shard")
+    if not raw:
+        return None
+    shard = Shard.parse(raw)
+    return None if shard.is_whole else shard
 
 
 def check_run_settings(settings_by_ledger: Dict[str, Optional[Dict[str, Any]]]) -> List[str]:
@@ -182,6 +201,65 @@ def coverage(space: SearchSpace, rows: Sequence[Dict[str, Any]]) -> Dict[str, Li
     return {"completed": done, "failed": failed, "not_started": untouched}
 
 
+def shard_audit(
+    space: SearchSpace, rows: Sequence[Dict[str, Any]], shards_by_ledger: Mapping[str, Optional[Shard]]
+) -> Dict[str, Any]:
+    """Who was told to run each configuration, and whether it got done.
+
+    ``search_shard`` names a slice by position in the sampled order, so a
+    run's record says exactly which configurations it owed.  A configuration
+    with no row is then a fact about one ledger -- its run died, is still
+    going, or was never resumed -- rather than a mystery about the merge.
+
+    ``shards_by_ledger`` maps each ledger that has a run record to its shard,
+    None meaning the run was told to run everything; ledgers without a
+    record are left out, since nothing is known about what they were told.
+    Returns ``ledgers`` (per ledger: what it owed and what the merged rows say
+    of those configurations), ``owners`` (per sampled position, the ledgers
+    told to run it) and ``gaps`` (slices nobody was told to run, or shards
+    that do not divide one search the same way).
+    """
+    keys = space.param_keys
+    sampled = space.sample()
+    stage1 = [row for row in rows if row.get("stage") != "stage2"]
+    completed = {row.get("signature") for row in stage1 if is_completed_trial(row, keys)}
+    attempted = {row.get("signature") for row in stage1}
+    signatures = [params_signature(params, keys) for params in sampled]
+    positions = list(range(len(sampled)))
+
+    owners: List[List[str]] = [[] for _ in sampled]
+    ledgers: List[Dict[str, Any]] = []
+    for path, shard in shards_by_ledger.items():
+        owed = positions if shard is None else shard.members(positions)
+        for position in owed:
+            owners[position].append(path)
+        done = sum(1 for position in owed if signatures[position] in completed)
+        failed = sum(1 for position in owed if signatures[position] in attempted) - done
+        ledgers.append({
+            "ledger": path,
+            "shard": None if shard is None else str(shard),
+            "owed": len(owed),
+            "completed": done,
+            "failed": failed,
+            "unrun": len(owed) - done - failed,
+        })
+
+    gaps: List[str] = []
+    shards = [shard for shard in shards_by_ledger.values() if shard is not None]
+    counts = sorted({shard.count for shard in shards})
+    if len(counts) > 1:
+        gaps.append(
+            "the ledgers' shards do not divide one search the same way: "
+            + ", ".join(sorted(str(shard) for shard in shards))
+        )
+    elif counts and len(shards) == len(shards_by_ledger):
+        given = {shard.index for shard in shards}
+        missing = [f"{index}/{counts[0]}" for index in range(counts[0]) if index not in given]
+        if missing:
+            gaps.append(f"no ledger given was told to run shard(s) {', '.join(missing)}")
+    return {"ledgers": ledgers, "owners": owners, "gaps": gaps}
+
+
 def timing_table(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Raw cost per machine: the appendix table a normalised figure is audited against.
 
@@ -207,7 +285,7 @@ def timing_table(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return table
 
 
-def _print_report(space: SearchSpace, kept, dropped, problems, cover) -> None:
+def _print_report(space: SearchSpace, kept, dropped, problems, cover, audit) -> None:
     print(f"merged {len(kept)} trial row(s); {len(dropped)} duplicate(s) collapsed")
     wasted = sum(float(row.get("wall_seconds") or 0.0) for row in dropped)
     if wasted:
@@ -228,8 +306,33 @@ def _print_report(space: SearchSpace, kept, dropped, problems, cover) -> None:
     print(f"  not started {len(cover['not_started'])}")
     for params in cover["failed"]:
         print(f"    ! {params.get('status')}: {ic(params)}")
+    keys = space.param_keys
+    owners = {params_signature(params, keys): audit["owners"][position] for position, params in enumerate(space.sample())}
     for params in cover["not_started"]:
-        print(f"    · unrun: {ic(params)}")
+        if not audit["ledgers"]:
+            print(f"    · unrun: {ic(params)}")
+            continue
+        told = owners.get(params_signature(params, keys)) or []
+        print(f"    · unrun, owed by {', '.join(told) if told else 'no ledger given'}: {ic(params)}")
+
+    if audit["ledgers"]:
+        print("  by ledger (what its run was told to run, and what the merged rows say of that):")
+        for entry in audit["ledgers"]:
+            slice_name = "whole search" if entry["shard"] is None else f"shard {entry['shard']}"
+            parts = [f"{entry['completed']} completed"]
+            if entry["failed"]:
+                parts.append(f"{entry['failed']} failed")
+            if entry["unrun"]:
+                parts.append(f"{entry['unrun']} never started")
+            mark = "!" if entry["unrun"] or entry["failed"] else " "
+            print(f"    {mark} {slice_name}: {entry['owed']} owed, {', '.join(parts)}  {entry['ledger']}")
+        for gap in audit["gaps"]:
+            print(f"    ! {gap}")
+        if any(entry["unrun"] for entry in audit["ledgers"]):
+            print(
+                "    a slice with configurations never started belongs to a run that died, is still going, "
+                "or was never resumed: resume that run with the same search_shard"
+            )
 
     if problems:
         print("\nprovenance:")
@@ -266,13 +369,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     kept, dropped = merge(rows, space.param_keys)
     problems = check_provenance(kept)
-    settings = {str(path): run_settings(path) for path in args.ledgers}
-    for path, found in settings.items():
-        if found is None:
-            print(f"  ! {path} has no meta/run_config.resolved.json beside it; its run settings were not checked")
+    records = {str(path): read_run_record(path) for path in args.ledgers}
+    for path, record in records.items():
+        if record is None:
+            print(
+                f"  ! {path} has no meta/run_config.resolved.json beside it; "
+                "its run settings were not checked and its shard is unknown"
+            )
+    settings = {
+        path: None if record is None else {key: record.get(key) for key in _RUN_SETTINGS}
+        for path, record in records.items()
+    }
     problems.extend(check_run_settings(settings))
+    shards = {path: shard_of(record) for path, record in records.items() if record is not None}
     cover = coverage(space, kept)
-    _print_report(space, kept, dropped, problems, cover)
+    audit = shard_audit(space, kept, shards)
+    _print_report(space, kept, dropped, problems, cover, audit)
 
     if problems and not args.allow_mismatch:
         print(

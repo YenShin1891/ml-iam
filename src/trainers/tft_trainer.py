@@ -419,7 +419,18 @@ def _spawn_search_workers(
 
 
 def _collect_search_results(processes, result_queue, run_id: str, stage: str) -> List[Dict]:
-    """Drain trial rows as workers produce them, writing each to the ledger."""
+    """Drain trial rows as workers produce them, writing each to the ledger.
+
+    TODO: a worker that dies outright (the kernel's OOM killer, a segfault)
+    is only noticed after every other worker has finished, because the loop
+    below has one exit condition -- all dead -- and the exit codes are read
+    after it.  On a multi-day search that means the death is reported days
+    later, and the trials queued behind the dead worker wait for a resume.
+    Watch ``is_alive`` per process inside the loop, log the death when it
+    happens, and hand the dead worker's unstarted trials to whichever
+    survivor finishes first.  The LSTM and XGB collectors have the same
+    shape.
+    """
     results: List[Dict] = []
 
     # Stream completed trial rows from workers and append to ledger in real time.

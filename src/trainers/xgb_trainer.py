@@ -700,6 +700,8 @@ def _collect_worker_results(
         except queue.Empty:
             break
 
+    # TODO: a dead worker is only noticed once every worker has finished; see
+    # the note on tft_trainer._collect_search_results.
     bad = [p for p in processes if p.exitcode not in (0, None)]
     if bad:
         raise RuntimeError(

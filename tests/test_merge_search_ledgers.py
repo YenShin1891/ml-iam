@@ -262,3 +262,96 @@ def test_runs_that_agree_raise_nothing(tmp_path):
     ledgers = [_run_dir(tmp_path, name) for name in ("tft_01", "tft_02", "tft_03")]
 
     assert check_run_settings({str(p): run_settings(p) for p in ledgers}) == []
+
+
+# ── who owed what ──────────────────────────────────────────────────────────
+#
+# A run's record says which slice of the sampled order it was told to run, so
+# a configuration with no row is charged to one ledger rather than left as a
+# mystery, and a ledger short of its slice is named.
+
+from scripts.merge_search_ledgers import main, read_run_record, shard_audit, shard_of
+from src.trainers.search import Shard
+
+
+def test_the_shard_is_read_from_the_run_beside_the_ledger(tmp_path):
+    ledger = _run_dir(tmp_path, "tft_01", search_shard="1/3")
+
+    assert shard_of(read_run_record(ledger)) == Shard(1, 3)
+
+
+def test_a_run_without_a_shard_was_told_to_run_everything(tmp_path):
+    ledger = _run_dir(tmp_path, "tft_01")
+
+    assert shard_of(read_run_record(ledger)) is None
+    assert shard_of({"search_shard": "0/1"}) is None
+
+
+def test_an_unrun_configuration_is_charged_to_the_shard_that_owed_it(space):
+    sampled = space.sample()  # six configurations: 0/2 owes positions 0, 2, 4 and 1/2 owes 1, 3, 5
+    rows = [row(space, sampled[position]) for position in (0, 2, 4, 1, 3)]
+
+    audit = shard_audit(space, rows, {"a": Shard(0, 2), "b": Shard(1, 2)})
+
+    by_ledger = {entry["ledger"]: entry for entry in audit["ledgers"]}
+    assert by_ledger["a"] == {"ledger": "a", "shard": "0/2", "owed": 3, "completed": 3, "failed": 0, "unrun": 0}
+    assert by_ledger["b"] == {"ledger": "b", "shard": "1/2", "owed": 3, "completed": 2, "failed": 0, "unrun": 1}
+    assert audit["owners"][5] == ["b"] and audit["owners"][0] == ["a"]
+    assert audit["gaps"] == []
+
+
+def test_a_trial_that_failed_is_charged_as_failed_not_never_started(space):
+    rows = [row(space, space.sample()[1], status="oom", val_loss=None)]
+
+    [entry] = shard_audit(space, rows, {"b": Shard(1, 2)})["ledgers"]
+
+    assert (entry["completed"], entry["failed"], entry["unrun"]) == (0, 1, 2)
+
+
+def test_a_shard_nobody_was_told_to_run_is_named(space):
+    audit = shard_audit(space, [], {"a": Shard(0, 3), "c": Shard(2, 3)})
+
+    assert audit["gaps"] == ["no ledger given was told to run shard(s) 1/3"]
+    assert audit["owners"][1] == []
+
+
+def test_shards_that_divide_the_search_differently_are_called_out(space):
+    audit = shard_audit(space, [], {"a": Shard(0, 2), "b": Shard(1, 3)})
+
+    assert len(audit["gaps"]) == 1 and "do not divide one search the same way" in audit["gaps"][0]
+
+
+def test_a_ledger_without_a_shard_owes_the_whole_search(space):
+    audit = shard_audit(space, [], {"solo": None, "a": Shard(0, 2)})
+
+    assert {entry["ledger"]: entry["owed"] for entry in audit["ledgers"]} == {"solo": space.n_trials, "a": 3}
+    assert audit["gaps"] == [], "the whole-search ledger covers the slice no shard claims"
+
+
+def test_the_report_names_the_ledger_that_owes_an_unrun_configuration(space, tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr("scripts.merge_search_ledgers.load_space", lambda model: space)
+    sampled = space.sample()
+    a = _run_dir(tmp_path, "tft_01", search_shard="0/2")
+    b = _run_dir(tmp_path, "tft_02", search_shard="1/2")
+    a.write_text("".join(json.dumps(row(space, sampled[p], host="a")) + "\n" for p in (0, 2, 4)))
+    b.write_text("".join(json.dumps(row(space, sampled[p], host="b")) + "\n" for p in (1, 3)))
+
+    assert main(["--model", "tft", str(a), str(b)]) == 0
+
+    out = capsys.readouterr().out
+    assert f"unrun, owed by {b}:" in out
+    assert f"! shard 1/2: 3 owed, 2 completed, 1 never started  {b}" in out
+    assert f"  shard 0/2: 3 owed, 3 completed  {a}" in out
+    assert "resume that run with the same search_shard" in out
+
+
+def test_a_ledger_copied_away_from_its_run_owes_nothing_known(space, tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr("scripts.merge_search_ledgers.load_space", lambda model: space)
+    loose = tmp_path / "trials.jsonl"
+    loose.write_text(json.dumps(row(space, space.sample()[0])) + "\n")
+
+    assert main(["--model", "tft", str(loose)]) == 0
+
+    out = capsys.readouterr().out
+    assert "its shard is unknown" in out
+    assert "owed by" not in out and "by ledger" not in out

@@ -992,6 +992,8 @@ def _run_lstm_trials_parallel(
 
         # A worker killed outright (OOM, segfault) takes its trials with it and
         # would otherwise just look like a shorter search.
+        # TODO: it is also only noticed once every worker has finished; see
+        # the note on tft_trainer._collect_search_results.
         crashed = [p for p in processes if p.exitcode not in (0, None)]
         if crashed:
             raise RuntimeError(
