@@ -8,6 +8,8 @@ import os
 import sys
 import argparse
 
+from src.data.process_data import SCENARIO_CATEGORY_CSV, relabel_scenario_categories
+from src.visualization.helpers import backfill_group_labels
 from src.visualization.trajectories import plot_trajectories, get_saved_plots_metadata
 from src.utils.utils import setup_logging
 from src.utils.regions import regions_ordered_by_scale
@@ -121,20 +123,24 @@ def apply_filters():
         st.error("Required data not found in session state. Please ensure the model has been trained.")
         return
 
-    # Build filter mask
-    mask_conditions = []
-    if 'Scenario_Category' in test_data.columns:
-        mask_conditions.append(test_data['Scenario_Category'].isin(st.session_state.selected_scenario_categories))
-    if 'Region' in test_data.columns:
-        mask_conditions.append(test_data['Region'].isin(st.session_state.selected_regions))
-    if 'Model_Family' in test_data.columns:
-        mask_conditions.append(test_data['Model_Family'].isin(st.session_state.selected_model_families))
-    
-    # Combine conditions
-    mask_td = mask_conditions[0] if mask_conditions else pd.Series([True] * len(test_data))
-    for condition in mask_conditions[1:]:
-        mask_td = mask_td & condition
-    
+    # Build filter mask.  A filter whose column the rows lack cannot apply;
+    # say so rather than silently showing every value.
+    selections = {
+        'Scenario_Category': st.session_state.selected_scenario_categories,
+        'Region': st.session_state.selected_regions,
+        'Model_Family': st.session_state.selected_model_families,
+    }
+    missing = [column for column in selections if column not in test_data.columns]
+    if missing:
+        st.warning(
+            f"Cannot filter on {', '.join(missing)}: the run's prediction rows carry "
+            "no such column, so every value is shown."
+        )
+    mask_td = pd.Series(True, index=test_data.index)
+    for column, selected in selections.items():
+        if column in test_data.columns:
+            mask_td &= test_data[column].isin(selected)
+
     # Create target mask and store data
     selected_positions = np.where(mask_td)[0]
     mask_targets = np.zeros(len(y_test), dtype=bool)
@@ -383,6 +389,41 @@ def _code_maps(store):
     return maps
 
 
+# Per-group labels the dashboard filters on that a saved horizon frame may lack.
+LABEL_COLUMNS = ['Scenario_Category', 'Model_Family']
+
+
+def _backfill_horizon_labels(session_state):
+    """Give TFT horizon rows the labels the filters read, from test_data."""
+    horizon_df = session_state.get('horizon_df')
+    test_data = session_state.get('test_data')
+    if horizon_df is None or test_data is None:
+        return
+    horizon_df, filled = backfill_group_labels(horizon_df, test_data, LABEL_COLUMNS)
+    if filled:
+        logging.info("horizon_df: copied %s from test_data", ", ".join(filled))
+        session_state.horizon_df = horizon_df
+
+
+def _relabel_scenario_categories(session_state):
+    """Label runs by (Model, Scenario) from the metadata table.
+
+    Runs preprocessed while metadata/scenario_category.csv was keyed by
+    scenario name alone stored another model's category for about a fifth of
+    the runs; the column is not a feature, so the stored labels can be
+    corrected here.
+    """
+    scenario_cat = pd.read_csv(SCENARIO_CATEGORY_CSV, dtype=str)
+    for attr in ('test_data', 'horizon_df'):
+        df = session_state.get(attr)
+        if df is None or not {'Model', 'Scenario', 'Scenario_Category'} <= set(df.columns):
+            continue
+        df, n_changed = relabel_scenario_categories(df, scenario_cat)
+        if n_changed:
+            logging.info("%s: %d runs relabelled from %s", attr, n_changed, SCENARIO_CATEGORY_CSV.name)
+            setattr(session_state, attr, df)
+
+
 def _decode_categorical_columns(store, session_state):
     """Decode integer-encoded Region/Model_Family columns back to string labels."""
     maps = _code_maps(store)
@@ -457,6 +498,8 @@ def setup_session_and_logging(run_id):
 
         # Decode integer-encoded categoricals (LSTM stores Region/Model_Family as int codes)
         _decode_categorical_columns(store, st.session_state)
+        _backfill_horizon_labels(st.session_state)
+        _relabel_scenario_categories(st.session_state)
 
         st.session_state.data_initialized = True
 

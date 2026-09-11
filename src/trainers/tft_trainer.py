@@ -983,9 +983,14 @@ def predict_tft(
         # Reference columns carried onto the horizon rows.  The __observed
         # masks must come along: without them the metrics scored the
         # zero-filled and interpolated targets as ground truth, while the LSTM
-        # and XGBoost paths masked them out.
+        # and XGBoost paths masked them out.  The dashboard filters these rows
+        # by Scenario_Category and Model_Family; without the columns it had
+        # nothing to filter on and silently showed every scenario.
         ref_cols = [
-            c for c in key_cols + ['Year'] + targets + observed_mask_columns(targets) + [POPULATION_COLUMN]
+            c for c in (
+                key_cols + ['Year'] + targets + observed_mask_columns(targets)
+                + [POPULATION_COLUMN, 'Scenario_Category', 'Model_Family']
+            )
             if c in test_data.columns
         ]
         horizon_df = index_df[key_cols].merge(

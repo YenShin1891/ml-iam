@@ -116,27 +116,34 @@ def filter_by_selected_variables(df_list: List[pd.DataFrame], selected_vars: pd.
 
 UNCATEGORISED = "no-climate-assessment"
 
+# AR6 categorises each model run, not each scenario name (see
+# scripts/build_scenario_category.py).
+SCENARIO_KEYS = ["Model", "Scenario"]
+
 
 def add_scenario_category(df: pd.DataFrame, scenario_cat: pd.DataFrame) -> pd.DataFrame:
-    """Attach the AR6 category of each scenario, labelling those without one.
+    """Attach the AR6 category of each (Model, Scenario), labelling those without one.
 
-    Most of the misses are scenarios the metadata CSV does list but whose
-    category cell holds a literal "#N/A" from a failed lookup; only a handful
-    per raw file are absent from the CSV outright.  Either way the category is
-    simply unknown, which is what UNCATEGORISED already means for the 237
-    scenarios the CSV labels that way, so they share the label rather than
-    being dropped.  Dropping them used to happen silently downstream, where
-    pivot_table discards rows whose index carries a NaN; the column is not a
-    model feature (see NON_FEATURE_COLUMNS), so it cost ~3% of the series for
-    nothing the models predict from.
+    AR6 categorises a scenario per model run: the same name, say
+    SSP2-Baseline, lands in a different category under each model that ran
+    it.  Merging on the name alone handed every model the category of
+    whichever run the table happened to list, which mislabelled about a fifth
+    of the vetted runs.
+
+    Runs the metadata workbook does not list get UNCATEGORISED, the label AR6
+    gives runs that were vetted but never climate-assessed; the category is
+    unknown either way.  Dropping them used to happen silently downstream,
+    where pivot_table discards rows whose index carries a NaN; the column is
+    not a model feature (see NON_FEATURE_COLUMNS), so it cost ~3% of the
+    series for nothing the models predict from.
     """
-    out = df.merge(scenario_cat[["Scenario", "Scenario_Category"]], on="Scenario", how="left")
+    out = df.merge(scenario_cat[SCENARIO_KEYS + ["Scenario_Category"]], on=SCENARIO_KEYS, how="left")
     uncategorised = out["Scenario_Category"].isna()
     if uncategorised.any():
         logging.info(
-            "Labelling %d rows from %d scenarios as %r: no Scenario_Category in %s",
+            "Labelling %d rows from %d runs as %r: no Scenario_Category in %s",
             int(uncategorised.sum()),
-            out.loc[uncategorised, "Scenario"].nunique(),
+            out.loc[uncategorised, SCENARIO_KEYS].drop_duplicates().shape[0],
             UNCATEGORISED,
             SCENARIO_CATEGORY_CSV.name,
         )
@@ -146,6 +153,23 @@ def add_scenario_category(df: pd.DataFrame, scenario_cat: pd.DataFrame) -> pd.Da
     remainder = [c for c in out.columns if c not in cols]
     out = out.loc[:, cols + remainder]
     return cast(pd.DataFrame, out)
+
+
+def relabel_scenario_categories(df: pd.DataFrame, scenario_cat: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
+    """Replace the stored Scenario_Category with the table's, keyed by (Model, Scenario).
+
+    For frames a run saved while the table was keyed by scenario name alone:
+    their labels are another model's for about a fifth of the runs.  The
+    column is not a feature, so relabelling changes what the dashboard filters
+    on, not what the model saw.  Runs the table does not list keep their
+    stored label.  Returns the frame and the number of runs relabelled.
+    """
+    table = scenario_cat[SCENARIO_KEYS + ["Scenario_Category"]].drop_duplicates(SCENARIO_KEYS)
+    fresh = df[SCENARIO_KEYS].merge(table, on=SCENARIO_KEYS, how="left")["Scenario_Category"].to_numpy()
+    changed = pd.notna(fresh) & (fresh != df["Scenario_Category"].to_numpy())
+    out = df.copy()
+    out.loc[changed, "Scenario_Category"] = fresh[changed]
+    return out, int(out.loc[changed, SCENARIO_KEYS].drop_duplicates().shape[0])
 
 
 def _split_year_and_non_year_columns(df: pd.DataFrame) -> Tuple[List[str], List[str]]:

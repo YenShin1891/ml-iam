@@ -14,6 +14,7 @@ from matplotlib.ticker import FuncFormatter, MaxNLocator
 
 from configs.paths import RAW_DATA_PATH
 from configs.data import INDEX_COLUMNS, OUTPUT_UNITS, OUTPUT_VARIABLES
+from src.data.process_data import resolve_units
 from .helpers import output_unit
 try:
     import streamlit as st
@@ -54,52 +55,55 @@ MARKER_LINEWIDTH = 2
 _marker_cache: Optional[pd.DataFrame] = None
 
 
-def load_marker_scenario(targets: list) -> Optional[pd.DataFrame]:
-    """Load marker scenario ground truth from raw AR6 World CSV.
+def marker_frame(raw: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """The marker run's outputs, one row per year, in the dataset's units.
 
-    Returns a long-format DataFrame with columns ['Year'] + targets,
-    or None if the data cannot be found.
+    The raw AR6 files report primary energy in EJ/yr while the dataset, and so
+    every trajectory the marker is drawn over, is in PJ/yr: drawn as read, the
+    marker sat on the zero line of every energy panel.  resolve_units is the
+    conversion the pipeline applies.  Returns None when *raw* has no marker rows.
+    """
+    rows = raw[
+        (raw['Model'] == MARKER_MODEL)
+        & (raw['Scenario'] == MARKER_SCENARIO)
+        & (raw['Region'] == MARKER_REGION)
+        & (raw['Variable'].isin(OUTPUT_VARIABLES))
+    ]
+    if rows.empty:
+        return None
+    rows, _ = resolve_units(rows)
+    year_cols = [c for c in rows.columns if str(c).isdigit()]
+    long = rows.melt(id_vars=['Variable'], value_vars=year_cols, var_name='Year', value_name='value')
+    long = long.dropna(subset=['value'])
+    long['Year'] = long['Year'].astype(int)
+    long['value'] = long['value'].astype(float)
+    wide = long.pivot_table(index='Year', columns='Variable', values='value').reset_index()
+    wide.columns.name = None
+    return wide.sort_values('Year').reset_index(drop=True)
+
+
+def load_marker_scenario(targets: list) -> Optional[pd.DataFrame]:
+    """Load the marker run from the raw AR6 World CSV.
+
+    Returns a DataFrame with columns ['Year'] + the requested targets it
+    carries, or None if the data cannot be found.
     """
     global _marker_cache  # noqa: PLW0603
-    if _marker_cache is not None:
-        # Return subset of cached columns that match requested targets
-        cols = ['Year'] + [t for t in targets if t in _marker_cache.columns]
-        return _marker_cache[cols] if len(cols) > 1 else None
-
-    raw_path = os.path.join(RAW_DATA_PATH, "AR6_Scenarios_Database_World_v1.1.csv")
-    if not os.path.exists(raw_path):
-        logging.warning("Raw AR6 World CSV not found at %s; skipping marker overlay.", raw_path)
-        return None
-
-    try:
-        raw = pd.read_csv(raw_path)
-        marker_rows = raw[
-            (raw['Model'] == MARKER_MODEL)
-            & (raw['Scenario'] == MARKER_SCENARIO)
-            & (raw['Region'] == MARKER_REGION)
-            & (raw['Variable'].isin(OUTPUT_VARIABLES))
-        ]
-        if marker_rows.empty:
+    if _marker_cache is None:
+        raw_path = os.path.join(RAW_DATA_PATH, "AR6_Scenarios_Database_World_v1.1.csv")
+        if not os.path.exists(raw_path):
+            logging.warning("Raw AR6 World CSV not found at %s; skipping marker overlay.", raw_path)
+            return None
+        try:
+            _marker_cache = marker_frame(pd.read_csv(raw_path))
+        except Exception:
+            logging.exception("Failed to load marker scenario data.")
+            return None
+        if _marker_cache is None:
             logging.warning("Marker scenario (%s, %s, %s) not found in raw data.", MARKER_MODEL, MARKER_SCENARIO, MARKER_REGION)
             return None
-
-        year_cols = [c for c in raw.columns if c.isdigit()]
-        records = []
-        for _, row in marker_rows.iterrows():
-            var_name = row['Variable']
-            for yc in year_cols:
-                val = row[yc]
-                if pd.notna(val):
-                    records.append({'Year': int(yc), 'Variable': var_name, 'value': float(val)})
-        long = pd.DataFrame(records)
-        pivoted = long.pivot_table(index='Year', columns='Variable', values='value').reset_index()
-        pivoted.sort_values('Year', inplace=True)
-        _marker_cache = pivoted
-        cols = ['Year'] + [t for t in targets if t in pivoted.columns]
-        return pivoted[cols] if len(cols) > 1 else None
-    except Exception:
-        logging.exception("Failed to load marker scenario data.")
-        return None
+    cols = ['Year'] + [t for t in targets if t in _marker_cache.columns]
+    return _marker_cache[cols] if len(cols) > 1 else None
 
 def create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, target_index, targets, model_name, output_units, observed_mask_col=None):
     unique_years = sorted(test_data_valid['Year'].unique()) if len(test_data_valid) else []
