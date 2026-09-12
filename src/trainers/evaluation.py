@@ -14,8 +14,10 @@ import time
 import numpy as np
 import pandas as pd
 
+from configs import data as data_config
 from configs.data import INDEX_COLUMNS, NON_FEATURE_COLUMNS, N_LAG_FEATURES
-from src.utils.regions import SCALE_ORDER_COARSEST_FIRST, scale_of_frame
+from src.utils.regions import SCALE_ORDER_COARSEST_FIRST, region_scales, scale_of_frame
+from src.utils.run_store import RunStore
 from src.utils.utils import format_number, get_run_root
 
 # How often a long-running loop reports progress to the run log.
@@ -431,6 +433,110 @@ def _metrics_line(headline) -> str:
     )
 
 
+# The metric columns of a performance row, in the order the files carry them.
+METRIC_COLUMNS = (
+    "Mean Squared Error", "Pearson Correlation",
+    "R2 Score (per-target avg)", "R2 Score (pooled)",
+    "MAE", "RMSE", "Sample Size",
+)
+
+
+def _metric_columns(y_true, y_pred, observed_mask=None):
+    """The METRIC_COLUMNS of one performance row, or None when nothing was scored."""
+    summary = compute_r2_summary(y_true, y_pred, observed_mask=observed_mask)
+    if summary["Sample Size"] == 0:
+        return None
+    return {
+        "Mean Squared Error": summary["MSE"],
+        "Pearson Correlation": summary["Pearson"],
+        "R2 Score (per-target avg)": summary["R2 (per-target avg)"],
+        "R2 Score (pooled)": summary["R2 (pooled)"],
+        "MAE": summary["MAE"],
+        "RMSE": summary["RMSE"],
+        "Sample Size": summary["Sample Size"],
+    }
+
+
+def _region_vocabulary(run_id) -> dict:
+    """code -> region label: the run's saved vocabulary, else the in-process one."""
+    store = RunStore(run_id)
+    if store.has_categories():
+        labels = store.load_categories().get("Region")
+        if labels:
+            return dict(enumerate(labels))
+    return dict(data_config.REGION_CODE_TO_LABEL)
+
+
+def _region_names(frame, run_id):
+    """The region label of each row, decoding integer codes through the run's vocabulary.
+
+    The sequence models encode Region for their embeddings.  The codes mean
+    nothing in a report, so a frame whose codes cannot be decoded yields None
+    rather than a list of integers.
+    """
+    if "Region" not in frame.columns:
+        return None
+    regions = frame["Region"]
+    if not pd.api.types.is_numeric_dtype(regions):
+        return regions.astype(str)
+    vocabulary = _region_vocabulary(run_id)
+    if not vocabulary:
+        logging.warning(
+            "Run %s: Region is integer-coded and no vocabulary decodes it; "
+            "skipping the per-region metrics.", run_id,
+        )
+        return None
+    names = regions.map(vocabulary)
+    unknown = int(names.isna().sum())
+    if unknown:
+        logging.warning(
+            "Run %s: %d rows carry Region codes outside the saved vocabulary "
+            "and are left out of the per-region metrics.", run_id, unknown,
+        )
+    return names
+
+
+def metrics_by_region(run_id, y_true, y_pred, test_data, observed_mask=None):
+    """One row of metrics per region, coarsest scale first and alphabetical within it.
+
+    performance.csv pools each scale; this is the list to read when one region
+    looks off.  *test_data* lines up row for row with *y_true*, as for
+    save_metrics.  Returns None when the frame's regions cannot be named.
+    """
+    names = _region_names(test_data, run_id)
+    if names is None:
+        return None
+    scales = scale_of_frame(test_data)
+    if scales is None:
+        scales = region_scales(names)
+    regions = (
+        pd.DataFrame({"Region": names.to_numpy(), "Region Type": scales.to_numpy()})
+        .dropna(subset=["Region"])
+        .drop_duplicates("Region")
+    )
+    rank = {scale: i for i, scale in enumerate(SCALE_ORDER_COARSEST_FIRST)}
+    regions["rank"] = regions["Region Type"].map(rank).fillna(len(rank))
+    regions = regions.sort_values(["rank", "Region"])
+
+    labels = names.to_numpy()
+    rows = []
+    for region, scale in zip(regions["Region"], regions["Region Type"]):
+        positions = np.where(labels == region)[0]
+        columns = _metric_columns(
+            y_true[positions], y_pred[positions],
+            observed_mask[positions] if observed_mask is not None else None,
+        )
+        if columns is not None:
+            rows.append({"Run ID": run_id, "Region": region, "Region Type": scale, **columns})
+    return pd.DataFrame(rows, columns=["Run ID", "Region", "Region Type", *METRIC_COLUMNS])
+
+
+def by_region_filename(metrics_filename: str) -> str:
+    """The per-region file beside a metrics file: performance.csv -> performance_by_region.csv."""
+    stem, ext = os.path.splitext(metrics_filename)
+    return f"{stem}_by_region{ext}"
+
+
 def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None,
                  metrics_filename="performance.csv"):
     """Save performance metrics to a CSV file under the specified run directory.
@@ -442,7 +548,8 @@ def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None,
     the rows of *y_true*: for the sequence models that is the forecast horizon
     frame rather than the full test split.  Given it, metrics are additionally
     broken down by region scale, which is the comparison the models are read
-    against each other on.
+    against each other on, and listed per region in a second file beside the
+    first (see by_region_filename).
 
     *metrics_filename* lets callers write split-specific metrics (e.g.
     "performance_train.csv") without overwriting the canonical test-set
@@ -455,20 +562,10 @@ def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None,
         )
 
     def compute_metrics(y_true_subset, y_pred_subset, subset_name="Overall", obs=None):
-        summary = compute_r2_summary(y_true_subset, y_pred_subset, observed_mask=obs)
-        if summary["Sample Size"] == 0:
+        columns = _metric_columns(y_true_subset, y_pred_subset, obs)
+        if columns is None:
             return []
-        return [{
-            "Run ID": run_id,
-            "Region Type": subset_name,
-            "Mean Squared Error": summary["MSE"],
-            "Pearson Correlation": summary["Pearson"],
-            "R2 Score (per-target avg)": summary["R2 (per-target avg)"],
-            "R2 Score (pooled)": summary["R2 (pooled)"],
-            "MAE": summary["MAE"],
-            "RMSE": summary["RMSE"],
-            "Sample Size": summary["Sample Size"],
-        }]
+        return [{"Run ID": run_id, "Region Type": subset_name, **columns}]
 
     # Compute overall metrics
     all_metrics = compute_metrics(y_true, y_pred, "Overall", obs=observed_mask)
@@ -509,3 +606,12 @@ def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None,
             "Run %s overall metrics (%d samples) -> %s",
             run_id, int(headline["Sample Size"]), _metrics_line(headline),
         )
+
+    if test_data is not None:
+        by_region = metrics_by_region(run_id, y_true, y_pred, test_data, observed_mask)
+        if by_region is not None:
+            by_region_file = os.path.join(metrics_dir, by_region_filename(metrics_filename))
+            by_region.to_csv(by_region_file, index=False)
+            logging.info(
+                "Per-region metrics for %d regions saved to %s.", len(by_region), by_region_file,
+            )
