@@ -454,6 +454,10 @@ def plot_trajectories(
     plt.close(fig)
 
 
+# Filename stems of the plots the dashboard saves and lists in its sidebar.
+SAVED_PLOT_PREFIXES = ('trajectories_', 'timeseries_', 'whatif_')
+
+
 def get_saved_plots_metadata(run_id):
     plots_dir = os.path.join(get_run_root(run_id), "saved_dashboard_plots")
     if not os.path.exists(plots_dir):
@@ -465,12 +469,10 @@ def get_saved_plots_metadata(run_id):
             with open(metadata_file, 'r') as f:
                 metadata = json.load(f)
             filename = os.path.basename(metadata_file)
-            if filename.startswith('trajectories_'):
-                timestamp_str = filename[len('trajectories_'):-len('_metadata.json')]
-            elif filename.startswith('timeseries_'):
-                timestamp_str = filename[len('timeseries_'):-len('_metadata.json')]
-            else:
+            prefix = next((p for p in SAVED_PLOT_PREFIXES if filename.startswith(p)), None)
+            if prefix is None:
                 continue
+            timestamp_str = filename[len(prefix):-len('_metadata.json')]
             plot_file = metadata_file.replace('_metadata.json', '.png')
             if os.path.exists(plot_file):
                 saved_plots.append({

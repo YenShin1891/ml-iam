@@ -16,9 +16,14 @@ from src.utils.regions import regions_ordered_by_scale
 from src.utils.run_store import RunStore
 from configs.data import REGION_CODE_TO_LABEL
 from configs.dashboard import DEFAULT_RUNS
+from scripts.dashboard_whatif import PRESERVED_KEYS, VIEW_NAME as WHATIF_VIEW, render_whatif_view
 import datetime
 
 st.set_page_config(layout="wide")
+
+# The page's views, and how the URL's ?view= names them.
+VIEWS = ("Trajectories", WHATIF_VIEW)
+VIEW_QUERY = {"trajectories": VIEWS[0], "whatif": VIEWS[1]}
 
 # Apply global styling for wider sidebar
 st.markdown("""
@@ -455,10 +460,12 @@ def _decode_categorical_columns(store, session_state):
 
 def setup_session_and_logging(run_id):
     """Initialize logging and load run artifacts via RunStore."""
-    # Reset state if run_id changed (e.g. via URL query param)
+    # Reset state if run_id changed (e.g. via URL query param).  The view
+    # choice and the what-if selections survive; the view re-validates them.
     if st.session_state.get("current_run_id") != run_id:
         for key in list(st.session_state.keys()):
-            del st.session_state[key]
+            if key not in PRESERVED_KEYS:
+                del st.session_state[key]
         st.session_state.current_run_id = run_id
 
     if st.session_state.get("logging_initialized", False) is False:
@@ -538,6 +545,16 @@ def resolve_run_id() -> str:
     st.query_params["run_id"] = run_id
     return run_id
 
+
+def resolve_view() -> str:
+    """The view to show: the URL's ?view= on first load, then the radio's state."""
+    if "dashboard_view" not in st.session_state:
+        st.session_state.dashboard_view = VIEW_QUERY.get(st.query_params.get("view"), VIEWS[0])
+    view = st.radio("View", VIEWS, horizontal=True, key="dashboard_view", label_visibility="collapsed")
+    st.query_params["view"] = next(name for name, label in VIEW_QUERY.items() if label == view)
+    return view
+
+
 def main():
     run_id = resolve_run_id()
     
@@ -559,11 +576,13 @@ def main():
                 st.query_params["run_id"] = key
                 st.rerun()
 
-    make_filters(st.session_state.test_data)
-    
-    # Handle filtering and plotting
-    handle_filtering_and_plotting(run_id)
-    
+    if resolve_view() == WHATIF_VIEW:
+        render_whatif_view(run_id, on_plot_saved=get_cached_saved_plots.clear)
+    else:
+        make_filters(st.session_state.test_data)
+        # Handle filtering and plotting
+        handle_filtering_and_plotting(run_id)
+
     # Recent plots section
     display_recent_plots_sidebar(run_id)
     

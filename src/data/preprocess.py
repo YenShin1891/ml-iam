@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import logging
+from dataclasses import dataclass
 from typing import List, Optional, Tuple, cast
 from sklearn.preprocessing import StandardScaler
 
@@ -987,4 +988,45 @@ def prepare_features_and_targets_sequence(
     )
 
     return prepared, features, targets
+
+
+@dataclass
+class SequenceFrames:
+    """The imputed train/val/test frames a sequence model is fitted and scored on."""
+
+    train: pd.DataFrame
+    val: pd.DataFrame
+    test: pd.DataFrame
+    features: List[str]
+    targets: List[str]
+
+
+def prepare_sequence_frames(
+    data: pd.DataFrame,
+    assignment: Optional[pd.DataFrame] = None,
+) -> SequenceFrames:
+    """Turn the cached processed data into the frames a sequence model sees.
+
+    Sequence preparation, missingness indicators, the group split, then
+    train-median imputation of the features: the chain the TFT phases run,
+    kept here so anything that must reproduce a run's rows exactly (the
+    dashboard's what-if view predicts from them) can do so without the
+    training stack.  *assignment* is the run's saved split; without one the
+    split is derived from *data* alone.
+    """
+    prepared, features, targets = prepare_features_and_targets_sequence(data)
+    prepared, features = add_missingness_indicators(prepared, features)
+    train_data, val_data, test_data = split_data(prepared, assignment=assignment)
+    train_data, val_data, test_data = impute_with_train_medians(
+        train_data, val_data, test_data, features
+    )
+
+    # When keeping partial targets, fill NaN with 0 — the __observed mask
+    # handles loss weighting so filled values don't contribute to gradients.
+    # This avoids NaN propagation in EncoderNormalizer / TimeSeriesDataSet.
+    if _keep_partial_targets():
+        for frame in (train_data, val_data, test_data):
+            frame[targets] = frame[targets].fillna(0.0)
+
+    return SequenceFrames(train_data, val_data, test_data, list(features), list(targets))
 

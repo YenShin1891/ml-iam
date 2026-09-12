@@ -212,17 +212,123 @@ def _create_late_window_test_data(test_data: pd.DataFrame, window_length: int, t
     return result
 
 
+def predict_window_frame(
+    model,
+    template,
+    data: pd.DataFrame,
+    targets: list,
+    name: str,
+    slice_window: Callable[[pd.DataFrame, int, str], pd.DataFrame],
+    *,
+    target_offset: int = 0,
+    loader_kwargs: Optional[dict] = None,
+    predict_kwargs: Optional[dict] = None,
+) -> WindowPrediction:
+    """Predict one window (early or late) of every trajectory in *data*.
+
+    Both windows are sliced to exactly ``encoder_length + prediction_length``
+    steps, so ``predict=True`` yields one sample per trajectory whose decoder
+    covers the window's last ``prediction_length`` steps.
+
+    *model* and *template* are already loaded.  *loader_kwargs* reach
+    ``to_dataloader`` and *predict_kwargs* reach ``model.predict`` (for
+    instance ``trainer_kwargs`` pinning the Trainer to the CPU), so the test
+    phase can run this on a GPU with many loader workers and the dashboard's
+    what-if view can run the very same forecast in-process without either.
+    """
+    import torch
+
+    template_time_idx = getattr(template, "time_idx", None)
+    template_group_ids = getattr(template, "group_ids", None)
+    if not template_time_idx or not template_group_ids:
+        raise ValueError(
+            f"Dataset template is missing time_idx or group_ids; "
+            f"cannot align {name} window predictions"
+        )
+
+    cfg = WindowConfig(
+        encoder_length=template.max_encoder_length,
+        prediction_length=template.max_prediction_length,
+    )
+
+    window_data = slice_window(data, cfg.total_length, template_time_idx)
+    if len(window_data) == 0:
+        logging.warning("No %s window test data available", name)
+        return WindowPrediction(preds=np.array([]), horizon=pd.DataFrame(), name=name)
+
+    # predict=True is what makes the horizon alignable: it emits exactly one
+    # sample per trajectory.  Eval mode would enumerate every (start,
+    # decoder length) pair instead — dozens of overlapping samples per
+    # trajectory, most of them padded — with no way to tell which
+    # prediction belongs to which step.
+    try:
+        test_dataset = from_train_template(template, window_data, mode="predict")
+    except Exception as e:
+        raise RuntimeError(f"Failed to build {name} window test dataset: {e}") from e
+
+    loader_options = {
+        "batch_size": TFTTrainerConfig().batch_size,
+        "num_workers": 0,
+        "persistent_workers": False,
+    }
+    loader_options.update(loader_kwargs or {})
+    test_loader = test_dataset.to_dataloader(train=False, **loader_options)
+
+    returns = model.predict(test_loader, return_index=True, **(predict_kwargs or {}))
+    preds_tensor = _unpack_prediction_output(returns, torch)
+
+    index_df = _collect_index_dataframe(returns.index)
+    idx_df = _normalize_index_df(index_df, template_time_idx)
+    idx_df, preds_flat = _expand_horizon_index(idx_df, preds_tensor, template_time_idx, torch)
+
+    # Build horizon dataframe.  The __observed masks come along so the
+    # metrics can skip zero-filled and interpolated targets, as the LSTM
+    # and XGBoost paths do.
+    from configs.data import POPULATION_COLUMN
+    from src.data.preprocess import observed_mask_columns
+    targets = list(targets)
+    key_cols = list(template_group_ids) + [template_time_idx]
+    ref_cols = [
+        c for c in key_cols + ['Year'] + targets + observed_mask_columns(targets) + [POPULATION_COLUMN]
+        if c in window_data.columns
+    ]
+    horizon_df = idx_df[key_cols].merge(
+        window_data.drop_duplicates(subset=key_cols)[ref_cols],
+        on=key_cols,
+        how='left'
+    )
+
+    if target_offset > 0 and template_time_idx in horizon_df.columns:
+        horizon_mask = horizon_df[template_time_idx] >= target_offset
+        dropped = int((~horizon_mask).sum())
+        if dropped > 0:
+            logging.info(
+                "Warm start offset %d: %s-window horizon filter removed %d rows",
+                target_offset,
+                name,
+                dropped,
+            )
+            horizon_df = horizon_df.loc[horizon_mask].reset_index(drop=True)
+            preds_flat = preds_flat[horizon_mask.to_numpy()]
+
+    # Convert per-capita predictions back to absolute units.
+    from src.data.preprocess import denormalize_by_population
+    preds_flat = denormalize_by_population(preds_flat, horizon_df[POPULATION_COLUMN].values)
+
+    logging.info(f"{name.capitalize()} window predictions: {preds_flat.shape}, horizon_df: {horizon_df.shape}")
+    return WindowPrediction(preds=preds_flat, horizon=horizon_df, name=name)
+
+
 def _predict_window(
     session_state: dict,
     run_id: str,
     name: str,
     slice_window: Callable[[pd.DataFrame, int, str], pd.DataFrame],
 ) -> WindowPrediction:
-    """Predict one window (early or late) with the already-trained model.
+    """Predict one window (early or late) with the run's trained model.
 
-    Both windows are sliced to exactly ``encoder_length + prediction_length``
-    steps, so ``predict=True`` yields one sample per trajectory whose decoder
-    covers the window's last ``prediction_length`` steps.
+    Loads the checkpoint and template, pins inference to one GPU and hands
+    the test frame to :func:`predict_window_frame`.
     """
     logging.info("Generating %s window predictions using existing model...", name)
 
@@ -234,86 +340,16 @@ def _predict_window(
         model = load_tft_checkpoint(run_id)
         train_template = load_dataset_template(run_id)
 
-        template_time_idx = getattr(train_template, "time_idx", None)
-        template_group_ids = getattr(train_template, "group_ids", None)
-        if not template_time_idx or not template_group_ids:
-            raise ValueError(
-                f"Dataset template is missing time_idx or group_ids; "
-                f"cannot align {name} window predictions"
-            )
-        target_offset = int(session_state.get("tft_target_offset", 0) or 0)
-
-        cfg = WindowConfig(
-            encoder_length=train_template.max_encoder_length,
-            prediction_length=train_template.max_prediction_length,
+        return predict_window_frame(
+            model,
+            train_template,
+            session_state["test_data"],
+            session_state["targets"],
+            name,
+            slice_window,
+            target_offset=int(session_state.get("tft_target_offset", 0) or 0),
+            loader_kwargs={"num_workers": get_default_num_workers()},
         )
-
-        window_data = slice_window(session_state["test_data"], cfg.total_length, template_time_idx)
-        if len(window_data) == 0:
-            logging.warning("No %s window test data available", name)
-            return WindowPrediction(preds=np.array([]), horizon=pd.DataFrame(), name=name)
-
-        # predict=True is what makes the horizon alignable: it emits exactly one
-        # sample per trajectory.  Eval mode would enumerate every (start,
-        # decoder length) pair instead — dozens of overlapping samples per
-        # trajectory, most of them padded — with no way to tell which
-        # prediction belongs to which step.
-        try:
-            test_dataset = from_train_template(train_template, window_data, mode="predict")
-        except Exception as e:
-            raise RuntimeError(f"Failed to build {name} window test dataset: {e}") from e
-
-        trainer_cfg = TFTTrainerConfig()
-        test_loader = test_dataset.to_dataloader(
-            train=False,
-            batch_size=trainer_cfg.batch_size,
-            num_workers=get_default_num_workers(),
-            persistent_workers=False
-        )
-
-        returns = model.predict(test_loader, return_index=True)
-        preds_tensor = _unpack_prediction_output(returns, torch)
-
-        index_df = _collect_index_dataframe(returns.index)
-        idx_df = _normalize_index_df(index_df, template_time_idx)
-        idx_df, preds_flat = _expand_horizon_index(idx_df, preds_tensor, template_time_idx, torch)
-
-        # Build horizon dataframe.  The __observed masks come along so the
-        # metrics can skip zero-filled and interpolated targets, as the LSTM
-        # and XGBoost paths do.
-        from configs.data import POPULATION_COLUMN
-        from src.data.preprocess import observed_mask_columns
-        targets = session_state["targets"]
-        key_cols = list(template_group_ids) + [template_time_idx]
-        ref_cols = [
-            c for c in key_cols + ['Year'] + targets + observed_mask_columns(targets) + [POPULATION_COLUMN]
-            if c in window_data.columns
-        ]
-        horizon_df = idx_df[key_cols].merge(
-            window_data.drop_duplicates(subset=key_cols)[ref_cols],
-            on=key_cols,
-            how='left'
-        )
-
-        if target_offset > 0 and template_time_idx in horizon_df.columns:
-            horizon_mask = horizon_df[template_time_idx] >= target_offset
-            dropped = int((~horizon_mask).sum())
-            if dropped > 0:
-                logging.info(
-                    "Warm start offset %d: %s-window horizon filter removed %d rows",
-                    target_offset,
-                    name,
-                    dropped,
-                )
-                horizon_df = horizon_df.loc[horizon_mask].reset_index(drop=True)
-                preds_flat = preds_flat[horizon_mask.to_numpy()]
-
-        # Convert per-capita predictions back to absolute units.
-        from src.data.preprocess import denormalize_by_population
-        preds_flat = denormalize_by_population(preds_flat, horizon_df[POPULATION_COLUMN].values)
-
-        logging.info(f"{name.capitalize()} window predictions: {preds_flat.shape}, horizon_df: {horizon_df.shape}")
-        return WindowPrediction(preds=preds_flat, horizon=horizon_df, name=name)
 
 
 def _predict_early_window(session_state: dict, run_id: str) -> WindowPrediction:
@@ -457,6 +493,10 @@ def _combine_predictions_weighted(
         logging.warning("No combined data generated")
         # If we could not form any combined data, fall back to late window
         return late
+
+
+# The blend, for callers outside the test phase (the what-if view).
+combine_windows = _combine_predictions_weighted
 
 
 def predict_tft_two_window(

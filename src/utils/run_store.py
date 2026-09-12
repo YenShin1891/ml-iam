@@ -373,6 +373,26 @@ class RunStore:
         return (self._artifacts_dir() / "predictions.pkl").exists()
 
     # ------------------------------------------------------------------
+    # Metrics (CSV — written by src.trainers.evaluation.save_metrics)
+    # ------------------------------------------------------------------
+
+    def _metrics_by_region_path(self, metrics_filename: str) -> Path:
+        # Mirrors evaluation.by_region_filename; that module imports this
+        # one, so the rule is repeated here rather than imported.
+        name = Path(metrics_filename)
+        return self.root / "metrics" / f"{name.stem}_by_region{name.suffix}"
+
+    def load_metrics_by_region(self, metrics_filename: str = "performance.csv") -> pd.DataFrame:
+        """The per-region table saved beside *metrics_filename*."""
+        path = self._metrics_by_region_path(metrics_filename)
+        if not path.exists():
+            raise FileNotFoundError(f"No per-region metrics at {path}. Run the test phase first.")
+        return pd.read_csv(path)
+
+    def has_metrics_by_region(self, metrics_filename: str = "performance.csv") -> bool:
+        return self._metrics_by_region_path(metrics_filename).exists()
+
+    # ------------------------------------------------------------------
     # Generic artifact (pickle — scalers, etc.)
     # ------------------------------------------------------------------
 

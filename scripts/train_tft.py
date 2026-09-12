@@ -18,12 +18,7 @@ def derive_splits(data, store=None, target_normalizer_mode=None):
     inference rather than used for encoding here.
     """
     from configs.models.tft import TFTDatasetConfig
-    from src.data.preprocess import (
-        add_missingness_indicators,
-        impute_with_train_medians,
-        prepare_features_and_targets_sequence,
-        split_data,
-    )
+    from src.data.preprocess import prepare_sequence_frames
 
     dataset_cfg = TFTDatasetConfig()
     context_length = max(0, dataset_cfg.target_offset)
@@ -33,33 +28,20 @@ def derive_splits(data, store=None, target_normalizer_mode=None):
         store.categories_for(data)
         split_assignment = store.splits_for(data)
 
-    prepared, features, targets = prepare_features_and_targets_sequence(data)
     dataset_cfg.resolve_encoder_lengths()
     if context_length > 0:
         logging.info(
             "Warm start enabled for TFT: target_offset=%d (retaining early steps for encoder context).",
             context_length,
         )
-    prepared, features = add_missingness_indicators(prepared, features)
-    train_data, val_data, test_data = split_data(prepared, assignment=split_assignment)
-    train_data, val_data, test_data = impute_with_train_medians(
-        train_data, val_data, test_data, features
-    )
-
-    # When keeping partial targets, fill NaN with 0 — the __observed mask
-    # handles loss weighting so filled values don't contribute to gradients.
-    # This avoids NaN propagation in EncoderNormalizer / TimeSeriesDataSet.
-    from configs.data import KEEP_PARTIAL_TARGETS
-    if KEEP_PARTIAL_TARGETS:
-        for df in (train_data, val_data, test_data):
-            df[targets] = df[targets].fillna(0.0)
+    frames = prepare_sequence_frames(data, split_assignment)
 
     return {
-        "features": features,
-        "targets": targets,
-        "train_data": train_data,
-        "val_data": val_data,
-        "test_data": test_data,
+        "features": frames.features,
+        "targets": frames.targets,
+        "train_data": frames.train,
+        "val_data": frames.val,
+        "test_data": frames.test,
         "tft_target_offset": context_length,
         "tft_min_encoder_length": dataset_cfg.effective_min_encoder_length,
         "tft_max_encoder_length": dataset_cfg.effective_max_encoder_length,

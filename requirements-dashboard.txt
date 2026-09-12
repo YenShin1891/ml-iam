@@ -10,8 +10,12 @@
 #
 # `make dashboard` uses this environment; if yours is named differently,
 # run `make dashboard DASHBOARD_ENV=<name>`.
+#
+# The what-if view runs the trained TFT live, so the dashboard needs the deep
+# learning stack too.  It loads and runs the model on the CPU: a CPU-only
+# torch wheel is enough here.
 
--r requirements.txt
+-r requirements-advanced.txt
 
 streamlit==1.45.0
 

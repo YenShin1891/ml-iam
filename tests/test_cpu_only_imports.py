@@ -56,6 +56,8 @@ def _run_without_torch(body: str) -> subprocess.CompletedProcess:
         "src.trainers.evaluation",
         "scripts.train_xgb",
         "src.visualization",
+        "src.visualization.whatif",
+        "src.inference.whatif",
     ],
 )
 def test_module_imports_without_torch(module):
