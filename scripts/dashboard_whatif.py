@@ -69,6 +69,7 @@ PRESERVED_KEYS = (
     "whatif_show_band",
 )
 
+
 OVERLAY_MODES = {"Position within the AR6 range": "band", "Relative to the baseline": "ratio"}
 
 CAVEAT = (
@@ -191,8 +192,15 @@ def _on_anchor_change(feature: str, year: int, key: str) -> None:
 
 
 def _apply_preset(name: str) -> None:
-    st.session_state.whatif_edits = preset_edits(WHATIF_PRESETS[name], list(_specs().values()))
-    st.session_state.whatif_preset = name
+    specs = list(_specs().values())
+    # Each pair controls one input. Preserve choices made in the other pairs.
+    st.session_state.whatif_edits.update(preset_edits(WHATIF_PRESETS[name], specs))
+    selected = []
+    for label, preset in WHATIF_PRESETS.items():
+        values = preset_edits(preset, specs)
+        if values and all(st.session_state.whatif_edits.get(f) == anchors for f, anchors in values.items()):
+            selected.append(label)
+    st.session_state.whatif_preset = "; ".join(selected) or None
     _bump_generation()
     _invalidate_result()
 
@@ -209,6 +217,7 @@ def _reset_levers() -> None:
 
 def _ordered(specs: List[LeverSpec]) -> List[LeverSpec]:
     """Key levers first, in their configured order, then the rest as listed."""
+    specs = [spec for spec in specs if spec.feature != "GDP|PPP"]
     by_feature = {spec.feature: spec for spec in specs}
     key = [by_feature[f] for f in WHATIF_KEY_LEVERS if f in by_feature]
     rest = [spec for spec in specs if spec.feature not in WHATIF_KEY_LEVERS]
@@ -285,10 +294,23 @@ def _render_anchor_controls(specs: List[LeverSpec], anchor_years: List[int]) -> 
 
 def _render_controls(specs: List[LeverSpec], anchor_years: List[int]) -> None:
     st.markdown("**Levers**")
-    columns = st.columns(len(WHATIF_PRESETS) + 1)
-    for column, name in zip(columns, WHATIF_PRESETS):
-        column.button(name, key=f"whatif_preset_{name}", on_click=_apply_preset, args=(name,), use_container_width=True)
-    columns[-1].button("Reset levers", key="whatif_reset", on_click=_reset_levers, use_container_width=True)
+    st.caption("Choose High or Low independently for each input. Run emulator uses your current choices.")
+    by_feature = {spec.feature: spec for spec in specs}
+    names = list(WHATIF_PRESETS)
+    for start in range(0, len(names), 2):
+        for column, name in zip(st.columns(2), names[start:start + 2]):
+            available = all(f in by_feature and by_feature[f].enabled for f in WHATIF_PRESETS[name])
+            values = preset_edits(WHATIF_PRESETS[name], specs) if available else {}
+            active = bool(values) and all(st.session_state.whatif_edits.get(f) == a for f, a in values.items())
+            column.button(
+                name, key=f"whatif_preset_{name}", on_click=_apply_preset, args=(name,),
+                use_container_width=True, disabled=not available,
+                type="primary" if active else "secondary",
+                help=None if available else "This baseline does not have a movable input for this preset.",
+            )
+    st.button("Reset levers", key="whatif_reset", on_click=_reset_levers)
+    st.caption("GDP MER starts from the selected IAM scenario's original time series.")
+
     advanced = st.toggle(
         "Unlock per-decade anchors", key="whatif_advanced",
         help="Pin one lever's value in each decade instead of a single multiple reached at the last year.",
@@ -305,7 +327,7 @@ def _render_overlay(specs: List[LeverSpec]) -> None:
     col_mode, col_pick = st.columns([1, 2])
     with col_mode:
         mode_label = st.radio("Scale", list(OVERLAY_MODES), key="whatif_overlay_mode")
-    available = [spec.feature for spec in specs]
+    available = [spec.feature for spec in specs if spec.feature != "GDP|PPP"]
     default_pick = [f for f in WHATIF_KEY_LEVERS if f in available] + [f for f in edits if f in available and f not in WHATIF_KEY_LEVERS]
     with col_pick:
         chosen = st.multiselect("Levers shown", available, default=default_pick, key=_widget_key("overlay_pick"))
@@ -479,6 +501,11 @@ def render_whatif_view(run_id: str, on_plot_saved: Optional[Callable[[], None]] 
     anchor_years = resolve_anchor_years(years, history_years)
     specs = build_lever_specs(rows, _bands(run_id, region), prepared.raw_features, history_steps, anchor_years)
     st.session_state.whatif_specs = {spec.feature: spec for spec in specs}
+    # A browser session opened before this revision may still contain PPP edits.
+    if "GDP|PPP" in st.session_state.whatif_edits:
+        st.session_state.whatif_edits.pop("GDP|PPP")
+        _bump_generation()
+        _invalidate_result()
     st.caption(
         f"History {history_years[0]}–{history_years[-1]} stays as the IAM reported it; the emulator forecasts "
         f"{years[history_steps]}–{years[-1]}. {candidate.n_reported} of {n_inputs} inputs were reported by "

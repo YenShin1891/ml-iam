@@ -50,11 +50,10 @@ WHATIF_MIN_BAND_FRACTION = 0.5
 # history, or after the trajectory ends, are dropped.
 WHATIF_ANCHOR_YEARS = tuple(range(2030, 2101, 10))
 
-# Inputs shown as sliders without opening the "All inputs" section.
+# Original key sliders, with MER as the single GDP control.
 WHATIF_KEY_LEVERS = [
     "Population",
     "GDP|MER",
-    "GDP|PPP",
     "Price|Carbon",
     "Yield|Cereal",
     "Capital Cost|Electricity|Solar|PV",
@@ -68,7 +67,11 @@ WHATIF_KEY_LEVERS = [
 # at the last year (0 = lower quantile, 1 = upper), ramping from history.
 WHATIF_PRESETS = {
     "High carbon price": {"Price|Carbon": 0.95},
-    "Cheap solar": {"Capital Cost|Electricity|Solar|PV": 0.05},
+    "Low carbon price": {"Price|Carbon": 0.05},
+    "High cost solar": {"Capital Cost|Electricity|Solar|PV": 0.95},
+    "Low cost solar": {"Capital Cost|Electricity|Solar|PV": 0.05},
+    "High population": {"Population": 0.95},
     "Low population": {"Population": 0.05},
-    "High growth": {"GDP|MER": 0.95, "GDP|PPP": 0.95},
+    "High growth": {"GDP|MER": 0.95},
+    "Low growth": {"GDP|MER": 0.05},
 }
