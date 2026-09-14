@@ -285,9 +285,9 @@ def plot_lever_overlay(
     return fig
 
 
-def save_whatif_outputs(run_id: str, fig: Figure, metadata: dict, timestamp: Optional[str] = None) -> Tuple[str, str]:
+def save_whatif_outputs(run_id: str, fig: Figure, metadata: dict, timestamp: Optional[str] = None, *, output_dir: Optional[str] = None) -> Tuple[str, str]:
     """Save the figure and its metadata where the dashboard lists saved plots."""
-    plots_dir = os.path.join(get_run_root(run_id), "saved_dashboard_plots")
+    plots_dir = output_dir if output_dir is not None else os.path.join(get_run_root(run_id), "saved_dashboard_plots")
     os.makedirs(plots_dir, exist_ok=True)
     stamp = timestamp or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     png_path = os.path.join(plots_dir, f"{PLOT_PREFIX}{stamp}.png")
