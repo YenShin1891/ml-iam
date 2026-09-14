@@ -18,27 +18,35 @@ import streamlit as st
 from configs.dashboard import (
     WHATIF_ACCELERATOR,
     WHATIF_BASELINE_CATEGORY,
+    WHATIF_COMBINATION_DEFAULTS,
+    WHATIF_COMPARISON_OUTPUTS,
+    WHATIF_DISTRIBUTION_YEAR,
     WHATIF_DEFAULT_REGION,
     WHATIF_ENGINES,
     WHATIF_KEY_LEVERS,
     WHATIF_MIN_SAMPLE_SIZE,
+    WHATIF_MAX_COMBINATION_LEVERS,
     WHATIF_PRESETS,
     WHATIF_R2_THRESHOLD,
 )
 from src.inference.whatif import (
+    WHATIF_CATEGORY_GROUPS,
     R2_COLUMN,
     SAMPLE_COLUMN,
     LeverSpec,
     apply_levers,
     ar6_target_bands,
+    ar6_distribution_samples,
     assemble_result,
     band_coverage,
     baseline_rows,
     build_lever_specs,
     candidate_baselines,
+    comparison_sources,
     choose_default_baseline,
     eligible_regions,
     export_frame,
+    high_low_combinations,
     lever_bands,
     load_prepared_run,
     multiplier_from_anchors,
@@ -49,7 +57,7 @@ from src.inference.whatif import (
     result_metadata,
 )
 from src.utils.run_store import RunStore
-from src.visualization.whatif import plot_lever_overlay, plot_whatif_grid, save_whatif_outputs
+from src.visualization.whatif import plot_lever_overlay, plot_whatif_grid, plot_whatif_comparison, save_whatif_outputs
 
 VIEW_NAME = "What-if emulator"
 
@@ -149,6 +157,7 @@ def _state_default(key: str, value) -> None:
 def _invalidate_result() -> None:
     st.session_state.whatif_result = None
     st.session_state.whatif_saved = None
+    st.session_state.whatif_combinations = None
 
 
 def _bump_generation() -> None:
@@ -294,7 +303,7 @@ def _render_anchor_controls(specs: List[LeverSpec], anchor_years: List[int]) -> 
 
 def _render_controls(specs: List[LeverSpec], anchor_years: List[int]) -> None:
     st.markdown("**Levers**")
-    st.caption("Choose High or Low independently for each input. Run emulator uses your current choices.")
+    st.caption("Choose High or Low independently for each input. Run emulator uses your current choices; Run all High/Low combinations tests all 16 combinations per available baseline group.")
     by_feature = {spec.feature: spec for spec in specs}
     names = list(WHATIF_PRESETS)
     for start in range(0, len(names), 2):
@@ -400,6 +409,129 @@ def _render_run(run_id, engine, prepared, region, candidate, rows, history_steps
 
 
 # ── The view ──────────────────────────────────────────────────────────────
+
+
+def _render_combinations(run_id, engine, prepared, region, candidate, rows, history_steps, specs, region_r2, on_plot_saved):
+    st.markdown("**High/Low combinations**")
+    chosen = list(WHATIF_COMBINATION_DEFAULTS)
+    year = WHATIF_DISTRIBUTION_YEAR
+    outputs = [t for t in WHATIF_COMPARISON_OUTPUTS if t in prepared.targets]
+    sources, unavailable = comparison_sources(
+        prepared, region, _bands(run_id, region), chosen, history_steps, engine.min_steps, candidate.key,
+    )
+    if unavailable:
+        st.info("No source with all four movable inputs in: " + ", ".join(unavailable) + ". These groups are not included.")
+    if not sources:
+        return
+    per_group = 2 ** len(chosen)
+    count = per_group * len(sources)
+    max_levers = WHATIF_MAX_COMBINATION_LEVERS
+    st.caption(
+        f"All {per_group} High/Low combinations for each baseline group: {count} paths plus the original emulations. "
+        "The panels on the right compare AR6 and generated values in 2050."
+    )
+    st.caption("Each run uses the full model input set. Only carbon price, solar cost, population and GDP MER vary; all other inputs retain their starting scenario's values.")
+    with st.expander("How to read this chart", expanded=False):
+        st.caption("This panel only explains the chart. Opening it does not change any settings or results.")
+        st.markdown(
+            "**Left: how the paths change over time**\n\n"
+            "- **Thin lines:** all 16 High/Low combinations of carbon price, solar cost, population and GDP MER for each starting scenario.\n"
+            "- **Dashed line:** the emulator's result with that starting scenario's inputs unchanged.\n"
+            "- **Filled area:** the minimum to maximum generated value at each year. It is not a confidence interval.\n"
+            "- **Color shades:** the starting scenario's AR6 category group (C1–4, C5–6 or C7–8). Overlapping lines and areas look darker; darkness is not a probability.\n\n"
+            "**Right: compare the outcomes in 2050**\n\n"
+            "- **AR6, left box:** reported values from the original scenarios in that group and region.\n"
+            "- **Synthetic, right box:** values from the generated High/Low combinations.\n"
+            "- **Black diamond:** the unchanged emulation in 2050. Each box shows the median and middle 50%; whiskers span the 5th–95th percentiles.\n\n"
+            "The group labels describe the starting scenarios. The generated paths have not been assigned new climate categories."
+        )
+    with st.expander("View data sources", expanded=False):
+        st.write("These are the starting scenarios used to generate the colored paths. They are chosen automatically; there is nothing to select here.")
+        if run_id == "preview":
+            st.info("Preview only: the model and scenario names below are fictional examples, not real AR6 sources.")
+        st.dataframe(pd.DataFrame([
+            {"Chart group": group, "Source IAM": selected.model, "Starting scenario": selected.scenario,
+             "Generated paths": per_group}
+            for group, (selected, _, _) in sources.items()
+        ]), hide_index=True, use_container_width=True)
+        st.caption("One source per group must report all four inputs and have enough data for the emulator. Other inputs retain their source values. Source names are provided so you can trace where the chart starts, not as settings you need to choose.")
+    signature = (run_id, region, tuple((g, c.key) for g, (c, _, _) in sources.items()), tuple(chosen))
+    saved = st.session_state.get("whatif_combinations")
+    if saved is not None and (saved["signature"] != signature or "ensembles" not in saved):
+        st.session_state.whatif_combinations = None
+        saved = None
+    if st.button("Run all High/Low combinations", key="whatif_run_combinations", disabled=not chosen or not outputs or not sources):
+        from src.inference.tft_predict import check_vocabulary, predict_windows
+
+        problems = [f"{group}: {problem}" for group, (_, source_rows, _) in sources.items() for problem in check_vocabulary(engine, source_rows)]
+        if problems:
+            st.error("The model's vocabulary lacks: " + ", ".join(problems))
+            return
+        ensembles, exports, records = {}, [], []
+        progress = st.progress(0.0, text=f"Emulating 0 of {count} combinations…")
+        try:
+            completed = 0
+            for group, (selected, source_rows, source_specs) in sources.items():
+                baseline_pred = _baseline_prediction(run_id, region, selected.model, selected.scenario)
+                original = assemble_result(
+                    run_id, region, selected, source_rows, source_rows, prepared.raw_features, prepared.targets,
+                    baseline_pred, baseline_pred, {}, (0, 0), history_steps,
+                )
+                exports.append(export_frame(original).assign(combination="Original emulation", baseline_group=group,
+                                                             baseline_model=selected.model, baseline_scenario=selected.scenario))
+                predictions = {}
+                for label, edits in high_low_combinations(source_specs, chosen, max_levers=max_levers):
+                    edited = apply_levers(source_rows, edits, history_steps)
+                    prediction = predict_windows(engine, edited)
+                    result = assemble_result(
+                        run_id, region, selected, source_rows, edited, prepared.raw_features, prepared.targets,
+                        baseline_pred, prediction, edits, band_coverage(edits, source_specs), history_steps,
+                    )
+                    predictions[label] = result.pred_edited
+                    exports.append(export_frame(result).assign(combination=label, baseline_group=group,
+                                                                baseline_model=selected.model, baseline_scenario=selected.scenario))
+                    records.append({"group": group, "label": label, "result": result_metadata(result, float(region_r2), None)})
+                    completed += 1
+                    progress.progress(completed / count, text=f"Emulating {completed} of {count} combinations…")
+                ensembles[group] = {"original": original, "predictions": predictions}
+            metadata = result_metadata(next(iter(ensembles.values()))["original"], float(region_r2), None)
+            metadata.update({"mode": "high_low_comparison", "features": chosen, "combinations": records,
+                             "distribution_year": year, "display_targets": outputs, "grouping": "source baseline category"})
+            reference = ar6_distribution_samples(prepared.frame, region, prepared.targets, year)
+            metadata["reference_samples"] = reference.to_dict(orient="records")
+            fig = plot_whatif_comparison(ensembles, reference, year=year, targets=outputs)
+            try:
+                png_path, _ = save_whatif_outputs(run_id, fig, metadata)
+            finally:
+                plt.close(fig)
+            saved = {"signature": signature, "ensembles": ensembles,
+                     "csv": pd.concat(exports, ignore_index=True).to_csv(index=False).encode("utf-8"),
+                     "png_path": png_path}
+            st.session_state.whatif_combinations = saved
+            if on_plot_saved is not None:
+                on_plot_saved()
+        except Exception as exc:
+            logging.exception("High/Low combination run failed")
+            st.error(f"The combination run did not finish: {exc}. No partial ensemble was saved.")
+        finally:
+            progress.empty()
+    if saved is None:
+        return
+    if not outputs:
+        st.info("Choose at least one output to display.")
+        return
+    reference = ar6_distribution_samples(prepared.frame, region, prepared.targets, year)
+    fig = plot_whatif_comparison(saved["ensembles"], reference, year=year, targets=outputs)
+    st.pyplot(fig)
+    plt.close(fig)
+    total = sum(len(bundle["predictions"]) for bundle in saved["ensembles"].values())
+    st.caption(f"All {total} combinations completed. Initial figure saved as {os.path.basename(saved['png_path'])}.")
+    st.download_button(
+        "Download all combination inputs and forecasts (CSV)", saved["csv"],
+        file_name=f"whatif_combinations_{run_id}_{region}.csv", mime="text/csv", key="whatif_combinations_download",
+    )
+    st.download_button("Download AR6 distribution samples (CSV)", reference.to_csv(index=False).encode("utf-8"),
+                       file_name=f"whatif_ar6_{region}_{year}.csv", mime="text/csv", key="whatif_ar6_download")
 
 
 def render_whatif_view(run_id: str, on_plot_saved: Optional[Callable[[], None]] = None) -> None:
@@ -515,3 +647,4 @@ def render_whatif_view(run_id: str, on_plot_saved: Optional[Callable[[], None]] 
     _render_controls(specs, anchor_years)
     _render_overlay(specs)
     _render_run(run_id, engine, prepared, region, candidate, rows, history_steps, specs, region_row[R2_COLUMN], on_plot_saved)
+    _render_combinations(run_id, engine, prepared, region, candidate, rows, history_steps, specs, region_row[R2_COLUMN], on_plot_saved)
