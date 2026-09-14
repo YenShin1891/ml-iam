@@ -434,7 +434,7 @@ def _render_combinations(run_id, engine, prepared, region, candidate, rows, hist
     st.caption("Each run uses the full model input set. Only carbon price, solar cost, population and GDP MER vary; all other inputs retain their starting scenario's values.")
     with st.expander("How to read this chart", expanded=False):
         st.caption("This panel only explains the chart. Opening it does not change any settings or results.")
-        st.markdown(
+        st.caption(
             "**Left: how the paths change over time**\n\n"
             "- **Thin lines:** all 16 High/Low combinations of carbon price, solar cost, population and GDP MER for each starting scenario.\n"
             "- **Dashed line:** the emulator's result with that starting scenario's inputs unchanged.\n"
