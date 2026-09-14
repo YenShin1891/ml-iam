@@ -1,5 +1,7 @@
 """Dashboard configuration — default run IDs per model type and the what-if view."""
 
+from configs.data import OUTPUT_VARIABLES
+
 # When the URL has just ?run_id=xgb (or lstm, tft), resolve to these defaults.
 # Update these when you have a new best run for each model.
 DEFAULT_RUNS = {
@@ -75,3 +77,11 @@ WHATIF_PRESETS = {
     "High growth": {"GDP|MER": 0.95},
     "Low growth": {"GDP|MER": 0.05},
 }
+
+WHATIF_COMBINATION_DEFAULTS = [
+    "Price|Carbon", "Capital Cost|Electricity|Solar|PV", "Population", "GDP|MER",
+]
+WHATIF_MAX_COMBINATION_LEVERS = 4
+WHATIF_DISTRIBUTION_YEAR = 2050
+# Match the original nine-output grid, including nuclear and all three gases.
+WHATIF_COMPARISON_OUTPUTS = list(OUTPUT_VARIABLES)

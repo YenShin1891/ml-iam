@@ -13,6 +13,7 @@ import datetime
 import logging
 import math
 from dataclasses import dataclass
+from itertools import product
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
@@ -36,6 +37,38 @@ GROUP_KEYS = list(INDEX_COLUMNS)
 SPLIT_COLUMN = "split"
 R2_COLUMN = "R2 Score (pooled)"
 SAMPLE_COLUMN = "Sample Size"
+
+# Grouping used by the professor's reference figure. These describe the
+# source baseline, not a reassessment of a generated path's climate outcome.
+WHATIF_CATEGORY_GROUPS = {
+    "C1–4": ("C1", "C2", "C3", "C4"),
+    "C5–6": ("C5", "C6"),
+    "C7–8": ("C7", "C8"),
+}
+
+
+def ar6_distribution_samples(frame, region, targets, year=2050):
+    """One observed source value per IAM/scenario/region at the exact year.
+
+    Do not turn interpolated targets or repeated rows into reference samples.
+    Missing years remain missing rather than being extrapolated.
+    """
+    category_group = {category: group for group, categories in WHATIF_CATEGORY_GROUPS.items() for category in categories}
+    rows = frame[(frame["Region"] == region) & (frame["Year"] == year)].copy()
+    rows = rows.drop_duplicates(["Model", "Scenario", "Region"])
+    records = []
+    for target in targets:
+        if target not in rows:
+            continue
+        values = pd.to_numeric(rows[target], errors="coerce")
+        observed = rows.get(f"{target}__observed", pd.Series(1, index=rows.index))
+        for idx in rows.index[np.isfinite(values) & (observed == 1)]:
+            group = category_group.get(rows.at[idx, "Scenario_Category"])
+            if group is not None:
+                records.append({"group": group, "target": target, "Year": int(year),
+                                "value": float(values.at[idx]), "Model": rows.at[idx, "Model"],
+                                "Scenario": rows.at[idx, "Scenario"], "Region": region})
+    return pd.DataFrame(records, columns=["group", "target", "Year", "value", "Model", "Scenario", "Region"])
 
 
 # ── The run's frames ──────────────────────────────────────────────────────
@@ -593,6 +626,55 @@ def band_coverage(edits: Mapping[str, Mapping[int, float]], specs: Sequence[Leve
             total += 1
             inside += int(bounds.band_lo <= float(value) <= bounds.band_hi)
     return inside, total
+
+
+def high_low_combinations(
+    specs: Sequence[LeverSpec], features: Sequence[str], *, max_levers: int = 9,
+) -> List[Tuple[str, Dict[str, Dict[int, float]]]]:
+    """The full Cartesian product for selected inputs; never sample or skip silently."""
+    features = list(dict.fromkeys(features))
+    if not features or len(features) > max_levers:
+        raise ValueError(f"Choose between 1 and {max_levers} levers.")
+    by_feature = {spec.feature: spec for spec in specs}
+    for feature in features:
+        spec = by_feature.get(feature)
+        if feature == "GDP|PPP" or spec is None or not spec.enabled or spec.last_year not in spec.anchors:
+            raise ValueError(f"{feature} is not an independent, available lever.")
+    combinations = []
+    for levels in product(("Low", "High"), repeat=len(features)):
+        positions = {f: 0.05 if level == "Low" else 0.95 for f, level in zip(features, levels)}
+        edits = preset_edits(positions, specs)
+        label = "; ".join(f"{f}: {level}" for f, level in zip(features, levels))
+        combinations.append((label, edits))
+    return combinations
+
+
+def comparison_sources(prepared, region, bands, features, history_steps, min_steps, preferred=None):
+    """One source per group with every required input movable; never reduce the factorial.
+
+    Prefer the current source if eligible, then the best-covered source in
+    candidate_baselines order. A group with no suitable source is reported.
+    """
+    sources, unavailable = {}, []
+    for group, categories in WHATIF_CATEGORY_GROUPS.items():
+        candidates = [c for category in categories for c in candidate_baselines(
+            prepared, region, category=category, min_steps=min_steps,
+        )]
+        candidates.sort(key=lambda c: (c.key != preferred, -c.n_reported, -c.n_regions, c.model, c.scenario))
+        for candidate in candidates:
+            rows = baseline_rows(prepared, region, candidate.model, candidate.scenario)
+            if not all(f in rows and _reported_everywhere(rows, f) for f in features):
+                continue
+            years = rows["Year"].astype(int).tolist()
+            specs = build_lever_specs(rows, bands, prepared.raw_features, history_steps,
+                                      resolve_anchor_years(years, years[:history_steps]))
+            available = {spec.feature for spec in specs if spec.enabled and spec.last_year in spec.anchors}
+            if set(features) <= available:
+                sources[group] = (candidate, rows, specs)
+                break
+        else:
+            unavailable.append(group)
+    return sources, unavailable
 
 
 # ── Results ───────────────────────────────────────────────────────────────

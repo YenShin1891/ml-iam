@@ -300,7 +300,10 @@ def from_train_template(
         data, train_dataset.group_ids, train_dataset.time_idx,
         required_group_length(prediction_length),
     )
-    if isinstance(train_dataset, DatasetTemplate):
+    # Streamlit can retain a fitted template in its resource cache while
+    # reloading this module. Its original class then differs from the newly
+    # imported DatasetTemplate, so use the template's build interface.
+    if callable(getattr(train_dataset, "build", None)):
         return train_dataset.build(data, mode=mode)
 
     return TimeSeriesDataSet.from_dataset(
