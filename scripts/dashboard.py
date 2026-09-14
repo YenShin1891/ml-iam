@@ -25,18 +25,31 @@ st.set_page_config(layout="wide")
 VIEWS = ("Trajectories", WHATIF_VIEW)
 VIEW_QUERY = {"trajectories": VIEWS[0], "whatif": VIEWS[1]}
 
-# Apply global styling for wider sidebar
+# Keep the preset pairs side by side and free the main area when the sidebar closes.
 st.markdown("""
 <style>
+    .st-key-whatif_preset_grid [data-testid="stHorizontalBlock"] {
+        flex-wrap: nowrap;
+    }
+    .st-key-whatif_preset_grid [data-testid="stColumn"] {
+        min-width: 0 !important;
+        flex: 1 1 0 !important;
+    }
     @media (min-width: 769px) {
-        .css-1d391kg, [data-testid="stSidebar"] {
+        [data-testid="stSidebar"][aria-expanded="true"] {
             width: 25rem !important;
             min-width: 25rem !important;
         }
-        .css-1d391kg > div {
-            width: 25rem !important;
-            min-width: 25rem !important;
-        }
+    }
+    .st-key-model_navigation [data-testid="stBaseButton-primary"] {
+        background-color: #2563eb;
+        border-color: #2563eb;
+        color: #ffffff;
+        font-weight: 600;
+    }
+    .st-key-model_navigation [data-testid="stBaseButton-primary"]:hover {
+        background-color: #1d4ed8;
+        border-color: #1d4ed8;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -568,13 +581,19 @@ def main():
 
     # Model selector tabs
     model_type = run_id.split("_", 1)[0]
-    cols = st.columns(len(DEFAULT_RUNS))
-    for i, (key, default_id) in enumerate(DEFAULT_RUNS.items()):
-        label = key.upper()
-        with cols[i]:
-            if st.button(label, key=f"nav_{key}", use_container_width=True, disabled=(key == model_type)):
-                st.query_params["run_id"] = key
-                st.rerun()
+    with st.container(key="model_navigation"):
+        cols = st.columns(len(DEFAULT_RUNS))
+        for i, key in enumerate(DEFAULT_RUNS):
+            selected = key == model_type
+            with cols[i]:
+                clicked = st.button(
+                    key.upper(), key=f"nav_{key}", use_container_width=True,
+                    type="primary" if selected else "secondary",
+                    help="Current model" if selected else f"Switch to {key.upper()}",
+                )
+                if clicked and not selected:
+                    st.query_params["run_id"] = key
+                    st.rerun()
 
     if resolve_view() == WHATIF_VIEW:
         render_whatif_view(run_id, on_plot_saved=get_cached_saved_plots.clear)

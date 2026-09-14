@@ -306,17 +306,18 @@ def _render_controls(specs: List[LeverSpec], anchor_years: List[int]) -> None:
     st.caption("Choose High or Low independently for each input. Run emulator uses your current choices; Run all High/Low combinations tests all 16 combinations per available baseline group.")
     by_feature = {spec.feature: spec for spec in specs}
     names = list(WHATIF_PRESETS)
-    for start in range(0, len(names), 2):
-        for column, name in zip(st.columns(2), names[start:start + 2]):
-            available = all(f in by_feature and by_feature[f].enabled for f in WHATIF_PRESETS[name])
-            values = preset_edits(WHATIF_PRESETS[name], specs) if available else {}
-            active = bool(values) and all(st.session_state.whatif_edits.get(f) == a for f, a in values.items())
-            column.button(
-                name, key=f"whatif_preset_{name}", on_click=_apply_preset, args=(name,),
-                use_container_width=True, disabled=not available,
-                type="primary" if active else "secondary",
-                help=None if available else "This baseline does not have a movable input for this preset.",
-            )
+    with st.container(key="whatif_preset_grid"):
+        for start in range(0, len(names), 2):
+            for column, name in zip(st.columns(2), names[start:start + 2]):
+                available = all(f in by_feature and by_feature[f].enabled for f in WHATIF_PRESETS[name])
+                values = preset_edits(WHATIF_PRESETS[name], specs) if available else {}
+                active = bool(values) and all(st.session_state.whatif_edits.get(f) == a for f, a in values.items())
+                column.button(
+                    name, key=f"whatif_preset_{name}", on_click=_apply_preset, args=(name,),
+                    use_container_width=True, disabled=not available,
+                    type="primary" if active else "secondary",
+                    help=None if available else "This baseline does not have a movable input for this preset.",
+                )
     st.button("Reset levers", key="whatif_reset", on_click=_reset_levers)
     st.caption("GDP MER starts from the selected IAM scenario's original time series.")
 
@@ -460,7 +461,7 @@ def _render_combinations(run_id, engine, prepared, region, candidate, rows, hist
     if saved is not None and (saved["signature"] != signature or "ensembles" not in saved):
         st.session_state.whatif_combinations = None
         saved = None
-    if st.button("Run all High/Low combinations", key="whatif_run_combinations", disabled=not chosen or not outputs or not sources):
+    if st.button("Run all High/Low combinations", key="whatif_run_combinations", type="primary", disabled=not chosen or not outputs or not sources):
         from src.inference.tft_predict import check_vocabulary, predict_windows
 
         problems = [f"{group}: {problem}" for group, (_, source_rows, _) in sources.items() for problem in check_vocabulary(engine, source_rows)]
