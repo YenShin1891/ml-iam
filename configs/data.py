@@ -26,7 +26,7 @@ UNITS_BY_OUTPUT = {
     "Primary Energy|Nuclear": "PJ/yr",
     "Emissions|CO2": "Mt CO2/yr",
     "Emissions|CH4": "Mt CH4/yr",
-    "Emissions|N2O": "Mt N2O/yr",
+    "Emissions|N2O": "kt N2O/yr",
 }
 
 # Convenience: units list aligned to OUTPUT_VARIABLES order
