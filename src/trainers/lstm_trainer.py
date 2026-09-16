@@ -1180,7 +1180,7 @@ def hyperparameter_search_lstm_sequential(
 
         # Get validation loss
         val_loss = trainer.callback_metrics["val_loss"].item()
-        search_results.append({**params, "val_loss": val_loss})
+        search_results.append({**params, "val_loss": val_loss, "trial_id": i})
 
         if val_loss < best_score:
             best_score = val_loss
@@ -1374,43 +1374,34 @@ def train_final_lstm(
         session_state["lstm_target_offset"] = target_offset
 
 
-def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
-    """Make predictions using trained LSTM model."""
+def _lstm_infer_and_score(
+    model: "LSTMModel",
+    config: LSTMTrainerConfig,
+    scaler_X: StandardScaler,
+    scaler_y: StandardScaler,
+    test_data: pd.DataFrame,
+    raw_features: List[str],
+    features: List[str],
+    categorical_features: List[str],
+    non_numeric_cols: List[str],
+    sequence_length: int,
+    target_offset: int,
+    targets: List[str],
+    run_id: str,
+    session_state: Dict,
+    metrics_filename: str = "performance.csv",
+) -> np.ndarray:
+    """Shared inference + metrics logic for an already-loaded LSTM model.
+
+    Used by both the merged-retrain ("final") prediction path and the
+    val-selected (no merge/retrain) evaluation path -- they differ only in
+    which checkpoint/scalers/config got them here.
+    """
     from src.trainers.evaluation import save_metrics
-
-    # Get data from session state (stored as DataFrames like TFT)
-    test_data = session_state["test_data"]
-    targets = session_state["targets"]
-    # Prefer encoded LSTM features from final training (ensures scaler/model input size match)
-    raw_features = session_state.get("lstm_raw_features", session_state["features"])
-    features = session_state.get("lstm_features", session_state["features"])
-    categorical_features = session_state.get("lstm_categorical_features", [])
-
-    # Load model
-    final_ckpt_path = os.path.join(get_run_root(run_id), "final", "best.ckpt")
-
-    if not os.path.exists(final_ckpt_path):
-        raise FileNotFoundError(f"Final model checkpoint not found: {final_ckpt_path}")
-
-    # Get config and scalers from session state
-    config = session_state.get("lstm_config")
-    scaler_X = session_state.get("lstm_scaler_X")
-    scaler_y = session_state.get("lstm_scaler_y")
-    sequence_length = session_state.get("lstm_sequence_length", LSTMTrainerConfig().sequence_length)
-    target_offset = session_state.get("lstm_target_offset", LSTMTrainerConfig().target_offset)
-
-    if config is None or scaler_X is None or scaler_y is None:
-        raise ValueError("LSTM config and scalers not found in session state")
-
-    # Load model
-    model = LSTMModel.load_from_checkpoint(final_ckpt_path)
-    model.set_lag_scale_buffers(scaler_X, scaler_y)
-    model.eval()
 
     # Ensure test_data has the same encoded feature columns as during training
     # Separate continuous features for one-hot encoding
     continuous_raw_features = [f for f in raw_features if f not in categorical_features]
-    non_numeric_cols = session_state.get("lstm_non_numeric_features", [])
     if non_numeric_cols and features != continuous_raw_features:
         X_test = test_data.reindex(columns=continuous_raw_features)
         X_test_enc = pd.get_dummies(X_test, columns=[c for c in non_numeric_cols if c in X_test.columns], dummy_na=True)
@@ -1518,7 +1509,7 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
     else:
         obs_mask = None
 
-    save_metrics(run_id, valid_targets, valid_preds, observed_mask=obs_mask)
+    save_metrics(run_id, valid_targets, valid_preds, observed_mask=obs_mask, filename=metrics_filename)
 
     # Store horizon data for plotting (like TFT pattern)
     session_state["horizon_df"] = test_data
@@ -1527,10 +1518,214 @@ def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
     return aligned_preds
 
 
+def predict_lstm(session_state: Dict, run_id: str) -> np.ndarray:
+    """Make predictions using the merged-retrain ("final") LSTM model."""
+    # Get data from session state (stored as DataFrames like TFT)
+    test_data = session_state["test_data"]
+    targets = session_state["targets"]
+    # Prefer encoded LSTM features from final training (ensures scaler/model input size match)
+    raw_features = session_state.get("lstm_raw_features", session_state["features"])
+    features = session_state.get("lstm_features", session_state["features"])
+    categorical_features = session_state.get("lstm_categorical_features", [])
+
+    # Load model
+    final_ckpt_path = os.path.join(get_run_root(run_id), "final", "best.ckpt")
+
+    if not os.path.exists(final_ckpt_path):
+        raise FileNotFoundError(f"Final model checkpoint not found: {final_ckpt_path}")
+
+    # Get config and scalers from session state
+    config = session_state.get("lstm_config")
+    scaler_X = session_state.get("lstm_scaler_X")
+    scaler_y = session_state.get("lstm_scaler_y")
+    sequence_length = session_state.get("lstm_sequence_length", LSTMTrainerConfig().sequence_length)
+    target_offset = session_state.get("lstm_target_offset", LSTMTrainerConfig().target_offset)
+
+    if config is None or scaler_X is None or scaler_y is None:
+        raise ValueError("LSTM config and scalers not found in session state")
+
+    # Load model
+    model = LSTMModel.load_from_checkpoint(final_ckpt_path)
+    model.set_lag_scale_buffers(scaler_X, scaler_y)
+    model.eval()
+
+    non_numeric_cols = session_state.get("lstm_non_numeric_features", [])
+
+    return _lstm_infer_and_score(
+        model=model,
+        config=config,
+        scaler_X=scaler_X,
+        scaler_y=scaler_y,
+        test_data=test_data,
+        raw_features=raw_features,
+        features=features,
+        categorical_features=categorical_features,
+        non_numeric_cols=non_numeric_cols,
+        sequence_length=sequence_length,
+        target_offset=target_offset,
+        targets=targets,
+        run_id=run_id,
+        session_state=session_state,
+        metrics_filename="performance.csv",
+    )
+
+
+def _find_best_trial_checkpoint(run_id: str, best_params: Dict) -> str:
+    """Locate the search-phase checkpoint for the trial that produced best_params.
+
+    Reads search_results.csv (written by both the parallel and sequential
+    search paths -- both now record a ``trial_id`` per row) and returns the
+    path to that trial's saved checkpoint at
+    ``search/trial_{trial_id}/best.ckpt``.
+    """
+    results_path = os.path.join(get_run_root(run_id), "search_results.csv")
+    if not os.path.exists(results_path):
+        raise FileNotFoundError(
+            f"No search_results.csv found at {results_path}. Run the search phase first."
+        )
+    df = pd.read_csv(results_path)
+    if "trial_id" not in df.columns:
+        raise ValueError(
+            f"search_results.csv at {results_path} has no trial_id column; "
+            "re-run the search phase to regenerate it with trial tracking."
+        )
+    if "val_loss" not in df.columns:
+        raise ValueError(f"search_results.csv at {results_path} is missing val_loss.")
+
+    df = df[np.isfinite(df["val_loss"])]
+    if df.empty:
+        raise ValueError(f"No completed (finite val_loss) trials found in {results_path}.")
+
+    # Prefer an exact match on best_params (ignoring bookkeeping columns);
+    # fall back to the global val_loss minimum if no exact match is found.
+    param_cols = [c for c in df.columns if c not in ("val_loss", "trial_id", "error")]
+    match = df
+    for k in param_cols:
+        if k in best_params:
+            match = match[match[k] == best_params[k]]
+
+    if len(match) == 1:
+        row = match.iloc[0]
+    else:
+        if len(match) > 1:
+            logging.warning(
+                "Multiple trials match best_params in %s; using the one with lowest val_loss.",
+                results_path,
+            )
+        elif match.empty:
+            logging.warning(
+                "No exact param match for best_params in %s; falling back to the global "
+                "val_loss minimum. Verify this is the intended trial.",
+                results_path,
+            )
+            match = df
+        row = match.loc[match["val_loss"].idxmin()]
+
+    trial_id = row["trial_id"]
+    trial_id = int(trial_id) if float(trial_id).is_integer() else trial_id
+    ckpt_path = os.path.join(get_run_root(run_id), "search", f"trial_{trial_id}", "best.ckpt")
+    if not os.path.exists(ckpt_path):
+        raise FileNotFoundError(
+            f"Search checkpoint not found at {ckpt_path}. It may have been cleaned up, "
+            "or the search phase did not persist a checkpoint for this trial."
+        )
+    logging.info(
+        "Val-selected LSTM checkpoint: trial_id=%s val_loss=%.4f -> %s",
+        trial_id, float(row["val_loss"]), ckpt_path,
+    )
+    return ckpt_path
+
+
+def predict_lstm_val_selected(session_state: Dict, run_id: str) -> np.ndarray:
+    """Evaluate the val-selected LSTM checkpoint directly on the test set.
+
+    Loads the actual saved weights of the search trial that produced
+    best_params (chosen by validation loss on the *original* train split)
+    and evaluates it on test_data with no merge-and-retrain step. This
+    answers the reviewer's request to compare against the best individual
+    saved model trained on the original training set alone.
+
+    Requires session_state to contain the original (pre-merge) train_data /
+    val_data / test_data DataFrames, as produced by derive_splits().
+    """
+    from src.utils.run_store import RunStore
+
+    store = RunStore(run_id)
+    best_params = dict(store.load_best_params())
+
+    train_data = session_state["train_data"]
+    val_data = session_state["val_data"]
+    test_data = session_state["test_data"]
+    targets = session_state["targets"]
+    raw_features = session_state["features"]
+    categorical_features = session_state.get("categorical_features", [])
+
+    ckpt_path = _find_best_trial_checkpoint(run_id, best_params)
+
+    sequence_length = best_params.get("sequence_length", LSTMTrainerConfig().sequence_length)
+    target_offset = best_params.get("target_offset", LSTMTrainerConfig().target_offset)
+    batch_size = best_params.get("batch_size", 32)
+
+    config = LSTMTrainerConfig(
+        hidden_size=best_params.get("hidden_size", 64),
+        num_layers=best_params.get("num_layers", 1),
+        dropout=best_params.get("dropout", 0.0),
+        bidirectional=best_params.get("bidirectional", False),
+        dense_hidden_size=best_params.get("dense_hidden_size", 64),
+        dense_dropout=best_params.get("dense_dropout", 0.0),
+        learning_rate=best_params.get("learning_rate", 0.001),
+        batch_size=batch_size,
+        weight_decay=best_params.get("weight_decay", 0.0),
+        sequence_length=sequence_length,
+        target_offset=target_offset,
+        embedding_dim=best_params.get("embedding_dim", LSTMTrainerConfig().embedding_dim),
+    )
+
+    # Rebuild the exact preprocessing artifacts (scalers, encoded feature
+    # list) the winning search trial used -- fit ONLY on train_data (not
+    # train+val), matching how hyperparameter search built its datasets.
+    # This is deterministic re-derivation (StandardScaler.fit has no
+    # randomness), NOT retraining: no model weights are touched.
+    train_dataset, val_dataset, encoded_features = create_lstm_datasets(
+        train_data, val_data, raw_features, targets,
+        sequence_length=sequence_length,
+        target_offset=target_offset,
+        categorical_features=categorical_features,
+    )
+    non_numeric_cols = _infer_non_numeric_feature_columns(
+        train_data, [f for f in raw_features if f not in categorical_features]
+    )
+
+    model = LSTMModel.load_from_checkpoint(ckpt_path)
+    model.set_lag_scale_buffers(train_dataset.scaler_X, train_dataset.scaler_y)
+    model.eval()
+
+    preds = _lstm_infer_and_score(
+        model=model,
+        config=config,
+        scaler_X=train_dataset.scaler_X,
+        scaler_y=train_dataset.scaler_y,
+        test_data=test_data,
+        raw_features=raw_features,
+        features=encoded_features,
+        categorical_features=categorical_features,
+        non_numeric_cols=non_numeric_cols,
+        sequence_length=sequence_length,
+        target_offset=target_offset,
+        targets=targets,
+        run_id=run_id,
+        session_state=session_state,
+        metrics_filename="performance_val_selected.csv",
+    )
+
+    return preds
+
+
 __all__ = [
     "hyperparameter_search_lstm",
     "train_final_lstm",
     "predict_lstm",
+    "predict_lstm_val_selected",
     "create_lstm_datasets",
     "create_lstm_dataloaders",
     "create_lstm_model",

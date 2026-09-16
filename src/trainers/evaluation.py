@@ -277,13 +277,18 @@ def test_xgb_autoregressively(
     return full_preds
 
 
-def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None):
+def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None, filename="performance.csv"):
     """Save performance metrics to a CSV file under the specified run directory.
 
     When *observed_mask* is provided (KEEP_PARTIAL_TARGETS=True), metrics are
     computed on observed elements only.  Otherwise all elements are used.
 
     If test_data is provided, also compute metrics by region type.
+
+    *filename* lets callers write to a distinct file (e.g.
+    "performance_val_selected.csv") so alternate evaluations -- such as the
+    val-selected checkpoint evaluated without merge/retrain -- don't
+    overwrite the primary run's metrics.
     """
 
     def compute_metrics(y_true_subset, y_pred_subset, subset_name="Overall", obs=None):
@@ -404,7 +409,7 @@ def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None):
 
     metrics_dir = os.path.join(get_run_root(run_id), "metrics")
     os.makedirs(metrics_dir, exist_ok=True)
-    metrics_file = os.path.join(metrics_dir, "performance.csv")
+    metrics_file = os.path.join(metrics_dir, filename)
     metrics.to_csv(metrics_file, index=False)
     logging.info("Metrics saved to %s.", metrics_file)
 

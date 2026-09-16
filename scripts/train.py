@@ -18,7 +18,7 @@ import warnings
 
 
 _ALLOWED_MODELS = ("xgb", "lstm", "tft")
-_ALLOWED_PHASES = ("preprocess", "search", "train", "test", "plot")
+_ALLOWED_PHASES = ("preprocess", "search", "train", "test", "test-val-selected", "plot")
 
 _SKLEARN_FEATURENAME_WARN_1 = (
     "ignore:X does not have valid feature names, but StandardScaler was fitted with feature names:UserWarning"
@@ -119,6 +119,21 @@ def _test(model, store, lag_required=True, two_window=False):
     elif model == "tft":
         from scripts.train_tft import test_tft
         return test_tft(store, lag_required=lag_required, use_two_window=two_window)
+
+
+def _test_val_selected(model, store, lag_required=True):
+    """Evaluate the val-selected (best search-trial) checkpoint on test,
+    without merging train+val or retraining. See reviewer-response task 1.
+    """
+    if model == "xgb":
+        from scripts.train_xgb import test_xgb_val_selected
+        return test_xgb_val_selected(store)
+    elif model == "lstm":
+        from scripts.train_lstm import test_lstm_val_selected
+        return test_lstm_val_selected(store, lag_required=lag_required)
+    elif model == "tft":
+        from scripts.train_tft import test_tft_val_selected
+        return test_tft_val_selected(store, lag_required=lag_required)
 
 
 def _plot(model, store, lag_required=True):
@@ -267,6 +282,8 @@ def main(argv=None):
         _train(model, store, lag_required=lag_required, target_normalizer_mode=args.target_normalizer_mode)
     elif phase == "test":
         _test(model, store, lag_required=lag_required, two_window=args.two_window)
+    elif phase == "test-val-selected":
+        _test_val_selected(model, store, lag_required=lag_required)
     elif phase == "plot":
         # TFT auto-runs test if predictions are missing
         if model == "tft" and not store.has_predictions():

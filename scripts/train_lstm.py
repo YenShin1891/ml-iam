@@ -256,6 +256,34 @@ def test_lstm(store, lag_required=True):
     return preds
 
 
+def test_lstm_val_selected(store, lag_required=True):
+    """Evaluate the val-selected (best search-trial) LSTM checkpoint on the
+    test set, without merging train+val or retraining.
+
+    Reviewer-requested comparison against the merged-retrain ("final")
+    model produced by train_lstm/test_lstm. Requires the search phase to
+    have been run with per-trial checkpointing (already the default).
+    """
+    from src.trainers.lstm_trainer import predict_lstm_val_selected as _predict
+
+    logging.info("Testing val-selected LSTM checkpoint (no merge/retrain)...")
+    data = store.load_processed_data()
+    splits = derive_splits(data, lag_required=lag_required)
+    session_state = dict(splits)
+
+    preds = _predict(session_state, store.run_id)
+
+    horizon_df = session_state.get("horizon_df")
+    horizon_y_true = session_state.get("horizon_y_true")
+    store.save_artifact("predictions_val_selected.pkl", {
+        "preds": preds,
+        "horizon_df": horizon_df,
+        "horizon_y_true": horizon_y_true,
+    })
+    logging.info("Val-selected LSTM evaluation complete.")
+    return preds
+
+
 def plot_lstm(store, lag_required=True):
     """Plot LSTM predictions and SHAP plots."""
     from src.visualization import plot_scatter, plot_lstm_shap
