@@ -8,7 +8,7 @@ model: xgb
 # Example: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-2025-09-24
 # dataset: pipeline-...
 
-dataset: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-interp-targets-scale-impute-2026-04-13
+dataset: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-interp-targets-scale-impute-2026-09-03
 
 # Optional: GPUs to expose for this run.
 # You can set a single value (applies to all phases) or a per-phase mapping.

@@ -114,29 +114,62 @@ def filter_by_selected_variables(df_list: List[pd.DataFrame], selected_vars: pd.
     return [cast(pd.DataFrame, df.loc[df["Variable"].isin(keep)].copy()) for df in df_list]
 
 
-def add_scenario_category(df: pd.DataFrame, scenario_cat: pd.DataFrame) -> pd.DataFrame:
-    """Attach the AR6 category of each scenario, dropping scenarios without one.
+UNCATEGORISED = "no-climate-assessment"
 
-    The drop is explicit here: it used to happen silently downstream, where
-    pivot_table discards rows whose index carries a NaN, with nothing in the
-    log about the 3-4% of series that went with them.  Keeping them instead
-    would take a fillna("Unknown") in place of the dropna.
+# AR6 categorises each model run, not each scenario name (see
+# scripts/build_scenario_category.py).
+SCENARIO_KEYS = ["Model", "Scenario"]
+
+
+def add_scenario_category(df: pd.DataFrame, scenario_cat: pd.DataFrame) -> pd.DataFrame:
+    """Attach the AR6 category of each (Model, Scenario), labelling those without one.
+
+    AR6 categorises a scenario per model run: the same name, say
+    SSP2-Baseline, lands in a different category under each model that ran
+    it.  Merging on the name alone handed every model the category of
+    whichever run the table happened to list, which mislabelled about a fifth
+    of the vetted runs.
+
+    Runs the metadata workbook does not list get UNCATEGORISED, the label AR6
+    gives runs that were vetted but never climate-assessed; the category is
+    unknown either way.  Dropping them used to happen silently downstream,
+    where pivot_table discards rows whose index carries a NaN; the column is
+    not a model feature (see NON_FEATURE_COLUMNS), so it cost ~3% of the
+    series for nothing the models predict from.
     """
-    out = df.merge(scenario_cat[["Scenario", "Scenario_Category"]], on="Scenario", how="left")
+    out = df.merge(scenario_cat[SCENARIO_KEYS + ["Scenario_Category"]], on=SCENARIO_KEYS, how="left")
     uncategorised = out["Scenario_Category"].isna()
     if uncategorised.any():
-        logging.warning(
-            "Dropping %d rows from %d scenarios that have no Scenario_Category in %s",
+        logging.info(
+            "Labelling %d rows from %d runs as %r: no Scenario_Category in %s",
             int(uncategorised.sum()),
-            out.loc[uncategorised, "Scenario"].nunique(),
+            out.loc[uncategorised, SCENARIO_KEYS].drop_duplicates().shape[0],
+            UNCATEGORISED,
             SCENARIO_CATEGORY_CSV.name,
         )
-        out = out.loc[~uncategorised]
+        out["Scenario_Category"] = out["Scenario_Category"].fillna(UNCATEGORISED)
     # Reorder: Model, Scenario, Scenario_Category, Region, Variable, Unit, years...
     cols = ["Model", "Scenario", "Scenario_Category", "Region"]
     remainder = [c for c in out.columns if c not in cols]
     out = out.loc[:, cols + remainder]
     return cast(pd.DataFrame, out)
+
+
+def relabel_scenario_categories(df: pd.DataFrame, scenario_cat: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
+    """Replace the stored Scenario_Category with the table's, keyed by (Model, Scenario).
+
+    For frames a run saved while the table was keyed by scenario name alone:
+    their labels are another model's for about a fifth of the runs.  The
+    column is not a feature, so relabelling changes what the dashboard filters
+    on, not what the model saw.  Runs the table does not list keep their
+    stored label.  Returns the frame and the number of runs relabelled.
+    """
+    table = scenario_cat[SCENARIO_KEYS + ["Scenario_Category"]].drop_duplicates(SCENARIO_KEYS)
+    fresh = df[SCENARIO_KEYS].merge(table, on=SCENARIO_KEYS, how="left")["Scenario_Category"].to_numpy()
+    changed = pd.notna(fresh) & (fresh != df["Scenario_Category"].to_numpy())
+    out = df.copy()
+    out.loc[changed, "Scenario_Category"] = fresh[changed]
+    return out, int(out.loc[changed, SCENARIO_KEYS].drop_duplicates().shape[0])
 
 
 def _split_year_and_non_year_columns(df: pd.DataFrame) -> Tuple[List[str], List[str]]:
@@ -161,6 +194,33 @@ def _split_year_and_non_year_columns(df: pd.DataFrame) -> Tuple[List[str], List[
     return year_cols, non_year_cols
 
 
+# Labels that name a unit already spelled another way, so a variable is not
+# reported in two "different" units when only the spelling differs.  These
+# need relabelling, not rescaling:
+#
+#   Int$ at PPP is defined as the US dollar's purchasing power in the base
+#   year, and the AR6 World medians for GDP|PPP agree under both labels to
+#   within scenario spread, so they are the same quantity.
+#
+# The map is explicit rather than a case fold because folding would also
+# rewrite "PJ/yr" or "US$2010/GJ", which reach the unit table as they are,
+# and would collide with the exact-match conversions below.
+UNIT_ALIASES = {
+    "Million": "million",
+    "Million ha": "million ha",
+    "Million t DM/yr": "million t DM/yr",
+    "billion Int$2010/yr": "billion US$2010/yr",
+}
+
+
+# Labels that decline to say which unit the value is in.  A price whose
+# currency is unknown is a wrong number in a column of US$2010, not a missing
+# one, so these rows go rather than being assumed into the majority unit.
+AMBIGUOUS_UNITS = frozenset({
+    "US$2010/t CO2 or local currency/t CO2",
+})
+
+
 def resolve_units(df: pd.DataFrame):
     """Normalize units and return (df_without_unit, unit_table).
 
@@ -169,6 +229,17 @@ def resolve_units(df: pd.DataFrame):
     df = df.copy(deep=True)
 
     year_cols, non_year_cols = _split_year_and_non_year_columns(df)
+
+    df["Unit"] = df["Unit"].replace(UNIT_ALIASES)
+
+    ambiguous = df["Unit"].isin(AMBIGUOUS_UNITS)
+    if ambiguous.any():
+        logging.warning(
+            "Dropping %d rows whose unit does not identify itself: %s",
+            int(ambiguous.sum()),
+            dict(df.loc[ambiguous, "Unit"].value_counts()),
+        )
+        df = df.loc[~ambiguous].copy()
 
     # EJ/yr → PJ/yr (×1000)
     mask = df["Unit"] == "EJ/yr"

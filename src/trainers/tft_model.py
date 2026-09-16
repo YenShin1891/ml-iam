@@ -1,5 +1,6 @@
 """TFT model creation and training functions."""
 
+import io
 import logging
 import os
 from typing import Dict, Optional
@@ -243,20 +244,75 @@ def create_final_trainer(
     )
 
 
-def load_tft_checkpoint(run_id: str) -> TemporalFusionTransformer:
-    """Load TFT model from checkpoint."""
+def metrics_to(module: torch.nn.Module, device) -> torch.nn.Module:
+    """Point every torchmetrics metric inside *module* at *device*.
+
+    A metric pickled into a checkpoint remembers the device it trained on.
+    Lightning's ``model.to(map_location)`` then asks that device for a
+    tensor, which a CPU-only torch cannot supply; the state itself is
+    already wherever ``torch.load`` mapped it.  pytorch-forecasting's
+    MultiLoss keeps its metrics in a plain list, so they are walked too.
+    """
+    target = torch.device(device)
+    pending, seen = [module], set()
+    while pending:
+        obj = pending.pop()
+        if id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        if hasattr(obj, "_device"):
+            obj._device = target
+        if isinstance(obj, torch.nn.Module):
+            pending.extend(obj.children())
+            pending.extend(
+                m for m in (getattr(obj, "metrics", None) or []) if isinstance(m, torch.nn.Module)
+            )
+    return module
+
+
+def _checkpoint_on(ckpt_path: str, map_location) -> io.BytesIO:
+    """The checkpoint with its pickled metrics pointed at *map_location*, as bytes.
+
+    The hyperparameters travel nested under one name, so Lightning's keyword
+    overrides cannot replace the pickled loss; repairing the checkpoint
+    itself can.
+    """
+    checkpoint = torch.load(ckpt_path, map_location=map_location, weights_only=False)
+    # pytorch-forecasting also stores the loss under its own key and sets it
+    # on the model after construction, so both copies are walked.
+    for key in ("hyper_parameters", TemporalFusionTransformer.CHECKPOINT_HYPER_PARAMS_SPECIAL_KEY):
+        for value in (checkpoint.get(key) or {}).values():
+            if isinstance(value, torch.nn.Module):
+                metrics_to(value, map_location)
+    buffer = io.BytesIO()
+    torch.save(checkpoint, buffer)
+    buffer.seek(0)
+    return buffer
+
+
+def load_tft_checkpoint(run_id: str, map_location=None) -> TemporalFusionTransformer:
+    """Load TFT model from checkpoint.
+
+    *map_location* goes to Lightning: "cpu" keeps a model trained on a GPU
+    off the accelerator, for a process that must not claim one (the
+    dashboard's what-if view).  By default the checkpoint's own devices are
+    used where available.
+    """
     final_dir = os.path.join(get_run_root(run_id), "final")
     final_ckpt_path = os.path.join(final_dir, "best.ckpt")
-    
+
     if not os.path.exists(final_ckpt_path):
         raise FileNotFoundError(f"Final TFT checkpoint not found at {final_ckpt_path}")
-    
+
     from configs.data import KEEP_PARTIAL_TARGETS
     model_cls = MaskedTFT if KEEP_PARTIAL_TARGETS else SyncedTFT
 
     try:
+        source = final_ckpt_path
+        if isinstance(map_location, (str, torch.device)):
+            source = _checkpoint_on(final_ckpt_path, map_location)
         model = model_cls.load_from_checkpoint(
-            final_ckpt_path, weights_only=False
+            source, map_location=map_location, weights_only=False
         )
         model.eval()
         logging.info("Loaded TFT model from %s", final_ckpt_path)

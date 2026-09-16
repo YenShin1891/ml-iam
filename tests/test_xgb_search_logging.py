@@ -106,3 +106,143 @@ def test_a_trial_without_gpu_or_params_still_logs(caplog):
     assert "Stage 2 1/4" in message
     assert "trial=-" in message and "gpu=-" in message
     assert message.endswith("best=0.2500")
+
+
+# ── what each stage is scored on ──────────────────────────────────────────
+#
+# XGBoost is the only one of the three models with a feedback loop: its lag
+# features are its own past predictions at test time.  So a trial scored on
+# one-step predictions from ground-truth lags is not measuring what the test
+# phase reports.  Both stages score the rollout; now that every trajectory
+# rolls forward in one batch it costs seconds, so there is nothing to save
+# by ranking stage 1 on a proxy.
+
+import src.trainers.xgb_trainer as xgb_trainer
+from configs.models import XGBSearchSpace
+
+
+@pytest.fixture
+def recorded_stages(tmp_path, monkeypatch):
+    """Run the search driver with the trials themselves stubbed out."""
+    space = XGBSearchSpace(n_trials=4, stage2_top_k=2)
+    monkeypatch.setattr(xgb_trainer, "XGBSearchSpace", lambda **kw: space)
+    monkeypatch.setattr(xgb_trainer, "get_run_root", lambda _run_id: str(tmp_path))
+    monkeypatch.setattr(xgb_trainer, "_visible_gpu_pool", lambda: ["0"])
+
+    stages = []
+
+    def fake_run_trials(params_list, inputs_by_n_lags, stage, num_boost_round, gpu_pool,
+                        use_autoregressive_eval=False):
+        stages.append({
+            "stage": stage,
+            "rounds": num_boost_round,
+            "autoregressive": use_autoregressive_eval,
+            "n": len(params_list),
+            "lag_counts": sorted({p["n_lags"] for p in params_list}),
+        })
+        return [
+            {**params, "val_score": -float(i + 1), "best_iteration": 7,
+             "stage": stage, "status": "completed", "trial": i}
+            for i, params in enumerate(params_list)
+        ]
+
+    monkeypatch.setattr(xgb_trainer, "_run_xgb_trials", fake_run_trials)
+    return space, stages
+
+
+def _splits():
+    import numpy as np
+    import pandas as pd
+
+    frame = pd.DataFrame({"f": [0.0]})
+    return {
+        "X_train": frame, "y_train": np.zeros((1, 1)), "X_train_with_index": frame,
+        "train_groups": np.zeros(1), "targets": ["A"],
+        "X_val": frame, "y_val": np.zeros((1, 1)), "X_val_with_index": frame,
+        "obs_train": None, "obs_val": None,
+    }
+
+
+def _run_search():
+    from configs.data import CONTEXT_LENGTHS
+
+    return xgb_trainer.hyperparameter_search(
+        {n: _splits() for n in CONTEXT_LENGTHS}, "xgb_01", use_cv=False,
+    )
+
+
+def test_stage_one_is_scored_on_the_rollout_at_the_reduced_budget(recorded_stages):
+    space, stages = recorded_stages
+
+    _run_search()
+
+    stage1 = next(s for s in stages if s["stage"] == "stage1")
+    assert stage1["autoregressive"] is True
+    assert stage1["n"] == space.n_trials
+    assert stage1["rounds"] == space.stage1_budget["num_boost_round"]
+
+
+def test_stage_two_is_scored_on_the_rollout_the_test_phase_reports(recorded_stages):
+    from configs.models import XGBTrainerConfig
+    space, stages = recorded_stages
+
+    _run_search()
+
+    stage2 = next(s for s in stages if s["stage"] == "stage2")
+    assert stage2["autoregressive"] is True
+    assert stage2["n"] == space.stage2_top_k
+    assert stage2["rounds"] == XGBTrainerConfig().num_boost_round
+
+
+def test_the_rollout_can_be_switched_off_per_stage_without_touching_the_protocol(recorded_stages, monkeypatch):
+    from configs.models import XGBTrainerConfig
+
+    cfg = XGBTrainerConfig()
+    cfg.search_autoregressive_stage1 = False
+    monkeypatch.setattr(xgb_trainer, "XGBTrainerConfig", lambda: cfg)
+    _, stages = recorded_stages
+
+    _run_search()
+
+    assert next(s for s in stages if s["stage"] == "stage1")["autoregressive"] is False
+    assert next(s for s in stages if s["stage"] == "stage2")["autoregressive"] is True
+
+
+def test_no_round_count_rides_along_in_best_params(recorded_stages):
+    """The round count is the trial's, not a parameter of the final fit.
+
+    It shares a name with a booster argument, so a number left in
+    best_params would reach XGBRegressor; the final fit early-stops on the
+    validation set instead, the way the LSTM and TFT finals do.
+    """
+    best, rows_by_stage = _run_search()
+
+    assert "num_boost_round" not in best
+    assert "best_iteration" not in best
+    # Still recorded per trial, which is where the search report reads it.
+    assert all("best_iteration" in row for rows in rows_by_stage.values() for row in rows)
+
+
+def test_the_winning_lag_count_is_reported_with_the_parameters(recorded_stages):
+    """Later phases rebuild the features from it, so it must survive."""
+    from configs.data import CONTEXT_LENGTHS
+
+    best, _ = _run_search()
+
+    assert best["n_lags"] in CONTEXT_LENGTHS
+
+
+def test_both_context_lengths_are_explored_in_stage_one(recorded_stages):
+    from configs.data import CONTEXT_LENGTHS
+    _, stages = recorded_stages
+
+    _run_search()
+
+    stage1 = next(s for s in stages if s["stage"] == "stage1")
+    assert stage1["lag_counts"] == sorted(CONTEXT_LENGTHS)
+
+
+def test_a_lag_count_with_no_prepared_splits_is_refused(recorded_stages):
+    """Silently skipping it would shrink the search without saying so."""
+    with pytest.raises(ValueError, match="no splits were prepared"):
+        xgb_trainer.hyperparameter_search({2: _splits()}, "xgb_01", use_cv=False)

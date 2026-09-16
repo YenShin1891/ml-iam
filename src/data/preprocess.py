@@ -2,12 +2,14 @@ import os
 import pandas as pd
 import numpy as np
 import logging
+from dataclasses import dataclass
 from typing import List, Optional, Tuple, cast
 from sklearn.preprocessing import StandardScaler
 
 from configs.paths import DATA_PATH
 from configs.data import (
     DEFAULT_DATASET,
+    MAX_CONTEXT_LENGTH,
     N_LAG_FEATURES,
     OUTPUT_VARIABLES,
     INDEX_COLUMNS,
@@ -819,10 +821,18 @@ def add_lag_features(
     output_variables: list,
     n_lags: int = N_LAG_FEATURES,
     lag_required: bool = True,
+    min_history: Optional[int] = None,
 ) -> pd.DataFrame:
     """Add lagged target features using vectorized groupby.shift().
 
     ~250x faster than the per-group .apply() approach on 23k groups.
+
+    *min_history* is how many leading rows of each series are dropped when
+    *lag_required*; it defaults to *n_lags*, which is the least that gives
+    every retained row a full lag history.  Pass the longest lag count under
+    comparison to make two lag settings score the same rows -- otherwise the
+    shorter one keeps extra early rows and wins on an easier evaluation set
+    rather than on its shorter memory.
     """
     prepared = data.sort_values(group_cols + ['Year']).copy()
 
@@ -833,22 +843,32 @@ def add_lag_features(
             prepared[f'{prefix}{col}'] = shifted[col]
 
     if lag_required:
+        dropped = n_lags if min_history is None else max(int(min_history), n_lags)
         row_num = prepared.groupby(group_cols, sort=False).cumcount()
-        prepared = prepared[row_num >= n_lags].reset_index(drop=True)
+        prepared = prepared[row_num >= dropped].reset_index(drop=True)
 
     return cast(pd.DataFrame, prepared)
 
 
-def prepare_features_and_targets(data: pd.DataFrame, lag_required: bool = True) -> tuple:
+def prepare_features_and_targets(
+    data: pd.DataFrame,
+    lag_required: bool = True,
+    n_lags: int = N_LAG_FEATURES,
+) -> tuple:
     """
     Prepare features and targets for XGBoost model.
 
     Args:
         data: Input data DataFrame
         lag_required: When True, drop rows without a full history of lag features.
+        n_lags: How many past steps the model may see -- XGBoost's context
+            length, the counterpart of the LSTM's sequence_length and the
+            TFT's encoder length.  Every setting drops the same leading rows
+            (MAX_CONTEXT_LENGTH) so the settings are scored alike.
     """
     logging.info(
-        "Preparing features and targets for XGBoost (lag_required=%s)...",
+        "Preparing features and targets for XGBoost (n_lags=%d, lag_required=%s)...",
+        n_lags,
         lag_required,
     )
 
@@ -867,7 +887,10 @@ def prepare_features_and_targets(data: pd.DataFrame, lag_required: bool = True) 
     if _data_flag("INTERPOLATE_TARGETS"):
         data = interpolate_targets(data, INDEX_COLUMNS, OUTPUT_VARIABLES)
 
-    prepared = add_lag_features(data, INDEX_COLUMNS, OUTPUT_VARIABLES, lag_required=lag_required)
+    prepared = add_lag_features(
+        data, INDEX_COLUMNS, OUTPUT_VARIABLES,
+        n_lags=n_lags, lag_required=lag_required, min_history=MAX_CONTEXT_LENGTH,
+    )
     prepared['Year'] = prepared['Year'].astype(int)
 
     targets = OUTPUT_VARIABLES
@@ -965,4 +988,45 @@ def prepare_features_and_targets_sequence(
     )
 
     return prepared, features, targets
+
+
+@dataclass
+class SequenceFrames:
+    """The imputed train/val/test frames a sequence model is fitted and scored on."""
+
+    train: pd.DataFrame
+    val: pd.DataFrame
+    test: pd.DataFrame
+    features: List[str]
+    targets: List[str]
+
+
+def prepare_sequence_frames(
+    data: pd.DataFrame,
+    assignment: Optional[pd.DataFrame] = None,
+) -> SequenceFrames:
+    """Turn the cached processed data into the frames a sequence model sees.
+
+    Sequence preparation, missingness indicators, the group split, then
+    train-median imputation of the features: the chain the TFT phases run,
+    kept here so anything that must reproduce a run's rows exactly (the
+    dashboard's what-if view predicts from them) can do so without the
+    training stack.  *assignment* is the run's saved split; without one the
+    split is derived from *data* alone.
+    """
+    prepared, features, targets = prepare_features_and_targets_sequence(data)
+    prepared, features = add_missingness_indicators(prepared, features)
+    train_data, val_data, test_data = split_data(prepared, assignment=assignment)
+    train_data, val_data, test_data = impute_with_train_medians(
+        train_data, val_data, test_data, features
+    )
+
+    # When keeping partial targets, fill NaN with 0 — the __observed mask
+    # handles loss weighting so filled values don't contribute to gradients.
+    # This avoids NaN propagation in EncoderNormalizer / TimeSeriesDataSet.
+    if _keep_partial_targets():
+        for frame in (train_data, val_data, test_data):
+            frame[targets] = frame[targets].fillna(0.0)
+
+    return SequenceFrames(train_data, val_data, test_data, list(features), list(targets))
 

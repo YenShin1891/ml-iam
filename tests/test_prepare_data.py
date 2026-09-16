@@ -169,3 +169,74 @@ def test_prepare_data_returns_the_vocabulary(prepared_frame, targets, keep_parti
 
     assert set(categories) == {"Region", "Model_Family"}
     assert categories["Model_Family"] == sorted(set(prepared_frame["Model_Family"]))
+
+
+# ── context length must not change the evaluation set ─────────────────────
+#
+# XGBoost's context length is its lag count.  A smaller one leaves usable
+# rows earlier in each series, and those early rows are the easiest ones, so
+# without equalising the drop a 2-lag model would be scored on more and
+# gentler data than a 3-lag one and would win the comparison on that alone.
+
+from configs.data import CONTEXT_LENGTHS, INDEX_COLUMNS, MAX_CONTEXT_LENGTH, OUTPUT_VARIABLES
+from src.data.preprocess import add_lag_features
+
+
+def _series_frame(n_groups=4, length=8):
+    rows = []
+    for g in range(n_groups):
+        for step in range(length):
+            row = {"Model": "M", "Scenario": f"S{g}", "Region": "R", "Year": 2020 + step * 5}
+            for j, target in enumerate(OUTPUT_VARIABLES):
+                row[target] = float(g * 100 + step + j)
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+@pytest.mark.parametrize("n_lags", CONTEXT_LENGTHS)
+def test_every_lag_count_drops_the_same_leading_rows(n_lags):
+    frame = _series_frame()
+
+    lagged = add_lag_features(
+        frame, INDEX_COLUMNS, OUTPUT_VARIABLES,
+        n_lags=n_lags, min_history=MAX_CONTEXT_LENGTH,
+    )
+
+    kept = lagged.groupby(list(INDEX_COLUMNS), sort=False).size().unique()
+    assert kept.tolist() == [8 - MAX_CONTEXT_LENGTH]
+
+
+def test_the_lag_counts_are_scored_on_identical_rows():
+    frame = _series_frame()
+
+    frames = [
+        add_lag_features(frame, INDEX_COLUMNS, OUTPUT_VARIABLES,
+                         n_lags=n, min_history=MAX_CONTEXT_LENGTH)
+        for n in CONTEXT_LENGTHS
+    ]
+
+    keys = [f[list(INDEX_COLUMNS) + ["Year"]].reset_index(drop=True) for f in frames]
+    for other in keys[1:]:
+        pd.testing.assert_frame_equal(keys[0], other)
+
+
+def test_a_larger_lag_count_adds_columns_rather_than_removing_rows():
+    frame = _series_frame()
+
+    small = add_lag_features(frame, INDEX_COLUMNS, OUTPUT_VARIABLES,
+                             n_lags=2, min_history=MAX_CONTEXT_LENGTH)
+    large = add_lag_features(frame, INDEX_COLUMNS, OUTPUT_VARIABLES,
+                             n_lags=3, min_history=MAX_CONTEXT_LENGTH)
+
+    assert len(small) == len(large)
+    assert set(small.columns) < set(large.columns)
+    assert any(c.startswith("prev3_") for c in large.columns)
+
+
+def test_min_history_defaults_to_the_lag_count():
+    """Without the comparison in play, the old behaviour is what you want."""
+    frame = _series_frame()
+
+    lagged = add_lag_features(frame, INDEX_COLUMNS, OUTPUT_VARIABLES, n_lags=2)
+
+    assert lagged.groupby(list(INDEX_COLUMNS), sort=False).size().unique().tolist() == [6]

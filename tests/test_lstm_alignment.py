@@ -47,16 +47,32 @@ def test_target_positions_match_the_sequence_count():
     assert len(dataset.target_positions) == len(dataset)
 
 
-@pytest.mark.parametrize(
-    "sequence_length,target_offset,expected_first_row",
-    [(1, 0, 0), (2, 0, 1), (3, 0, 2), (1, 1, 1), (2, 1, 2)],
-)
-def test_first_predicted_row_accounts_for_context_and_offset(
-    sequence_length, target_offset, expected_first_row
+@pytest.mark.parametrize("sequence_length", [1, 2, 3])
+@pytest.mark.parametrize("target_offset", [0, 1])
+def test_the_first_predicted_row_does_not_move_with_the_context_length(
+    sequence_length, target_offset
 ):
+    """Every context length predicts the same rows.
+
+    A shorter context fits more windows into a series, and the extra ones sit
+    at its easiest end, so letting them in would make a short context look
+    better for being scored on different data.
+    """
+    from configs.data import MAX_CONTEXT_LENGTH
+
     dataset = _dataset(_frame([6]), sequence_length, target_offset)
 
-    assert dataset.target_positions[0] == expected_first_row
+    assert dataset.target_positions[0] == MAX_CONTEXT_LENGTH - 1 + target_offset
+
+
+def test_a_longer_context_still_starts_where_its_own_window_ends():
+    """Beyond the compared range the window itself is the binding constraint."""
+    from configs.data import MAX_CONTEXT_LENGTH
+
+    sequence_length = MAX_CONTEXT_LENGTH + 2
+    dataset = _dataset(_frame([9]), sequence_length)
+
+    assert dataset.target_positions[0] == sequence_length - 1
 
 
 def test_groups_too_short_contribute_no_sequences():
@@ -103,11 +119,16 @@ def test_alignment_matches_the_re_derived_mapping():
 
     aligned = align_sequence_predictions(dataset, predictions, len(frame))
 
+    from configs.data import MAX_CONTEXT_LENGTH
+
     expected = np.full((len(frame), 2), np.nan)
     pred_idx = 0
+    # Mirrors LSTMDataset: windows start at the offset that makes every
+    # context length predict the same rows.
+    first_start = max(0, MAX_CONTEXT_LENGTH - sequence_length)
     for _, group_data in frame.groupby(GROUP_IDS):
-        n_sequences = max(0, len(group_data) - (sequence_length + target_offset) + 1)
-        for i in range(n_sequences):
+        max_start = len(group_data) - (sequence_length + target_offset) + 1
+        for i in range(first_start, max(first_start, max_start)):
             target = group_data.index[i + sequence_length - 1 + target_offset]
             expected[frame.index.get_loc(target)] = predictions[pred_idx]
             pred_idx += 1

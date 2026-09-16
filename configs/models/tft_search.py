@@ -1,10 +1,17 @@
-from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from dataclasses import dataclass
+from typing import Any, Dict
+
+from configs.data import CONTEXT_LENGTHS
+from src.trainers.search import Choice, IntLogUniform, LogUniform, SearchSpace, Uniform
 
 
 @dataclass
 class TFTDefaultParams:
-    """Default TFT parameters for when search is skipped."""
+    """Default TFT parameters for when search is skipped.
+
+    These are the previous search's winner, so they are only meaningful for a
+    run that skips the search; changing the space below does not change them.
+    """
     hidden_size: int = 256
     lstm_layers: int = 2
     dropout: float = 0.3
@@ -22,15 +29,35 @@ class TFTDefaultParams:
         }
 
 
-@dataclass
-class TFTSearchSpace:
-    param_dist: Dict[str, List[Any]] = field(default_factory=lambda: {
-        "hidden_size": [128, 256, 512],
-        "lstm_layers": [1, 2, 3],
-        "dropout": [0.1, 0.2, 0.3],
-        "learning_rate": [0.001, 0.01],
-    })
-    search_iter_n: int = 50
-    # Two-stage search: cheap exploration, then deeper rerank on top candidates.
-    stage1_max_epochs: int = 25
-    stage2_top_k: int = 10
+class TFTSearchSpace(SearchSpace):
+    """TFT search space.
+
+    The narrowest budget of the three: a single TFT trial takes hours, which
+    is why the shared two-stage protocol exists at all.  Stage 1 caps trials
+    at 25 epochs to rank them cheaply; only the top 10 are refit under
+    ``TFTTrainerConfig.max_epochs``.
+    """
+
+    def __init__(self, **overrides):
+        defaults = dict(
+            distributions={
+                "hidden_size": IntLogUniform(64, 512, multiple_of=8),
+                "lstm_layers": Choice([1, 2, 3]),
+                "dropout": Uniform(0.0, 0.5),
+                "learning_rate": LogUniform(1e-4, 3e-2),
+                # Context length: the encoder window.  The counterpart of the
+                # LSTM's sequence_length and XGBoost's n_lags, held to the
+                # same two settings.  Selects a prebuilt dataset rather than
+                # configuring the model, so create_tft_model ignores it.
+                "encoder_length": Choice(CONTEXT_LENGTHS),
+            },
+            n_trials=50,
+            stage1_budget={"max_epochs": 25},
+            stage2_top_k=8,
+            seed=0,
+        )
+        defaults.update(overrides)
+        super().__init__(**defaults)
+
+
+__all__ = ["TFTDefaultParams", "TFTSearchSpace"]

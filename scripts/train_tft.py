@@ -18,12 +18,7 @@ def derive_splits(data, store=None, target_normalizer_mode=None):
     inference rather than used for encoding here.
     """
     from configs.models.tft import TFTDatasetConfig
-    from src.data.preprocess import (
-        add_missingness_indicators,
-        impute_with_train_medians,
-        prepare_features_and_targets_sequence,
-        split_data,
-    )
+    from src.data.preprocess import prepare_sequence_frames
 
     dataset_cfg = TFTDatasetConfig()
     context_length = max(0, dataset_cfg.target_offset)
@@ -33,33 +28,20 @@ def derive_splits(data, store=None, target_normalizer_mode=None):
         store.categories_for(data)
         split_assignment = store.splits_for(data)
 
-    prepared, features, targets = prepare_features_and_targets_sequence(data)
     dataset_cfg.resolve_encoder_lengths()
     if context_length > 0:
         logging.info(
             "Warm start enabled for TFT: target_offset=%d (retaining early steps for encoder context).",
             context_length,
         )
-    prepared, features = add_missingness_indicators(prepared, features)
-    train_data, val_data, test_data = split_data(prepared, assignment=split_assignment)
-    train_data, val_data, test_data = impute_with_train_medians(
-        train_data, val_data, test_data, features
-    )
-
-    # When keeping partial targets, fill NaN with 0 — the __observed mask
-    # handles loss weighting so filled values don't contribute to gradients.
-    # This avoids NaN propagation in EncoderNormalizer / TimeSeriesDataSet.
-    from configs.data import KEEP_PARTIAL_TARGETS
-    if KEEP_PARTIAL_TARGETS:
-        for df in (train_data, val_data, test_data):
-            df[targets] = df[targets].fillna(0.0)
+    frames = prepare_sequence_frames(data, split_assignment)
 
     return {
-        "features": features,
-        "targets": targets,
-        "train_data": train_data,
-        "val_data": val_data,
-        "test_data": test_data,
+        "features": frames.features,
+        "targets": frames.targets,
+        "train_data": frames.train,
+        "val_data": frames.val,
+        "test_data": frames.test,
         "tft_target_offset": context_length,
         "tft_min_encoder_length": dataset_cfg.effective_min_encoder_length,
         "tft_max_encoder_length": dataset_cfg.effective_max_encoder_length,
@@ -79,15 +61,26 @@ def search_tft(store, target_normalizer_mode=None):
 
 
 def _search_with_splits(splits, store):
+    from configs.data import CONTEXT_LENGTHS
     from src.trainers.tft_dataset import build_datasets
     from src.trainers.tft_trainer import hyperparameter_search_tft
 
-    session_state = dict(splits)
-    train_dataset, val_dataset = build_datasets(session_state)
+    # One dataset pair per searched context length.  build_datasets mutates
+    # the state it is given, so each gets its own copy.
+    datasets_by_encoder_length = {}
+    for encoder_length in CONTEXT_LENGTHS:
+        datasets_by_encoder_length[encoder_length] = build_datasets(
+            dict(splits), encoder_length=encoder_length,
+        )
+        logging.info("Built TFT datasets for encoder_length=%d", encoder_length)
 
     best_params = hyperparameter_search_tft(
-        train_dataset, val_dataset, splits["targets"], store.run_id,
+        datasets_by_encoder_length, splits["targets"], store.run_id,
     )
+    if best_params is None:
+        # One shard of stage 1 is done; the winner is chosen on the machine
+        # that resumes the search with the merged ledger.
+        return None
     store.save_best_params(best_params)
     store.save_features(splits["features"], splits["targets"])
     # The searcher already logged the winning parameters, and the phase banner
@@ -113,9 +106,14 @@ def train_tft(store, target_normalizer_mode=None):
     if primary:
         logging.info("Training with best params: %s", best_params)
 
+    # The encoder length is part of the winning configuration, so the final
+    # fit has to see the same window the winning trial did.
+    encoder_length = best_params.get("encoder_length")
     session_state = dict(splits)
+    if encoder_length is not None:
+        session_state["tft_encoder_length"] = int(encoder_length)
     train_dataset, val_dataset = build_datasets(
-        dict(splits)  # build_datasets needs its own copy since it mutates
+        dict(session_state)  # build_datasets needs its own copy since it mutates
     )
 
     _train_final(

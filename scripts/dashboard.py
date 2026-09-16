@@ -8,28 +8,48 @@ import os
 import sys
 import argparse
 
+from src.data.process_data import SCENARIO_CATEGORY_CSV, relabel_scenario_categories
+from src.visualization.helpers import backfill_group_labels
 from src.visualization.trajectories import plot_trajectories, get_saved_plots_metadata
 from src.utils.utils import setup_logging
 from src.utils.regions import regions_ordered_by_scale
 from src.utils.run_store import RunStore
 from configs.data import REGION_CODE_TO_LABEL
 from configs.dashboard import DEFAULT_RUNS
+from scripts.dashboard_whatif import PRESERVED_KEYS, VIEW_NAME as WHATIF_VIEW, render_whatif_view
 import datetime
 
 st.set_page_config(layout="wide")
 
-# Apply global styling for wider sidebar
+# The page's views, and how the URL's ?view= names them.
+VIEWS = ("Trajectories", WHATIF_VIEW)
+VIEW_QUERY = {"trajectories": VIEWS[0], "whatif": VIEWS[1]}
+
+# Keep the preset pairs side by side and free the main area when the sidebar closes.
 st.markdown("""
 <style>
+    .st-key-whatif_preset_grid [data-testid="stHorizontalBlock"] {
+        flex-wrap: nowrap;
+    }
+    .st-key-whatif_preset_grid [data-testid="stColumn"] {
+        min-width: 0 !important;
+        flex: 1 1 0 !important;
+    }
     @media (min-width: 769px) {
-        .css-1d391kg, [data-testid="stSidebar"] {
+        [data-testid="stSidebar"][aria-expanded="true"] {
             width: 25rem !important;
             min-width: 25rem !important;
         }
-        .css-1d391kg > div {
-            width: 25rem !important;
-            min-width: 25rem !important;
-        }
+    }
+    .st-key-model_navigation [data-testid="stBaseButton-primary"] {
+        background-color: #2563eb;
+        border-color: #2563eb;
+        color: #ffffff;
+        font-weight: 600;
+    }
+    .st-key-model_navigation [data-testid="stBaseButton-primary"]:hover {
+        background-color: #1d4ed8;
+        border-color: #1d4ed8;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -121,20 +141,24 @@ def apply_filters():
         st.error("Required data not found in session state. Please ensure the model has been trained.")
         return
 
-    # Build filter mask
-    mask_conditions = []
-    if 'Scenario_Category' in test_data.columns:
-        mask_conditions.append(test_data['Scenario_Category'].isin(st.session_state.selected_scenario_categories))
-    if 'Region' in test_data.columns:
-        mask_conditions.append(test_data['Region'].isin(st.session_state.selected_regions))
-    if 'Model_Family' in test_data.columns:
-        mask_conditions.append(test_data['Model_Family'].isin(st.session_state.selected_model_families))
-    
-    # Combine conditions
-    mask_td = mask_conditions[0] if mask_conditions else pd.Series([True] * len(test_data))
-    for condition in mask_conditions[1:]:
-        mask_td = mask_td & condition
-    
+    # Build filter mask.  A filter whose column the rows lack cannot apply;
+    # say so rather than silently showing every value.
+    selections = {
+        'Scenario_Category': st.session_state.selected_scenario_categories,
+        'Region': st.session_state.selected_regions,
+        'Model_Family': st.session_state.selected_model_families,
+    }
+    missing = [column for column in selections if column not in test_data.columns]
+    if missing:
+        st.warning(
+            f"Cannot filter on {', '.join(missing)}: the run's prediction rows carry "
+            "no such column, so every value is shown."
+        )
+    mask_td = pd.Series(True, index=test_data.index)
+    for column, selected in selections.items():
+        if column in test_data.columns:
+            mask_td &= test_data[column].isin(selected)
+
     # Create target mask and store data
     selected_positions = np.where(mask_td)[0]
     mask_targets = np.zeros(len(y_test), dtype=bool)
@@ -383,6 +407,41 @@ def _code_maps(store):
     return maps
 
 
+# Per-group labels the dashboard filters on that a saved horizon frame may lack.
+LABEL_COLUMNS = ['Scenario_Category', 'Model_Family']
+
+
+def _backfill_horizon_labels(session_state):
+    """Give TFT horizon rows the labels the filters read, from test_data."""
+    horizon_df = session_state.get('horizon_df')
+    test_data = session_state.get('test_data')
+    if horizon_df is None or test_data is None:
+        return
+    horizon_df, filled = backfill_group_labels(horizon_df, test_data, LABEL_COLUMNS)
+    if filled:
+        logging.info("horizon_df: copied %s from test_data", ", ".join(filled))
+        session_state.horizon_df = horizon_df
+
+
+def _relabel_scenario_categories(session_state):
+    """Label runs by (Model, Scenario) from the metadata table.
+
+    Runs preprocessed while metadata/scenario_category.csv was keyed by
+    scenario name alone stored another model's category for about a fifth of
+    the runs; the column is not a feature, so the stored labels can be
+    corrected here.
+    """
+    scenario_cat = pd.read_csv(SCENARIO_CATEGORY_CSV, dtype=str)
+    for attr in ('test_data', 'horizon_df'):
+        df = session_state.get(attr)
+        if df is None or not {'Model', 'Scenario', 'Scenario_Category'} <= set(df.columns):
+            continue
+        df, n_changed = relabel_scenario_categories(df, scenario_cat)
+        if n_changed:
+            logging.info("%s: %d runs relabelled from %s", attr, n_changed, SCENARIO_CATEGORY_CSV.name)
+            setattr(session_state, attr, df)
+
+
 def _decode_categorical_columns(store, session_state):
     """Decode integer-encoded Region/Model_Family columns back to string labels."""
     maps = _code_maps(store)
@@ -414,10 +473,12 @@ def _decode_categorical_columns(store, session_state):
 
 def setup_session_and_logging(run_id):
     """Initialize logging and load run artifacts via RunStore."""
-    # Reset state if run_id changed (e.g. via URL query param)
+    # Reset state if run_id changed (e.g. via URL query param).  The view
+    # choice and the what-if selections survive; the view re-validates them.
     if st.session_state.get("current_run_id") != run_id:
         for key in list(st.session_state.keys()):
-            del st.session_state[key]
+            if key not in PRESERVED_KEYS:
+                del st.session_state[key]
         st.session_state.current_run_id = run_id
 
     if st.session_state.get("logging_initialized", False) is False:
@@ -457,6 +518,8 @@ def setup_session_and_logging(run_id):
 
         # Decode integer-encoded categoricals (LSTM stores Region/Model_Family as int codes)
         _decode_categorical_columns(store, st.session_state)
+        _backfill_horizon_labels(st.session_state)
+        _relabel_scenario_categories(st.session_state)
 
         st.session_state.data_initialized = True
 
@@ -495,6 +558,16 @@ def resolve_run_id() -> str:
     st.query_params["run_id"] = run_id
     return run_id
 
+
+def resolve_view() -> str:
+    """The view to show: the URL's ?view= on first load, then the radio's state."""
+    if "dashboard_view" not in st.session_state:
+        st.session_state.dashboard_view = VIEW_QUERY.get(st.query_params.get("view"), VIEWS[0])
+    view = st.radio("View", VIEWS, horizontal=True, key="dashboard_view", label_visibility="collapsed")
+    st.query_params["view"] = next(name for name, label in VIEW_QUERY.items() if label == view)
+    return view
+
+
 def main():
     run_id = resolve_run_id()
     
@@ -508,19 +581,27 @@ def main():
 
     # Model selector tabs
     model_type = run_id.split("_", 1)[0]
-    cols = st.columns(len(DEFAULT_RUNS))
-    for i, (key, default_id) in enumerate(DEFAULT_RUNS.items()):
-        label = key.upper()
-        with cols[i]:
-            if st.button(label, key=f"nav_{key}", use_container_width=True, disabled=(key == model_type)):
-                st.query_params["run_id"] = key
-                st.rerun()
+    with st.container(key="model_navigation"):
+        cols = st.columns(len(DEFAULT_RUNS))
+        for i, key in enumerate(DEFAULT_RUNS):
+            selected = key == model_type
+            with cols[i]:
+                clicked = st.button(
+                    key.upper(), key=f"nav_{key}", use_container_width=True,
+                    type="primary" if selected else "secondary",
+                    help="Current model" if selected else f"Switch to {key.upper()}",
+                )
+                if clicked and not selected:
+                    st.query_params["run_id"] = key
+                    st.rerun()
 
-    make_filters(st.session_state.test_data)
-    
-    # Handle filtering and plotting
-    handle_filtering_and_plotting(run_id)
-    
+    if resolve_view() == WHATIF_VIEW:
+        render_whatif_view(run_id, on_plot_saved=get_cached_saved_plots.clear)
+    else:
+        make_filters(st.session_state.test_data)
+        # Handle filtering and plotting
+        handle_filtering_and_plotting(run_id)
+
     # Recent plots section
     display_recent_plots_sidebar(run_id)
     

@@ -184,3 +184,16 @@ results/
 
 .vscode/settings.json
 CLAUDE.md
+
+# Local revision validation and documentation (existing tracked files stay tracked).
+tests/
+test_*.py
+*_test.py
+*.md
+references/
+saved_dashboard_plots/
+*.ckpt
+*.pt
+*.pth
+datasets/
+.local-review/

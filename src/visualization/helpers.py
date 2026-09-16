@@ -25,6 +25,30 @@ __all__ = [
 ]
 
 
+def backfill_group_labels(
+    horizon_df: pd.DataFrame,
+    test_data: pd.DataFrame,
+    columns: Sequence[str],
+    keys: Sequence[str] = ("Model", "Scenario", "Region"),
+) -> Tuple[pd.DataFrame, List[str]]:
+    """Copy per-group label *columns* that horizon_df lacks from test_data.
+
+    TFT runs saved before the trainer carried Scenario_Category and
+    Model_Family onto the horizon rows have neither, and a dashboard filter
+    with no column to read silently matched every scenario.  Returns the
+    frame and the names filled in; a column test_data cannot supply either is
+    left out, and rows keep their order and index.
+    """
+    keys = list(keys)
+    missing = [c for c in columns if c not in horizon_df.columns and c in test_data.columns]
+    if not missing or any(k not in horizon_df.columns or k not in test_data.columns for k in keys):
+        return horizon_df, []
+    labels = test_data[keys + missing].drop_duplicates(keys)
+    out = horizon_df.merge(labels, on=keys, how="left")
+    out.index = horizon_df.index
+    return out, missing
+
+
 def output_unit(target: str) -> str:
     """Display unit of an output variable, "" when it has none configured."""
     return UNITS_BY_OUTPUT.get(target, "")

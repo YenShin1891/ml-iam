@@ -1,24 +1,23 @@
 #!/usr/bin/env python
 
-"""Train/val/test R2/RMSE/MAE breakdown for a trained LSTM/TFT run.
+"""Train/val/test R2/RMSE/MAE breakdown for a trained XGB/LSTM/TFT run.
 
-"train" is the exact split the model's weights were fit on, and "val" is
-the split used only for early-stopping decisions (never used for a gradient
-update) -- see src/trainers/tft_trainer.py:train_final_tft and
-src/trainers/lstm_trainer.py:train_final_lstm. "train+val" is the
+"train" is the exact split the model was fit on, and "val" is the split used
+only for early-stopping decisions (never for a gradient update or a boosting
+round) -- see src/trainers/tft_trainer.py:train_final_tft,
+src/trainers/lstm_trainer.py:train_final_lstm and
+src/trainers/xgb_trainer.py:train_and_save_model. "train+val" is the
 concatenation of the two. "test" is the held-out test split.
 
-Each split is scored with the model's normal evaluation procedure --
-batched windowed prediction for LSTM, single-window encoder/decoder forecast
-for TFT -- same procedure used for the official test-set numbers.
-
-XGBoost not covered here: its production model is fit on train+val merged
-(src/trainers/xgb_trainer.py:train_and_save_model), so neither split is
-genuinely held out from it.
+Each split is scored with the model's normal evaluation procedure -- batched
+windowed prediction for LSTM, single-window encoder/decoder forecast for TFT,
+autoregressive rollout for XGB -- the same procedure that produced the run's
+official test-set numbers, so a split's row here is comparable with them.
 
 Usage:
   python scripts/evaluate_splits.py --model tft  --run_id tft_01
   python scripts/evaluate_splits.py --model lstm --run_id lstm_01
+  python scripts/evaluate_splits.py --model xgb  --run_id xgb_01
   python scripts/evaluate_splits.py --model tft  --run_id tft_01 --two-window
 """
 
@@ -73,6 +72,53 @@ def _eval_lstm_split(base_session_state, run_id, split_name, df):
     return y_true, y_pred, observed_mask_from_frame(horizon_df, targets), len(horizon_df)
 
 
+def _eval_xgb_split(bundle, split_name, X_with_index, y_scaled, frame):
+    """Roll one split forward the way the test phase rolls the test set.
+
+    One-step prediction off true lags would answer a different question: the
+    reported numbers come from feeding each prediction back in as the next
+    step's lag features, and the gap between the two is exactly the error
+    compounding this breakdown is meant to expose.
+    """
+    import numpy as np
+
+    from configs.data import POPULATION_COLUMN
+    from src.data.preprocess import denormalize_by_population, observed_mask_from_frame
+    from src.trainers.evaluation import test_xgb_autoregressively
+
+    targets = bundle["targets"]
+    # The rollout scatters each group's predictions by index label, so a
+    # duplicate label would silently overwrite another row's prediction.
+    if not X_with_index.index.is_unique:
+        raise ValueError(f"Split {split_name!r} has duplicate index labels")
+
+    preds_scaled = test_xgb_autoregressively(
+        X_with_index, y_scaled,
+        model=bundle["model"],
+        cache=bundle["cache"],
+        n_lags=bundle["n_lags"],
+        y_scaler=bundle["y_scaler"],
+        x_scaler=bundle["x_scaler"],
+        disable_progress=True,
+    )
+
+    # Undo the target scaling, then restore absolute units when the run
+    # predicts per-capita targets (a no-op otherwise).  Ground truth comes
+    # from the raw frame rather than the scaled array, matching test_xgb.
+    population = frame[POPULATION_COLUMN].values
+    y_pred = denormalize_by_population(bundle["y_scaler"].inverse_transform(preds_scaled), population)
+    y_true = denormalize_by_population(frame[targets].values, population)
+
+    # A group shorter than the lag window is never rolled out, leaving NaN
+    # predictions that would poison the metrics; drop those elements the same
+    # way an unobserved target is dropped.
+    obs_mask = observed_mask_from_frame(frame, targets).astype(bool) & np.isfinite(y_pred)
+    logging.info(
+        "XGB split %s: %d rows, %d scored elements", split_name, len(frame), int(obs_mask.sum()),
+    )
+    return y_true, y_pred, obs_mask, len(frame)
+
+
 # ---------------------------------------------------------------------------
 # Per-model split assembly
 # ---------------------------------------------------------------------------
@@ -91,6 +137,61 @@ def _build_split_results_tft(store, run_id, use_two_window):
         logging.info("Evaluating TFT on split: %s (%d rows)", split_name, len(df))
         results[split_name] = _eval_tft_split(splits, run_id, split_name, df, use_two_window)
     return splits["targets"], results
+
+
+def _build_split_results_xgb(store, run_id):
+    import numpy as np
+
+    from scripts.train_xgb import derive_splits
+    from src.data.preprocess import prepare_features_and_targets, split_data
+    from src.trainers.xgb_trainer import load_final_xgb_model
+
+    data = store.load_processed_data()
+    # The lag count is part of the winning configuration, so the rollout has to
+    # see the same feature set the model was fitted on.
+    splits = derive_splits(data, store, n_lags=store.load_best_params().get("n_lags"))
+    targets = splits["targets"]
+
+    # prepare_data hands back only test_data, but every split needs its raw
+    # frame here -- for the absolute-unit ground truth, the population column
+    # and the observed mask.  The split is deterministic given the run's
+    # assignment, so re-deriving it reproduces the same rows in the same order
+    # as the scaled matrices derive_splits just returned.
+    prepared, _, _ = prepare_features_and_targets(data, lag_required=True, n_lags=splits["n_lags"])
+    train_data, val_data, test_data = split_data(prepared, assignment=store.splits_for(data))
+
+    # Load the model and the run's own scalers once: passing them beats the
+    # run_id path, which would reload one booster per target per split.
+    bundle = {
+        "targets": targets,
+        "n_lags": splits["n_lags"],
+        "model": load_final_xgb_model(run_id, targets),
+        "x_scaler": store.load_artifact("x_scaler.pkl"),
+        "y_scaler": store.load_artifact("y_scaler.pkl"),
+        # Keyed by frame identity, so one cache serves every split.
+        "cache": {},
+    }
+
+    frames = {
+        "train": (splits["X_train_with_index"], splits["y_train"], train_data),
+        "val": (splits["X_val_with_index"], splits["y_val"], val_data),
+        # ignore_index throughout: split_data restarts each split's index at
+        # 0, so a plain concat would give train and val rows the same labels
+        # and the rollout, which scatters predictions by label, would write
+        # every train group into a val row.
+        "train+val": (
+            pd.concat([splits["X_train_with_index"], splits["X_val_with_index"]], ignore_index=True),
+            np.concatenate([splits["y_train"], splits["y_val"]], axis=0),
+            pd.concat([train_data, val_data], ignore_index=True),
+        ),
+        "test": (splits["X_test_with_index"], splits["y_test"], test_data),
+    }
+
+    results = {}
+    for split_name, (X_with_index, y_scaled, frame) in frames.items():
+        logging.info("Evaluating XGB on split: %s (%d rows)", split_name, len(frame))
+        results[split_name] = _eval_xgb_split(bundle, split_name, X_with_index, y_scaled, frame)
+    return targets, results
 
 
 def _build_split_results_lstm(store, run_id):
@@ -117,8 +218,8 @@ def _build_split_results_lstm(store, run_id):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--model", required=True, choices=["lstm", "tft"], help="Model type.")
-    parser.add_argument("--run_id", required=True, help="Trained run id, e.g. tft_01 / lstm_01.")
+    parser.add_argument("--model", required=True, choices=["lstm", "tft", "xgb"], help="Model type.")
+    parser.add_argument("--run_id", required=True, help="Trained run id, e.g. tft_01 / lstm_01 / xgb_01.")
     parser.add_argument("--two-window", action="store_true", help="TFT only: use the two-window prediction path.")
     parser.add_argument("--output", type=str, default=None, help="Optional CSV path for the breakdown (default: <run_root>/metrics/train_val_test_r2_breakdown.csv).")
     args = parser.parse_args(argv)
@@ -142,6 +243,8 @@ def main(argv=None):
 
     if args.model == "tft":
         targets, results = _build_split_results_tft(store, args.run_id, use_two_window)
+    elif args.model == "xgb":
+        targets, results = _build_split_results_xgb(store, args.run_id)
     else:
         targets, results = _build_split_results_lstm(store, args.run_id)
 

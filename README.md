@@ -365,6 +365,31 @@ make dashboard RUN_ID=xgb_37 SAVE_PLOTS="0,6"
 - Visualize scenario trajectories
 - Explore feature importance
 
+### What-if emulator
+
+The **What-if emulator** view (`http://localhost:8501/?run_id=tft&view=whatif`)
+runs a trained TFT live: pick a region, start from a real AR6 trajectory's
+inputs, move the input levers and see the emulated trajectories next to the
+IAM's own and next to the emulator's forecast of the unchanged inputs.
+
+- Only regions where the run reaches a pooled R² of at least 0.95 on held-out
+  scenarios, scored on at least 1000 values, are offered (thresholds in
+  `configs/dashboard.py`; the table comes from `metrics/performance_by_region.csv`,
+  written by the test phase).
+- The baseline is a C3 trajectory of that region; the first three steps stay
+  as the IAM reported them and the emulator forecasts the rest, with the same
+  two-window protocol the test phase scores.
+- Each lever is bounded by the 5–95% range of the training scenarios in that
+  region and year. The default control scales a lever by a multiple reached
+  at the last year; "Unlock per-decade anchors" pins values decade by decade.
+  One chart overlays every lever's path as its position within that range.
+- Every run is saved under the run's `saved_dashboard_plots/` as `whatif_<timestamp>`
+  and can be downloaded as CSV.
+
+The model runs on the CPU, so the dashboard environment needs the deep
+learning stack (`requirements-dashboard.txt` pulls it in; a CPU-only torch
+wheel is enough). TFT runs only, for now.
+
 ---
 
 ## ❓ FAQ

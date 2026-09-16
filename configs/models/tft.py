@@ -6,7 +6,12 @@ import torch
 from pytorch_forecasting.data import EncoderNormalizer
 from sklearn.preprocessing import StandardScaler
 
-from configs.data import CATEGORICAL_COLUMNS, INDEX_COLUMNS, MAX_SERIES_LENGTH
+from configs.data import (
+    CATEGORICAL_COLUMNS,
+    INDEX_COLUMNS,
+    MAX_CONTEXT_LENGTH,
+    MAX_SERIES_LENGTH,
+)
 
 
 class NamelessStandardScaler(StandardScaler):
@@ -66,9 +71,11 @@ class TFTDatasetConfig:
 
     time_idx: str = "Step"
     group_ids: List[str] = field(default_factory=lambda: list(INDEX_COLUMNS))
-    max_encoder_length: int = 3
-    min_encoder_length: int = 3
-    max_prediction_length: int = MAX_SERIES_LENGTH - 3
+    max_encoder_length: int = MAX_CONTEXT_LENGTH
+    min_encoder_length: int = MAX_CONTEXT_LENGTH
+    # Pinned to the longest context, not to this instance's: a shorter encoder
+    # must predict the same steps, or the encoder lengths are not comparable.
+    max_prediction_length: int = MAX_SERIES_LENGTH - MAX_CONTEXT_LENGTH
     min_prediction_length: int = 1
     add_relative_time_idx: bool = True
     add_target_scales: bool = True

@@ -13,12 +13,11 @@ import logging
 import time
 import numpy as np
 import pandas as pd
-import concurrent.futures
 
-from typing import Optional
-
+from configs import data as data_config
 from configs.data import INDEX_COLUMNS, NON_FEATURE_COLUMNS, N_LAG_FEATURES
-from src.utils.regions import SCALE_ORDER_COARSEST_FIRST, scale_of_frame
+from src.utils.regions import SCALE_ORDER_COARSEST_FIRST, region_scales, scale_of_frame
+from src.utils.run_store import RunStore
 from src.utils.utils import format_number, get_run_root
 
 # How often a long-running loop reports progress to the run log.
@@ -60,12 +59,15 @@ def group_test_data(X_test_with_index, cache=None):
     return result
 
 
-def autoregressive_predictions(model, group_indices, group_matrix, start_pos, y_scaler=None, x_scaler=None, feature_columns=None):
+def autoregressive_predictions(model, group_indices, group_matrix, start_pos, y_scaler=None, x_scaler=None, feature_columns=None, n_lags: int = N_LAG_FEATURES):
     """
     Generate autoregressive predictions for a single grouped series.
 
     Notes:
-    - Supports arbitrary N_LAG_FEATURES based on configs.data.N_LAG_FEATURES.
+    - *n_lags* is how many past steps feed back into the features; it must
+      match the lag count the model was trained with, or the rollout writes
+      predictions into columns the model does not read (or leaves ones it
+      does read at their ground-truth values).
     - Locates lagged feature columns by name: prev_<var> or prev{lag}_<var>.
     - Assumes model.predict returns a vector of targets aligned with
       OUTPUT_VARIABLES[:num_targets].
@@ -90,7 +92,7 @@ def autoregressive_predictions(model, group_indices, group_matrix, start_pos, y_
     if feature_columns is None:
         # If not provided, derive from matrix width assuming caller aligned order with X_test_with_index
         feature_columns = []
-    for lag in range(1, N_LAG_FEATURES + 1):
+    for lag in range(1, n_lags + 1):
         cols_for_lag = []
         for var in out_vars:
             col_name = (f"prev_{var}" if lag == 1 else f"prev{lag}_{var}")
@@ -116,15 +118,16 @@ def autoregressive_predictions(model, group_indices, group_matrix, start_pos, y_
         isinstance(y_means_attr, (list, np.ndarray)) and isinstance(y_scales_attr, (list, np.ndarray)) and
         _safe_len(x_means_attr) == _safe_len(feature_columns)
     )
+    if not use_scalers and (x_scaler is not None or y_scaler is not None):
+        # A wrong-scale feedback loop yields a plausible number, so it must
+        # not be allowed to run.
+        raise ValueError(
+            "Scalers provided but unusable (x_scaler.mean_ length "
+            f"{_safe_len(x_means_attr)} != feature_columns length {_safe_len(feature_columns)}); "
+            "lag updates would insert y-scaled values into x-scaled columns"
+        )
     if not use_scalers:
-        if x_scaler is not None or y_scaler is not None:
-            logging.warning(
-                "Scalers provided but unusable (x_scaler.mean_ length %d != feature_columns length %d); "
-                "lag updates will insert y-scaled values into x-scaled columns",
-                _safe_len(x_means_attr), _safe_len(feature_columns),
-            )
-        else:
-            logging.debug("No scalers provided; lag updates will insert predictions as-is")
+        logging.debug("No scalers provided; lag updates will insert predictions as-is")
     if use_scalers:
         y_means = np.asarray(y_means_attr)[:num_targets]
         y_scales = np.asarray(y_scales_attr)[:num_targets]
@@ -142,7 +145,7 @@ def autoregressive_predictions(model, group_indices, group_matrix, start_pos, y_
         X_test_curr = group_matrix[t].copy()
 
         # Update lagged features using previous predictions
-        for lag in range(1, N_LAG_FEATURES + 1):
+        for lag in range(1, n_lags + 1):
             src_t = t - lag
             if src_t < start_pos:
                 continue
@@ -166,6 +169,71 @@ def autoregressive_predictions(model, group_indices, group_matrix, start_pos, y_
     return preds_target
 
 
+def rollout_all_groups(model, group_matrices, feature_columns, y_scaler, x_scaler, n_lags: int = N_LAG_FEATURES):
+    """Roll every group forward together, one predict call per time step.
+
+    The same computation as :func:`autoregressive_predictions` applied to each
+    group in turn -- XGBoost predicts row by row, so a row's prediction does
+    not depend on what else is in the batch -- but every group's step *t* is
+    one call instead of one call per group.  A test set of 2,346 trajectories
+    costs 12 predict calls rather than 28,000, which is what makes the rollout
+    cheap enough to score every search trial on.  The per-group function is
+    kept as the reference the tests check this one against.
+
+    Returns ``(preds, lengths)``: *preds* is ``(groups, max_length, targets)``
+    in the model's (y-scaled) units, NaN past each group's length.
+    """
+    from configs.data import OUTPUT_VARIABLES
+
+    lengths = np.array([len(matrix) for matrix in group_matrices], dtype=int)
+    if len(lengths) == 0:
+        return np.zeros((0, 0, 0), dtype=float), lengths
+
+    x_means = np.asarray(getattr(x_scaler, "mean_", None), dtype=float)
+    x_scales = np.asarray(getattr(x_scaler, "scale_", None), dtype=float)
+    if x_means.shape != (len(feature_columns),) or x_scales.shape != (len(feature_columns),):
+        # A wrong-scale feedback loop yields a plausible number, so it must
+        # not be allowed to run.
+        raise ValueError(
+            f"x_scaler was fitted on {x_means.size} columns but the rollout frame has "
+            f"{len(feature_columns)}; lag updates would insert y-scaled values into "
+            "x-scaled columns"
+        )
+
+    max_length = int(lengths.max())
+    preds = None
+    lag_columns = {}
+    y_means = y_scales = None
+    for t in range(max_length):
+        active = np.flatnonzero(lengths > t)
+        rows = np.stack([group_matrices[g][t] for g in active]).astype(float, copy=True)
+        if t > 0:
+            for lag in range(1, n_lags + 1):
+                source = t - lag
+                if source < 0:
+                    break  # further back than the first prediction: ground truth stays
+                for j, column in enumerate(lag_columns[lag]):
+                    if column is None:
+                        continue
+                    raw = preds[active, source, j] * y_scales[j] + y_means[j]
+                    rows[:, column] = (raw - x_means[column]) / x_scales[column]
+        out = np.asarray(model.predict(rows), dtype=float).reshape(len(active), -1)
+        if preds is None:
+            num_targets = out.shape[1]
+            preds = np.full((len(lengths), max_length, num_targets), np.nan, dtype=float)
+            y_means = np.asarray(y_scaler.mean_, dtype=float)[:num_targets]
+            y_scales = np.asarray(y_scaler.scale_, dtype=float)[:num_targets]
+            for lag in range(1, n_lags + 1):
+                lag_columns[lag] = []
+                for var in OUTPUT_VARIABLES[:num_targets]:
+                    name = f"prev_{var}" if lag == 1 else f"prev{lag}_{var}"
+                    lag_columns[lag].append(
+                        feature_columns.index(name) if name in feature_columns else None
+                    )
+        preds[active, t, :] = out
+    return preds, lengths
+
+
 def test_xgb_autoregressively(
     X_test_with_index,
     y_test,
@@ -175,17 +243,16 @@ def test_xgb_autoregressively(
     cache=None,
     y_scaler=None,
     x_scaler=None,
-    max_workers: Optional[int] = None,
+    n_lags: int = N_LAG_FEATURES,
 ):
     """Test the model autoregressively on the test set.
 
-    *disable_progress* silences the periodic progress line and the closing
-    RMSE; the search sets it, where one line per trial is enough and these
-    would arrive once per fold.
+    *disable_progress* silences the timing line and the closing RMSE; the
+    search sets it, where one line per trial is enough.
     """
     if cache is None:
         cache = {}
-    
+
     # Load the run's scalers when the caller did not pass them.  Without them
     # the lag columns would receive y-scaled predictions in x-scaled units, a
     # wrong-scale feedback loop that yields a plausible but wrong RMSE, so a
@@ -195,10 +262,17 @@ def test_xgb_autoregressively(
         store = RunStore(run_id)
         y_scaler = store.load_artifact("y_scaler.pkl")
         x_scaler = store.load_artifact("x_scaler.pkl")
+    if y_scaler is None or x_scaler is None:
+        # Refused, not warned about: the search ran this way for a whole
+        # stage 2 and picked its winner on the resulting numbers.
+        raise ValueError(
+            "The autoregressive rollout needs both the x and y scalers: it writes "
+            "predictions (target units) into lag columns (feature units).  Pass "
+            "y_scaler and x_scaler, or a run_id whose artifacts hold them."
+        )
 
     group_indices_list, group_matrices = group_test_data(X_test_with_index, cache)
-    full_preds = np.full(y_test.shape, np.nan, dtype=float)
-    
+
     if model is None:
         if run_id is None:
             raise ValueError("Either provide a preloaded `model` or a valid `run_id` to load from disk.")
@@ -208,44 +282,23 @@ def test_xgb_autoregressively(
         n_targets = y_test.shape[1] if y_test.ndim > 1 else 1
         model = load_final_xgb_model(run_id, OUTPUT_VARIABLES[:n_targets])
 
-    # Get feature column names
     feature_columns = [col for col in X_test_with_index.columns if col not in NON_FEATURE_COLUMNS]
 
-    def process_group(args):
-        group_indices, group_matrix = args
-        # With no nan values in y_test, we always use the first instance as seed.
-        start_pos = 0
-        preds_target = autoregressive_predictions(model, group_indices, group_matrix, start_pos, y_scaler, x_scaler, feature_columns)
-        return group_indices, preds_target
-
+    started = time.monotonic()
+    preds, lengths = rollout_all_groups(
+        model, group_matrices, feature_columns, y_scaler, x_scaler, n_lags=n_lags,
+    )
+    full_preds = np.full(y_test.shape, np.nan, dtype=float)
     index_to_pos = {idx: pos for pos, idx in enumerate(X_test_with_index.index)}
-    groups = list(zip(group_indices_list, group_matrices))
-    futures = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for group in groups:
-            futures.append(executor.submit(process_group, group))
-            
-        total = len(futures)
-        completed = 0
-        last_logged = time.monotonic()
-
-        for future in concurrent.futures.as_completed(futures):
-            group_indices, preds_target = future.result()
-            pos = [index_to_pos[idx] for idx in group_indices]
-            full_preds[pos, :] = preds_target
-
-            completed += 1
-            # Reported to the log rather than a progress bar: the bar reached
-            # only a terminal, so train.log had nothing for the six minutes
-            # this takes, while its redraws filled the console log instead.
-            now = time.monotonic()
-            if not disable_progress and (
-                completed == total or now - last_logged >= PROGRESS_LOG_SECONDS
-            ):
-                logging.info("Autoregressive prediction: %d/%d groups", completed, total)
-                last_logged = now
+    for g, group_indices in enumerate(group_indices_list):
+        positions = [index_to_pos[idx] for idx in group_indices]
+        full_preds[positions, :] = preds[g, :lengths[g], :]
 
     if not disable_progress:
+        logging.info(
+            "Autoregressive prediction: %d groups rolled out over %d steps in %.1fs",
+            len(lengths), int(lengths.max()) if len(lengths) else 0, time.monotonic() - started,
+        )
         # y_test carries NaN at unobserved targets; score the observed ones.
         finite = np.isfinite(np.asarray(y_test, dtype=float)) & np.isfinite(full_preds)
         if finite.any():
@@ -380,6 +433,110 @@ def _metrics_line(headline) -> str:
     )
 
 
+# The metric columns of a performance row, in the order the files carry them.
+METRIC_COLUMNS = (
+    "Mean Squared Error", "Pearson Correlation",
+    "R2 Score (per-target avg)", "R2 Score (pooled)",
+    "MAE", "RMSE", "Sample Size",
+)
+
+
+def _metric_columns(y_true, y_pred, observed_mask=None):
+    """The METRIC_COLUMNS of one performance row, or None when nothing was scored."""
+    summary = compute_r2_summary(y_true, y_pred, observed_mask=observed_mask)
+    if summary["Sample Size"] == 0:
+        return None
+    return {
+        "Mean Squared Error": summary["MSE"],
+        "Pearson Correlation": summary["Pearson"],
+        "R2 Score (per-target avg)": summary["R2 (per-target avg)"],
+        "R2 Score (pooled)": summary["R2 (pooled)"],
+        "MAE": summary["MAE"],
+        "RMSE": summary["RMSE"],
+        "Sample Size": summary["Sample Size"],
+    }
+
+
+def _region_vocabulary(run_id) -> dict:
+    """code -> region label: the run's saved vocabulary, else the in-process one."""
+    store = RunStore(run_id)
+    if store.has_categories():
+        labels = store.load_categories().get("Region")
+        if labels:
+            return dict(enumerate(labels))
+    return dict(data_config.REGION_CODE_TO_LABEL)
+
+
+def _region_names(frame, run_id):
+    """The region label of each row, decoding integer codes through the run's vocabulary.
+
+    The sequence models encode Region for their embeddings.  The codes mean
+    nothing in a report, so a frame whose codes cannot be decoded yields None
+    rather than a list of integers.
+    """
+    if "Region" not in frame.columns:
+        return None
+    regions = frame["Region"]
+    if not pd.api.types.is_numeric_dtype(regions):
+        return regions.astype(str)
+    vocabulary = _region_vocabulary(run_id)
+    if not vocabulary:
+        logging.warning(
+            "Run %s: Region is integer-coded and no vocabulary decodes it; "
+            "skipping the per-region metrics.", run_id,
+        )
+        return None
+    names = regions.map(vocabulary)
+    unknown = int(names.isna().sum())
+    if unknown:
+        logging.warning(
+            "Run %s: %d rows carry Region codes outside the saved vocabulary "
+            "and are left out of the per-region metrics.", run_id, unknown,
+        )
+    return names
+
+
+def metrics_by_region(run_id, y_true, y_pred, test_data, observed_mask=None):
+    """One row of metrics per region, coarsest scale first and alphabetical within it.
+
+    performance.csv pools each scale; this is the list to read when one region
+    looks off.  *test_data* lines up row for row with *y_true*, as for
+    save_metrics.  Returns None when the frame's regions cannot be named.
+    """
+    names = _region_names(test_data, run_id)
+    if names is None:
+        return None
+    scales = scale_of_frame(test_data)
+    if scales is None:
+        scales = region_scales(names)
+    regions = (
+        pd.DataFrame({"Region": names.to_numpy(), "Region Type": scales.to_numpy()})
+        .dropna(subset=["Region"])
+        .drop_duplicates("Region")
+    )
+    rank = {scale: i for i, scale in enumerate(SCALE_ORDER_COARSEST_FIRST)}
+    regions["rank"] = regions["Region Type"].map(rank).fillna(len(rank))
+    regions = regions.sort_values(["rank", "Region"])
+
+    labels = names.to_numpy()
+    rows = []
+    for region, scale in zip(regions["Region"], regions["Region Type"]):
+        positions = np.where(labels == region)[0]
+        columns = _metric_columns(
+            y_true[positions], y_pred[positions],
+            observed_mask[positions] if observed_mask is not None else None,
+        )
+        if columns is not None:
+            rows.append({"Run ID": run_id, "Region": region, "Region Type": scale, **columns})
+    return pd.DataFrame(rows, columns=["Run ID", "Region", "Region Type", *METRIC_COLUMNS])
+
+
+def by_region_filename(metrics_filename: str) -> str:
+    """The per-region file beside a metrics file: performance.csv -> performance_by_region.csv."""
+    stem, ext = os.path.splitext(metrics_filename)
+    return f"{stem}_by_region{ext}"
+
+
 def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None,
                  metrics_filename="performance.csv"):
     """Save performance metrics to a CSV file under the specified run directory.
@@ -391,7 +548,8 @@ def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None,
     the rows of *y_true*: for the sequence models that is the forecast horizon
     frame rather than the full test split.  Given it, metrics are additionally
     broken down by region scale, which is the comparison the models are read
-    against each other on.
+    against each other on, and listed per region in a second file beside the
+    first (see by_region_filename).
 
     *metrics_filename* lets callers write split-specific metrics (e.g.
     "performance_train.csv") without overwriting the canonical test-set
@@ -404,20 +562,10 @@ def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None,
         )
 
     def compute_metrics(y_true_subset, y_pred_subset, subset_name="Overall", obs=None):
-        summary = compute_r2_summary(y_true_subset, y_pred_subset, observed_mask=obs)
-        if summary["Sample Size"] == 0:
+        columns = _metric_columns(y_true_subset, y_pred_subset, obs)
+        if columns is None:
             return []
-        return [{
-            "Run ID": run_id,
-            "Region Type": subset_name,
-            "Mean Squared Error": summary["MSE"],
-            "Pearson Correlation": summary["Pearson"],
-            "R2 Score (per-target avg)": summary["R2 (per-target avg)"],
-            "R2 Score (pooled)": summary["R2 (pooled)"],
-            "MAE": summary["MAE"],
-            "RMSE": summary["RMSE"],
-            "Sample Size": summary["Sample Size"],
-        }]
+        return [{"Run ID": run_id, "Region Type": subset_name, **columns}]
 
     # Compute overall metrics
     all_metrics = compute_metrics(y_true, y_pred, "Overall", obs=observed_mask)
@@ -458,3 +606,12 @@ def save_metrics(run_id, y_true, y_pred, test_data=None, observed_mask=None,
             "Run %s overall metrics (%d samples) -> %s",
             run_id, int(headline["Sample Size"]), _metrics_line(headline),
         )
+
+    if test_data is not None:
+        by_region = metrics_by_region(run_id, y_true, y_pred, test_data, observed_mask)
+        if by_region is not None:
+            by_region_file = os.path.join(metrics_dir, by_region_filename(metrics_filename))
+            by_region.to_csv(by_region_file, index=False)
+            logging.info(
+                "Per-region metrics for %d regions saved to %s.", len(by_region), by_region_file,
+            )
