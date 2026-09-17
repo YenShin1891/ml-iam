@@ -446,16 +446,7 @@ def _reconstruct_xgb(run_id: str, target: str) -> Tuple[np.ndarray, np.ndarray, 
             f"{run_id}: saved SHAP values {shap_values.shape} do not match the reconstructed "
             f"test matrix {X_test.shape} / feature order"
         )
-    # transform_outputs_to_former_inputs re-attributes lagged other-target
-    # columns and, as a side effect, rewrites plots/csv under get_run_root.
-    # Point it at a scratch directory so the run's own csv files stay untouched.
-    original_root = shap_xgb.get_run_root
-    with tempfile.TemporaryDirectory(prefix="paper_fig6_") as tmp:
-        shap_xgb.get_run_root = lambda rid: os.path.join(tmp, rid)
-        try:
-            reattributed = shap_xgb.transform_outputs_to_former_inputs(run_id, shap_values, targets, features)
-        finally:
-            shap_xgb.get_run_root = original_root
+    normalised = shap_xgb.normalise_shap_values(shap_values)
 
     # Feature values only colour the dots; encode any label columns as the
     # SHAP plotting phase does (shap_xgb.draw_shap_plot).
@@ -463,7 +454,7 @@ def _reconstruct_xgb(run_id: str, target: str) -> Tuple[np.ndarray, np.ndarray, 
     X_proc = encode_categorical_columns(X_test.copy(), label_cols, splits["categories"]) if label_cols else X_test
     X_values = X_proc.values.astype(np.float64)
     ti = targets.index(target)
-    return reattributed[:, :, ti], X_values, build_feature_display_names(features)
+    return normalised[:, :, ti], X_values, build_feature_display_names(features)
 
 
 def _reconstruct_lstm(run_id: str, target: str) -> Tuple[np.ndarray, np.ndarray, List[str]]:
@@ -537,9 +528,8 @@ def reconstruct_co2_shap(
     feature matrix that colours the dots is rebuilt the way that phase built it:
 
     * ``xgb``: ``scripts.train_xgb.derive_splits`` -> R10 region filter ->
-      scenario-group sampling; saved ``plots/shap_values.npy`` is then passed
-      through ``shap_xgb.transform_outputs_to_former_inputs`` (csv side
-      effects redirected to a temporary directory).
+      scenario-group sampling; saved ``plots/shap_values.npy`` is then
+      normalised per target by ``shap_xgb.normalise_shap_values``.
     * ``lstm``: ``predictions.pkl`` horizon frame -> region filter -> sampling
       -> ``lstm_scaler_X`` -> sequence windows of the first 100 rows;
       ``plots/lstm_shap_values_temporal.npy`` summed over timesteps, inputs

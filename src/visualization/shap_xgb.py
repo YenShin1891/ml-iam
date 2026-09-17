@@ -1,5 +1,4 @@
 """SHAP plots for the XGBoost models."""
-import json
 import logging
 import os
 from typing import Dict, List, Optional
@@ -29,13 +28,7 @@ from .helpers import (
     sample_scenario_groups,
 )
 
-__all__ = ['get_shap_values', 'transform_outputs_to_former_inputs', 'draw_shap_plot', 'plot_xgb_shap']
-
-# How far down a target's importance ranking lagged other-target features are
-# re-attributed, and how far down the source target's ranking the input that
-# stands in for them is looked for.
-_REATTRIBUTION_DEPTH = 20
-_SOURCE_INPUT_DEPTH = 10
+__all__ = ['get_shap_values', 'normalise_shap_values', 'write_shap_rankings', 'draw_shap_plot', 'plot_xgb_shap']
 
 
 def get_shap_values(run_id, X_test: pd.DataFrame, targets: Optional[List[str]] = None) -> np.ndarray:
@@ -68,59 +61,31 @@ def get_shap_values(run_id, X_test: pd.DataFrame, targets: Optional[List[str]] =
     return shap_values
 
 
-def transform_outputs_to_former_inputs(run_id: str, shap_values: np.ndarray, targets: List[str], features: List[str]) -> np.ndarray:
-    """Re-attribute lagged other-target features to the inputs behind them.
+def normalise_shap_values(shap_values: np.ndarray) -> np.ndarray:
+    """Scale each target's SHAP values by its sum of mean |SHAP|.
 
-    SHAP values are first normalised per target by the sum of mean |SHAP|, so
-    targets of different magnitude compare, and each target's ranking is
-    written to plots/csv/shap<i>_<target>.csv.  Then, for target i, a lagged
-    column of another target j (``prev_<j>``) among i's top features is
-    replaced by its own attribution times the attribution of j's most
-    important non-lag input; the substitutions go to
-    plots/csv/feature_renaming.json.  Returns a new array.
+    Targets of different magnitude then share one axis.  Every feature keeps
+    its own attribution, lagged columns of other targets included.  Returns a
+    new array.
     """
     shap_values = np.array(shap_values, dtype=float)  # a copy: normalised in place below
-    csv_dir = os.path.join(get_run_root(run_id), "plots", "csv")
-    os.makedirs(csv_dir, exist_ok=True)
-
-    rankings = []
-    for i, target in enumerate(targets):
-        mean_abs = np.mean(np.abs(shap_values[:, :, i]), axis=0)
-        total = float(np.sum(mean_abs))
+    for i in range(shap_values.shape[2]):
+        total = float(np.sum(np.mean(np.abs(shap_values[:, :, i]), axis=0)))
         if total > 0:
             shap_values[:, :, i] /= total
-            mean_abs = mean_abs / total
+    return shap_values
+
+
+def write_shap_rankings(run_id: str, shap_values: np.ndarray, targets: List[str], features: List[str]) -> None:
+    """Write each target's mean |SHAP| ranking to plots/csv/shap<i>_<target>.csv."""
+    csv_dir = os.path.join(get_run_root(run_id), "plots", "csv")
+    os.makedirs(csv_dir, exist_ok=True)
+    for i, target in enumerate(targets):
+        mean_abs = np.mean(np.abs(shap_values[:, :, i]), axis=0)
         ranking = pd.DataFrame({"Feature": features, "Importance": mean_abs}).sort_values(
             by="Importance", ascending=False
         )
         ranking.to_csv(os.path.join(csv_dir, f"shap{i+1}_{target}.csv"), index=False)
-        rankings.append(ranking)
-
-    input_only = shap_values.copy()
-    feature_renaming = {}
-    for i, target in enumerate(targets):
-        feature_renaming[target] = {}
-        for lagged in rankings[i]["Feature"].head(_REATTRIBUTION_DEPTH):
-            if not lagged.startswith("prev") or lagged.endswith(target):
-                continue
-            prefix, source_name = lagged.split("_", 1)
-            if source_name not in targets:
-                continue
-            source_index = targets.index(source_name)
-            # The column the ranking names, not its rank: the two agree only
-            # when the features happen to be listed in importance order.
-            column = features.index(lagged)
-            for candidate in rankings[source_index]["Feature"].head(_SOURCE_INPUT_DEPTH):
-                if candidate.startswith("prev"):
-                    continue
-                input_only[:, column, i] = (
-                    shap_values[:, features.index(candidate), source_index] * shap_values[:, column, i]
-                )
-                feature_renaming[target][lagged] = f"{prefix}_{candidate}"
-                break
-    with open(os.path.join(csv_dir, "feature_renaming.json"), 'w') as json_file:
-        json.dump(feature_renaming, json_file, indent=4)
-    return input_only
 
 
 def _feature_subset(target_shap: np.ndarray, exclude_top: bool) -> np.ndarray:
@@ -265,7 +230,8 @@ def plot_xgb_shap(
         ",".join(group_cols) if group_cols else "<none>",
     )
     shap_values = get_shap_values(run_id, X_test, targets=targets)
-    shap_values = transform_outputs_to_former_inputs(run_id, shap_values, targets, features)
+    shap_values = normalise_shap_values(shap_values)
+    write_shap_rankings(run_id, shap_values, targets, features)
     draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=False, xlim_range=xlim_range, categories=categories)
     draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=True, xlim_range=xlim_range, categories=categories)
 

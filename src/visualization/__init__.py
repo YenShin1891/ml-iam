@@ -16,7 +16,8 @@ from .trajectories import (
 )
 from .shap_xgb import (
     get_shap_values as get_xgb_shap_values,
-    transform_outputs_to_former_inputs,
+    normalise_shap_values,
+    write_shap_rankings,
     draw_shap_plot,
     plot_xgb_shap,
 )
@@ -63,7 +64,7 @@ __all__ = [
     'preprocess_data', 'format_large_numbers', 'create_single_trajectory_plot', 'configure_axes',
     'plot_scatter', 'plot_trajectories', 'get_saved_plots_metadata',
     # XGB SHAP
-    'get_xgb_shap_values', 'transform_outputs_to_former_inputs', 'draw_shap_plot', 'plot_xgb_shap',
+    'get_xgb_shap_values', 'normalise_shap_values', 'write_shap_rankings', 'draw_shap_plot', 'plot_xgb_shap',
     # Helpers
     'make_grid', 'render_external_plot', 'build_feature_display_names',
     *_nn_exports,
