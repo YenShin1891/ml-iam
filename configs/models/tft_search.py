@@ -9,14 +9,17 @@ from src.trainers.search import Choice, IntLogUniform, LogUniform, SearchSpace, 
 class TFTDefaultParams:
     """Default TFT parameters for when search is skipped.
 
-    These are the previous search's winner, so they are only meaningful for a
-    run that skips the search; changing the space below does not change them.
+    These are the previous search's winner (tft_95), so they are only
+    meaningful for a run that skips the search; changing the space below does
+    not change them.
     """
-    hidden_size: int = 256
-    lstm_layers: int = 2
-    dropout: float = 0.3
-    learning_rate: float = 0.01
-    best_epoch: int = 12
+    hidden_size: int = 496
+    lstm_layers: int = 1
+    dropout: float = 0.0192127132364
+    learning_rate: float = 0.000178968817931
+    # Context length; selects the dataset, see TFTSearchSpace.
+    encoder_length: int = 3
+    best_epoch: int = 59
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary format expected by trainer."""
@@ -25,6 +28,7 @@ class TFTDefaultParams:
             "lstm_layers": self.lstm_layers,
             "dropout": self.dropout,
             "learning_rate": self.learning_rate,
+            "encoder_length": self.encoder_length,
             "best_epoch": self.best_epoch,
         }
 
