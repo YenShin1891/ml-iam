@@ -159,16 +159,17 @@ def main(argv=None):
     parser.add_argument("--xgb-run", default=None, help="XGB run id, e.g. xgb_85.")
     parser.add_argument("--lstm-run", default=None, help="LSTM run id, e.g. lstm_89.")
     parser.add_argument("--tft-run", default=None, help="TFT run id, e.g. tft_95.")
+    parser.add_argument("--linear-run", default=None, help="Linear baseline run id, e.g. linear_01.")
     parser.add_argument("--min-rows", type=int, default=5,
                         help="Families with fewer test rows are left out and logged (default: 5).")
     parser.add_argument("--output_dir", default=None,
                         help="Default: <RESULTS_PATH>/_analysis/model_family_r2.")
     args = parser.parse_args(argv)
 
-    runs = {"xgb": args.xgb_run, "lstm": args.lstm_run, "tft": args.tft_run}
+    runs = {"xgb": args.xgb_run, "lstm": args.lstm_run, "tft": args.tft_run, "linear": args.linear_run}
     runs = {model: run_id for model, run_id in runs.items() if run_id}
     if not runs:
-        parser.error("Give at least one of --xgb-run / --lstm-run / --tft-run.")
+        parser.error("Give at least one of --xgb-run / --lstm-run / --tft-run / --linear-run.")
 
     from configs.paths import RESULTS_PATH
 

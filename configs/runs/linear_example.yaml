@@ -1,0 +1,13 @@
+# Example run config for the linear-regression baseline
+# Usage: make train RUN=configs/runs/linear_example.yaml
+
+model: linear
+
+# Use the dataset of the runs the baseline is compared against: the split
+# assignment is derived from it, so a different dataset means different test groups.
+dataset: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-interp-targets-scale-impute-2026-09-03
+
+# No search phase: the baseline is not tuned.
+phases: [preprocess, train, test, plot]
+
+note: "Ridge (default alpha) baseline: XGB features, train-median imputation, one-hot Region and Model_Family."

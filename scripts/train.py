@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"""Unified training entrypoint for all models (xgb, lstm, tft).
+"""Unified training entrypoint for all models (xgb, lstm, tft, linear).
 
 Usage:
   python scripts/train.py --model xgb --resume search --run_id xgb_01
@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 
 
-_ALLOWED_MODELS = ("xgb", "lstm", "tft")
+_ALLOWED_MODELS = ("xgb", "lstm", "tft", "linear")
 _ALLOWED_PHASES = ("preprocess", "search", "train", "test", "plot")
 
 def _seed(model: str) -> None:
@@ -119,6 +119,11 @@ def _set_default_params(model, store):
     elif model == "tft":
         from configs.models.tft_search import TFTDefaultParams
         store.save_best_params(TFTDefaultParams().to_dict())
+    elif model == "linear":
+        # Nothing to tune; the baseline only borrows XGBoost's context length
+        # so both are fitted on the same lag features.
+        from configs.models.xgb_search import XGBDefaultParams
+        store.save_best_params({"n_lags": XGBDefaultParams().n_lags})
 
 
 _RESUMABLE_SETTINGS = ("keep_partial_targets", "target_normalizer_mode", "two_window", "dataset")
