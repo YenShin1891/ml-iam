@@ -207,6 +207,7 @@ def main():
     view._state_default("whatif_saved", None)
     st.session_state.whatif_specs = {spec.feature: spec for spec in specs}
     view._render_controls(specs, anchor_years)
+    view._render_gdp_values(rows, 3)
     view._render_overlay(specs)
     # Only this separate preview entry point replaces inference with drawing data.
     def source_for(frame):

@@ -341,7 +341,7 @@ def _render_controls(specs: List[LeverSpec], anchor_years: List[int]) -> None:
                     help=None if available else "This baseline does not have a movable input for this preset.",
                 )
     st.button("Reset levers", key="whatif_reset", on_click=_reset_levers)
-    st.caption("GDP MER starts from the selected IAM scenario's original time series.")
+    st.caption("GDP MER controls both GDP inputs. PPP follows the same relative change at each forecast year; source PPP/MER ratios and historical values are preserved.")
 
     advanced = st.toggle(
         "Unlock per-decade anchors", key="whatif_advanced",
@@ -351,6 +351,22 @@ def _render_controls(specs: List[LeverSpec], anchor_years: List[int]) -> None:
         _render_anchor_controls(specs, anchor_years)
     else:
         _render_multiplier_controls(specs)
+
+
+def _render_gdp_values(rows, history_steps):
+    if not {"GDP|MER", "GDP|PPP"} <= set(rows.columns):
+        return
+    edited = apply_levers(rows, st.session_state.whatif_edits, history_steps)
+    with st.expander("GDP values · PPP follows MER", expanded=False):
+        st.caption("Read-only values in the source scenario's units, before model scaling. PPP = source PPP × edited MER / source MER. When source MER is zero, PPP stays unchanged and the skip is logged.")
+        st.dataframe(pd.DataFrame({
+            "Year": rows["Year"].to_numpy(),
+            "Period": ["Fixed history" if i < history_steps else "Forecast" for i in range(len(rows))],
+            "MER · source": rows["GDP|MER"].to_numpy(),
+            "MER · edited": edited["GDP|MER"].to_numpy(),
+            "PPP · source": rows["GDP|PPP"].to_numpy(),
+            "PPP · derived": edited["GDP|PPP"].to_numpy(),
+        }), hide_index=True, use_container_width=True)
 
 
 def _render_overlay(specs: List[LeverSpec]) -> None:
@@ -451,7 +467,7 @@ def _render_combinations(run_id, engine, prepared, region, candidate, rows, hist
         f"All {per_group} High/Low combinations for each baseline group: {count} paths plus the original emulations. "
         "The panels on the right compare AR6 and generated values in 2050."
     )
-    st.caption("Each run uses the full model input set. Only carbon price, solar cost, population and GDP MER vary; all other inputs retain their starting scenario's values.")
+    st.caption("Each run uses the full model input set. Carbon price, solar cost, population and GDP MER are the four independent factors. PPP follows MER proportionally at each forecast year; other inputs retain their starting scenario's values.")
     with st.expander("How to read this chart", expanded=False):
         st.caption("This panel only explains the chart. Opening it does not change any settings or results.")
         st.caption(
@@ -475,7 +491,7 @@ def _render_combinations(run_id, engine, prepared, region, candidate, rows, hist
              "Generated paths": per_group}
             for group, (selected, _, _) in sources.items()
         ]), hide_index=True, use_container_width=True)
-        st.caption("One source per group must report all four inputs and have enough data for the emulator. Other inputs retain their source values. Source names are provided so you can trace where the chart starts, not as settings you need to choose.")
+        st.caption("One source per group must report all four inputs and have enough data for the emulator. PPP follows MER; other inputs retain their source values. Source names are provided so you can trace where the chart starts, not as settings you need to choose.")
     signature = (run_id, region, tuple((g, c.key) for g, (c, _, _) in sources.items()), tuple(chosen))
     saved = st.session_state.get("whatif_combinations")
     if saved is not None and (saved["signature"] != signature or "ensembles" not in saved):
@@ -596,6 +612,9 @@ def render_whatif_view(run_id: str, on_plot_saved: Optional[Callable[[], None]] 
         return
     hidden = len(gated) - len(offered)
 
+    if st.session_state.get("whatif_gdp_linkage") != "source-ratio-v1":
+        _invalidate_result()
+        st.session_state.whatif_gdp_linkage = "source-ratio-v1"
     _state_default("whatif_gen", 0)
     _state_default("whatif_edits", {})
     _state_default("whatif_preset", None)
@@ -666,6 +685,7 @@ def render_whatif_view(run_id: str, on_plot_saved: Optional[Callable[[], None]] 
     )
 
     _render_controls(specs, anchor_years)
+    _render_gdp_values(rows, history_steps)
     _render_overlay(specs)
     _render_run(run_id, engine, prepared, region, candidate, rows, history_steps, specs, region_row[R2_COLUMN], on_plot_saved)
     _render_combinations(run_id, engine, prepared, region, candidate, rows, history_steps, specs, region_row[R2_COLUMN], on_plot_saved)
