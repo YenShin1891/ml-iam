@@ -757,7 +757,8 @@ def resample_to_uniform_intervals(
     result = pd.concat([data.loc[~coarse], rebuilt[data.columns]], ignore_index=True)
     result = result.sort_values(keys, kind="stable").reset_index(drop=True)
     logging.info(
-        "Resampled %d groups to uniform %d-year intervals", n_resampled, interval
+        "Resampled %d groups to uniform %d-year intervals: inserted %d rows with no observed target",
+        n_resampled, interval, len(result) - len(data),
     )
     return result
 
@@ -952,7 +953,11 @@ def prepare_features_and_targets_sequence(
     if _data_flag("INTERPOLATE_TARGETS"):
         data = interpolate_targets(data, INDEX_COLUMNS, OUTPUT_VARIABLES)
 
+    reported_keys = None
     if _data_flag("IMPUTE_IRREGULAR_INTERVALS"):
+        reported_keys = pd.MultiIndex.from_frame(
+            data[INDEX_COLUMNS].assign(Year=pd.to_numeric(data["Year"], errors="coerce"))
+        )
         data = resample_to_uniform_intervals(data, INDEX_COLUMNS, OUTPUT_VARIABLES)
 
     prepared = data.copy()
@@ -972,6 +977,17 @@ def prepare_features_and_targets_sequence(
         n_dropped = int((~any_observed).sum())
         if n_dropped:
             logging.info("Dropped %d rows where all targets are unobserved", n_dropped)
+        if reported_keys is not None:
+            # An inserted row has no observed target, so this filter removes
+            # it again and the series reaches the model at its reported spacing.
+            inserted = ~pd.MultiIndex.from_frame(prepared[INDEX_COLUMNS + ["Year"]]).isin(reported_keys)
+            n_undone = int((inserted & ~any_observed.to_numpy()).sum())
+            if n_undone:
+                logging.warning(
+                    "IMPUTE_IRREGULAR_INTERVALS has no effect: %d of the %d rows it inserted were "
+                    "dropped again as unobserved, so series keep their reported spacing",
+                    n_undone, int(inserted.sum()),
+                )
         prepared = prepared[any_observed].reset_index(drop=True)
     else:
         prepared = prepared.dropna(subset=targets).reset_index(drop=True)
