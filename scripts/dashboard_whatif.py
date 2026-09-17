@@ -477,19 +477,21 @@ def _render_combinations(run_id, engine, prepared, region, candidate, rows, hist
             "- **Filled area:** the minimum to maximum generated value at each year. It is not a confidence interval.\n"
             "- **Color shades:** the starting scenario's AR6 category group (C1–4, C5–6 or C7–8). Overlapping lines and areas look darker; darkness is not a probability.\n\n"
             "**Right: compare the outcomes in 2050**\n\n"
-            "- **AR6, left box:** reported values from the original scenarios in that group and region.\n"
-            "- **Synthetic, right box:** values from the generated High/Low combinations.\n"
+            "- **AR6, left box:** values observed at exactly 2050 from available IAM families in the same category and region. This comparison is not restricted to the starting scenario’s IAM family.\n"
+            "- **High/Low, right box:** values from the 16 runs generated from one starting scenario in that category. Its Model_Family input remains unchanged.\n"
             "- **Black diamond:** the unchanged emulation in 2050. Each box shows the median and middle 50%; whiskers span the 5th–95th percentiles.\n\n"
             "The group labels describe the starting scenarios. The generated paths have not been assigned new climate categories."
         )
     with st.expander("View data sources", expanded=False):
-        st.write("These are the starting scenarios used to generate the colored paths. They are chosen automatically; there is nothing to select here.")
+        st.caption("**Inputs to the emulator:** one starting IAM scenario per category. The family below is the Model_Family input supplied to the emulator; it stays fixed across that scenario’s 16 runs.")
+        st.caption("**AR6 reference:** observed 2050 values from available IAM families in the same category and region. These boxes are not restricted to the families listed below.")
         if run_id == "preview":
             st.info("Preview only: the model and scenario names below are fictional examples, not real AR6 sources.")
         st.dataframe(pd.DataFrame([
-            {"Chart group": group, "Source IAM": selected.model, "Starting scenario": selected.scenario,
+            {"Category": group, "IAM family input": str(source_rows["Model_Family"].iloc[0]),
+             "IAM model": selected.model, "Starting scenario": selected.scenario,
              "Generated paths": per_group}
-            for group, (selected, _, _) in sources.items()
+            for group, (selected, source_rows, _) in sources.items()
         ]), hide_index=True, use_container_width=True)
         st.caption("One source per group must report all four inputs and have enough data for the emulator. PPP follows MER; other inputs retain their source values. Source names are provided so you can trace where the chart starts, not as settings you need to choose.")
     signature = (run_id, region, tuple((g, c.key) for g, (c, _, _) in sources.items()), tuple(chosen))
