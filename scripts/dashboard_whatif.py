@@ -94,7 +94,7 @@ CAVEAT = (
 
 @st.cache_resource(show_spinner="Loading the emulator…")
 def _engine(run_id: str):
-    from src.inference.tft_predict import load_engine
+    from src.inference.engines import load_engine
 
     return load_engine(run_id, map_location=WHATIF_ACCELERATOR)
 
@@ -115,12 +115,14 @@ def _region_table(run_id: str) -> Optional[pd.DataFrame]:
         return region_metrics_from_predictions(
             run_id, state.horizon_df, state.horizon_y_true, state.preds, state.targets
         )
+    if all(state.get(key) is not None for key in ("test_data", "y_test", "preds", "targets")):
+        return region_metrics_from_predictions(run_id, state.test_data, state.y_test, state.preds, state.targets)
     return None
 
 
 @st.cache_data(show_spinner=False)
 def _candidates(run_id: str, region: str):
-    return candidate_baselines(_prepared(run_id), region)
+    return candidate_baselines(_prepared(run_id), region, min_steps=_engine(run_id).min_steps)
 
 
 @st.cache_data(show_spinner=False)
@@ -138,9 +140,17 @@ def _ar6_band(run_id: str, region: str) -> pd.DataFrame:
     return ar6_target_bands(frame[frame["Region"] == region], prepared.targets)
 
 
+@st.cache_data(show_spinner="Selecting source scenarios…")
+def _comparison_sources(run_id, region, history_steps, min_steps, preferred):
+    return comparison_sources(
+        _prepared(run_id), region, _bands(run_id, region),
+        WHATIF_COMBINATION_DEFAULTS, history_steps, min_steps, preferred,
+    )
+
+
 @st.cache_data(show_spinner="Emulating the unchanged inputs…")
 def _baseline_prediction(run_id: str, region: str, model: str, scenario: str) -> pd.DataFrame:
-    from src.inference.tft_predict import predict_windows
+    from src.inference.engines import predict_windows
 
     rows = baseline_rows(_prepared(run_id), region, model, scenario)
     return predict_windows(_engine(run_id), rows)
@@ -166,7 +176,8 @@ def _bump_generation() -> None:
 
 
 def _widget_key(name: str) -> str:
-    return f"whatif_w_{st.session_state.whatif_gen}_{name}"
+    run_id = st.session_state.get("current_run_id", "preview")
+    return f"whatif_w_{run_id}_{st.session_state.get('whatif_gen', 0)}_{name}"
 
 
 def _specs() -> Dict[str, LeverSpec]:
@@ -174,6 +185,11 @@ def _specs() -> Dict[str, LeverSpec]:
 
 
 def _on_multiplier_change(feature: str, key: str) -> None:
+    # A delayed browser event can arrive after switching runs cleared these.
+    if (key != _widget_key(f"{feature}_mult")
+            or feature not in st.session_state.get("whatif_specs", {})
+            or key not in st.session_state or "whatif_edits" not in st.session_state):
+        return
     spec = _specs()[feature]
     multiplier = float(st.session_state[key])
     edits = st.session_state.whatif_edits
@@ -186,6 +202,10 @@ def _on_multiplier_change(feature: str, key: str) -> None:
 
 
 def _on_anchor_change(feature: str, year: int, key: str) -> None:
+    if (key != _widget_key(f"{feature}_{year}")
+            or feature not in st.session_state.get("whatif_specs", {})
+            or key not in st.session_state or "whatif_edits" not in st.session_state):
+        return
     spec = _specs()[feature]
     edits = st.session_state.whatif_edits
     anchors = edits.setdefault(feature, {y: b.base for y, b in spec.anchors.items()})
@@ -201,6 +221,8 @@ def _on_anchor_change(feature: str, year: int, key: str) -> None:
 
 
 def _apply_preset(name: str) -> None:
+    if not st.session_state.get("whatif_specs") or "whatif_edits" not in st.session_state:
+        return
     specs = list(_specs().values())
     # Each pair controls one input. Preserve choices made in the other pairs.
     st.session_state.whatif_edits.update(preset_edits(WHATIF_PRESETS[name], specs))
@@ -359,7 +381,7 @@ def _render_overlay(specs: List[LeverSpec]) -> None:
 def _render_run(run_id, engine, prepared, region, candidate, rows, history_steps, specs, region_r2, on_plot_saved) -> None:
     edits = st.session_state.whatif_edits
     if st.button("Run emulator", type="primary", key="whatif_run"):
-        from src.inference.tft_predict import check_vocabulary, predict_windows
+        from src.inference.engines import check_vocabulary, predict_windows
 
         problems = check_vocabulary(engine, rows)
         if problems:
@@ -417,9 +439,7 @@ def _render_combinations(run_id, engine, prepared, region, candidate, rows, hist
     chosen = list(WHATIF_COMBINATION_DEFAULTS)
     year = WHATIF_DISTRIBUTION_YEAR
     outputs = [t for t in WHATIF_COMPARISON_OUTPUTS if t in prepared.targets]
-    sources, unavailable = comparison_sources(
-        prepared, region, _bands(run_id, region), chosen, history_steps, engine.min_steps, candidate.key,
-    )
+    sources, unavailable = _comparison_sources(run_id, region, history_steps, engine.min_steps, candidate.key)
     if unavailable:
         st.info("No source with all four movable inputs in: " + ", ".join(unavailable) + ". These groups are not included.")
     if not sources:
@@ -462,7 +482,7 @@ def _render_combinations(run_id, engine, prepared, region, candidate, rows, hist
         st.session_state.whatif_combinations = None
         saved = None
     if st.button("Run all High/Low combinations", key="whatif_run_combinations", type="primary", disabled=not chosen or not outputs or not sources):
-        from src.inference.tft_predict import check_vocabulary, predict_windows
+        from src.inference.engines import check_vocabulary, predict_windows
 
         problems = [f"{group}: {problem}" for group, (_, source_rows, _) in sources.items() for problem in check_vocabulary(engine, source_rows)]
         if problems:
@@ -546,7 +566,7 @@ def render_whatif_view(run_id: str, on_plot_saved: Optional[Callable[[], None]] 
 
     model_type = run_id.split("_", 1)[0]
     if model_type not in WHATIF_ENGINES:
-        st.info("Live emulation is available for TFT runs only; the XGB and LSTM engines are not wired up yet.")
+        st.info("Live emulation is available for TFT, LSTM and XGB runs.")
         return
     try:
         engine = _engine(run_id)

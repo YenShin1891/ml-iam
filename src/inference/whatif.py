@@ -11,6 +11,7 @@ installation keep working without the deep-learning stack.
 
 import datetime
 import logging
+import re
 import math
 from dataclasses import dataclass
 from itertools import product
@@ -96,9 +97,9 @@ def raw_feature_names(features: Sequence[str]) -> List[str]:
 def load_prepared_run(store: RunStore) -> PreparedRun:
     """Rebuild the run's train/val/test frames from its cached data and split.
 
-    The chain is the one the TFT phases run, so a trajectory's rows here are
-    the rows the test phase predicted from.  Refuses a run without a saved
-    split rather than deriving one: probing must never write into a run.
+    Sequence models use the same imputed frames as their test phases. XGB
+    keeps missing inputs and leading history for its autoregressive seed.
+    Refuses a run without a saved split: probing must never write into a run.
     """
     if not store.has_splits():
         raise FileNotFoundError(
@@ -106,7 +107,21 @@ def load_prepared_run(store: RunStore) -> PreparedRun:
             "re-run its preprocess phase."
         )
     data = store.load_processed_data()
-    frames = prepare_sequence_frames(data, store.load_splits())
+    if store.run_id.startswith("xgb_"):
+        from src.data.preprocess import SequenceFrames, prepare_features_and_targets, split_data
+
+        saved_features, targets = store.load_features()
+        n_lags = max(int(match.group(1) or 1) for f in saved_features if (match := re.match(r"prev(\d*)_", f)))
+        rows, _, _ = prepare_features_and_targets(data, lag_required=False, n_lags=n_lags)
+        # Lag inputs belong to the autoregressive model, not to the sliders.
+        inputs = [f for f in saved_features if not re.match(r"prev\d*_", f)]
+        for feature in raw_feature_names(inputs):
+            rows[f"{feature}_is_missing"] = rows[feature].isna().astype(float)
+        rows["Step"] = rows.groupby(GROUP_KEYS, observed=True).cumcount()
+        train, val, test = split_data(rows, assignment=store.load_splits())
+        frames = SequenceFrames(train, val, test, inputs, targets)
+    else:
+        frames = prepare_sequence_frames(data, store.load_splits())
 
     parts = []
     for name in ("train", "val", "test"):

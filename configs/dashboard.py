@@ -11,9 +11,8 @@ DEFAULT_RUNS = {
 }
 
 # ── What-if emulator view ─────────────────────────────────────────────────
-# Model types the view can run live.  XGB rolls out autoregressively and the
-# LSTM predicts fixed windows; neither has an engine here yet.
-WHATIF_ENGINES = {"tft"}
+# Model types supported by the saved-checkpoint CPU inference adapters.
+WHATIF_ENGINES = {"tft", "lstm", "xgb"}
 
 # The model is loaded and run on this accelerator.  "cpu" keeps the dashboard
 # off the GPUs a training job on the same host may be using.
