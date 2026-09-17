@@ -158,6 +158,9 @@ def derive_splits(data, store=None, n_lags=None):
         "features": features,
         "targets": targets,
         "skip_columns": [features.index(c) for c in CATEGORICAL_COLUMNS if c in features],
+        # With their index columns, as the rollout wants them; see train_xgb.
+        "X_train_with_index": pd.concat([X_train, X_train_index_columns], axis=1),
+        "X_val_with_index": pd.concat([X_val, X_val_index_columns], axis=1),
         "X_train": X_train,
         "y_train": y_train,
         "X_val": X_val,

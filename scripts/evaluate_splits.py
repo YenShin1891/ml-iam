@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"""Train/val/test R2/RMSE/MAE breakdown for a trained XGB/LSTM/TFT run.
+"""Train/val/test R2/RMSE/MAE breakdown for a trained XGB/LSTM/TFT/linear run.
 
 "train" is the exact split the model was fit on, and "val" is the split used
 only for early-stopping decisions (never for a gradient update or a boosting
@@ -11,13 +11,14 @@ concatenation of the two. "test" is the held-out test split.
 
 Each split is scored with the model's normal evaluation procedure -- batched
 windowed prediction for LSTM, single-window encoder/decoder forecast for TFT,
-autoregressive rollout for XGB -- the same procedure that produced the run's
+autoregressive rollout for XGB and the linear baseline -- the same procedure that produced the run's
 official test-set numbers, so a split's row here is comparable with them.
 
 Usage:
   python scripts/evaluate_splits.py --model tft  --run_id tft_01
   python scripts/evaluate_splits.py --model lstm --run_id lstm_01
   python scripts/evaluate_splits.py --model xgb  --run_id xgb_01
+  python scripts/evaluate_splits.py --model linear --run_id linear_01
   python scripts/evaluate_splits.py --model tft  --run_id tft_01 --two-window
 """
 
@@ -139,12 +140,17 @@ def _build_split_results_tft(store, run_id, use_two_window):
     return splits["targets"], results
 
 
-def _build_split_results_xgb(store, run_id):
+def _build_split_results_xgb(store, run_id, model="xgb"):
+    """*model* "linear" shares all of this: same splits, same rollout."""
     import numpy as np
 
-    from scripts.train_xgb import derive_splits
     from src.data.preprocess import prepare_features_and_targets, split_data
-    from src.trainers.xgb_trainer import load_final_xgb_model
+
+    if model == "linear":
+        from scripts.train_linear import MODEL_ARTIFACT, derive_splits
+    else:
+        from scripts.train_xgb import derive_splits
+        from src.trainers.xgb_trainer import load_final_xgb_model
 
     data = store.load_processed_data()
     # The lag count is part of the winning configuration, so the rollout has to
@@ -165,7 +171,10 @@ def _build_split_results_xgb(store, run_id):
     bundle = {
         "targets": targets,
         "n_lags": splits["n_lags"],
-        "model": load_final_xgb_model(run_id, targets),
+        "model": (
+            store.load_artifact(MODEL_ARTIFACT) if model == "linear"
+            else load_final_xgb_model(run_id, targets)
+        ),
         "x_scaler": store.load_artifact("x_scaler.pkl"),
         "y_scaler": store.load_artifact("y_scaler.pkl"),
         # Keyed by frame identity, so one cache serves every split.
@@ -189,7 +198,7 @@ def _build_split_results_xgb(store, run_id):
 
     results = {}
     for split_name, (X_with_index, y_scaled, frame) in frames.items():
-        logging.info("Evaluating XGB on split: %s (%d rows)", split_name, len(frame))
+        logging.info("Evaluating %s on split: %s (%d rows)", model.upper(), split_name, len(frame))
         results[split_name] = _eval_xgb_split(bundle, split_name, X_with_index, y_scaled, frame)
     return targets, results
 
@@ -218,7 +227,7 @@ def _build_split_results_lstm(store, run_id):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--model", required=True, choices=["lstm", "tft", "xgb"], help="Model type.")
+    parser.add_argument("--model", required=True, choices=["lstm", "tft", "xgb", "linear"], help="Model type.")
     parser.add_argument("--run_id", required=True, help="Trained run id, e.g. tft_01 / lstm_01 / xgb_01.")
     parser.add_argument("--two-window", action="store_true", help="TFT only: use the two-window prediction path.")
     parser.add_argument("--output", type=str, default=None, help="Optional CSV path for the breakdown (default: <run_root>/metrics/train_val_test_r2_breakdown.csv).")
@@ -243,8 +252,8 @@ def main(argv=None):
 
     if args.model == "tft":
         targets, results = _build_split_results_tft(store, args.run_id, use_two_window)
-    elif args.model == "xgb":
-        targets, results = _build_split_results_xgb(store, args.run_id)
+    elif args.model in ("xgb", "linear"):
+        targets, results = _build_split_results_xgb(store, args.run_id, model=args.model)
     else:
         targets, results = _build_split_results_lstm(store, args.run_id)
 
