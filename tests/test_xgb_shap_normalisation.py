@@ -1,4 +1,4 @@
-"""XGB SHAP values are normalised per target and otherwise left alone."""
+"""XGB SHAP values: rows with unobserved lags dropped, then normalised per target."""
 import numpy as np
 import pandas as pd
 
@@ -40,3 +40,23 @@ def test_rankings_list_cross_target_lags_under_their_own_name(tmp_path, monkeypa
     assert list(ranking["Feature"]) == ["prev_B", "prev_A", "Price|Carbon"]
     assert np.allclose(ranking["Importance"], [0.7, 0.2, 0.1])
     assert not (csv_dir / "feature_renaming.json").exists()
+
+
+def test_rows_with_an_unobserved_lag_are_dropped_and_other_gaps_kept():
+    from src.visualization.shap_xgb import drop_unobserved_lag_rows
+
+    frame = pd.DataFrame({
+        "Scenario": ["a", "b", "c", "d"],
+        "prev_A": [1.0, np.nan, 1.0, 1.0],
+        "prev2_A": [1.0, 1.0, np.nan, 1.0],
+        "Price|Carbon": [np.nan, 1.0, 1.0, 1.0],  # an exogenous gap is a real input
+    })
+    kept = drop_unobserved_lag_rows(frame, ["prev_A", "prev2_A", "Price|Carbon"])
+    assert list(kept["Scenario"]) == ["a", "d"]
+
+
+def test_frame_without_lag_features_is_returned_whole():
+    from src.visualization.shap_xgb import drop_unobserved_lag_rows
+
+    frame = pd.DataFrame({"Price|Carbon": [np.nan, 1.0]})
+    assert len(drop_unobserved_lag_rows(frame, ["Price|Carbon"])) == 2

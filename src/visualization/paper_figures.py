@@ -438,6 +438,7 @@ def _reconstruct_xgb(run_id: str, target: str) -> Tuple[np.ndarray, np.ndarray, 
     features, targets = list(splits["features"]), list(splits["targets"])
     test_data, _ = store.load_test_data()
     sampled = _sampled_region_frame(splits["X_test_with_index"], test_data["Region"], f"{run_id} SHAP region filter")
+    sampled = shap_xgb.drop_unobserved_lag_rows(sampled, features, log_prefix=f"{run_id} SHAP")
     X_test = sampled.drop(columns=NON_FEATURE_COLUMNS, errors="ignore").reset_index(drop=True)
 
     shap_values = np.load(os.path.join(_plots_dir(store), "shap_values.npy"))
@@ -528,7 +529,7 @@ def reconstruct_co2_shap(
     feature matrix that colours the dots is rebuilt the way that phase built it:
 
     * ``xgb``: ``scripts.train_xgb.derive_splits`` -> R10 region filter ->
-      scenario-group sampling; saved ``plots/shap_values.npy`` is then
+      scenario-group sampling -> rows with an unobserved lag dropped; saved ``plots/shap_values.npy`` is then
       normalised per target by ``shap_xgb.normalise_shap_values``.
     * ``lstm``: ``predictions.pkl`` horizon frame -> region filter -> sampling
       -> ``lstm_scaler_X`` -> sequence windows of the first 100 rows;

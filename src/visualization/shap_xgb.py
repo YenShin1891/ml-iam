@@ -1,6 +1,7 @@
 """SHAP plots for the XGBoost models."""
 import logging
 import os
+import re
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -28,7 +29,9 @@ from .helpers import (
     sample_scenario_groups,
 )
 
-__all__ = ['get_shap_values', 'normalise_shap_values', 'write_shap_rankings', 'draw_shap_plot', 'plot_xgb_shap']
+__all__ = ['get_shap_values', 'drop_unobserved_lag_rows', 'normalise_shap_values', 'write_shap_rankings', 'draw_shap_plot', 'plot_xgb_shap']
+
+_LAG_FEATURE = re.compile(r'^prev\d*_')
 
 
 def get_shap_values(run_id, X_test: pd.DataFrame, targets: Optional[List[str]] = None) -> np.ndarray:
@@ -59,6 +62,24 @@ def get_shap_values(run_id, X_test: pd.DataFrame, targets: Optional[List[str]] =
     np.save(os.path.join(get_run_root(run_id), "plots", "shap_values.npy"), shap_values)
     logging.info("SHAP values saved to shap_values.npy: shape %s", np.shape(shap_values))
     return shap_values
+
+
+def drop_unobserved_lag_rows(frame: pd.DataFrame, features: List[str], log_prefix: str = "XGB SHAP") -> pd.DataFrame:
+    """Rows of *frame* in which every lag feature is observed.
+
+    A lag is NaN where the scenario did not report that output at the earlier
+    timestep.  The rollout never sees such a row after its first step, since it
+    fills every lag slot with a prediction, so the attributions a NaN lag
+    collects describe an input the deployed model does not meet.
+    """
+    lag_cols = [f for f in features if _LAG_FEATURE.match(f) and f in frame.columns]
+    if not lag_cols:
+        return frame
+    observed = frame[lag_cols].notna().all(axis=1)
+    logging.info(
+        "%s: dropped %d of %d rows with an unobserved lag", log_prefix, int((~observed).sum()), len(frame),
+    )
+    return frame[observed]
 
 
 def normalise_shap_values(shap_values: np.ndarray) -> np.ndarray:
@@ -219,11 +240,17 @@ def plot_xgb_shap(
         X_joined = X_filtered.merge(group_keys, on=group_cols, how="inner")
     else:
         X_joined = X_filtered
+    # After sampling, so the seeded draw of scenario groups does not depend on
+    # which rows have a full lag history.
+    X_joined = drop_unobserved_lag_rows(X_joined, features)
+    if X_joined.empty:
+        logging.error("Skipping XGB SHAP plots: no row has every lag observed.")
+        return
 
     X_test = X_joined.drop(columns=NON_FEATURE_COLUMNS, errors="ignore").reset_index(drop=True)
 
     logging.info(
-        "XGB SHAP: %d rows after region+scenario filtering (%d -> %d groups by %s)",
+        "XGB SHAP: %d rows after region, scenario and lag filtering (%d -> %d groups by %s)",
         X_test.shape[0],
         total_groups,
         used_groups,
