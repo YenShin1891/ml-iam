@@ -393,6 +393,38 @@ class RunStore:
         return self._metrics_by_region_path(metrics_filename).exists()
 
     # ------------------------------------------------------------------
+    # Artifacts: the fill values of train-median imputation
+    # ------------------------------------------------------------------
+
+    def _imputation_medians_path(self) -> Path:
+        return self._artifacts_dir() / "imputation_medians.json"
+
+    def save_imputation_medians(self, medians: dict) -> None:
+        """Save preprocess.compute_train_medians() output.
+
+        Summary statistics only, so a published run can impute inputs it has
+        never seen without the training data beside it.
+        """
+        path = self._writable(self._imputation_medians_path())
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(medians, f, indent=2, sort_keys=True)
+        logging.info("Saved imputation medians to %s", path)
+
+    def load_imputation_medians(self) -> dict:
+        path = self._imputation_medians_path()
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Imputation medians not found at {path}. They are written by "
+                "scripts/export_run_bundle.py, or by scripts/predict.py when the run's "
+                "cached training data is present."
+            )
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def has_imputation_medians(self) -> bool:
+        return self._imputation_medians_path().exists()
+
+    # ------------------------------------------------------------------
     # Generic artifact (pickle — scalers, etc.)
     # ------------------------------------------------------------------
 

@@ -285,6 +285,94 @@ def add_missingness_indicators(
     return prepared, updated_features
 
 
+def _imputed_columns(features, time_known=None, categorical_columns=None) -> list:
+    """The continuous features imputation touches, in feature order."""
+    if time_known is None:
+        time_known = ["Year", "DeltaYears"]
+    if categorical_columns is None:
+        categorical_columns = CATEGORICAL_COLUMNS
+    excluded = set(categorical_columns) | set(time_known)
+    return [col for col in features if col not in excluded and not col.endswith("_is_missing")]
+
+
+def compute_train_medians(
+    train_df: pd.DataFrame,
+    features: list,
+    time_known: Optional[List[str]] = None,
+    categorical_columns: Optional[List[str]] = None,
+) -> dict:
+    """The fill values train-median imputation uses, as plain numbers.
+
+    ``{"by_scale": {scale: {feature: median}} or None, "global": {feature: median}}``.
+    *by_scale* is None when imputation is global (SCALE_AWARE_IMPUTATION off
+    or no Region_Scale column).  Kept apart from the filling so a run can
+    save these and impute inputs it has never seen (scripts/predict.py)
+    exactly as it imputed its own test set.
+    """
+    columns = _imputed_columns(features, time_known, categorical_columns)
+    use_scale = _data_flag("SCALE_AWARE_IMPUTATION") and "Region_Scale" in train_df.columns
+
+    global_medians = {}
+    for col in columns:
+        if col not in train_df.columns:
+            continue
+        med = pd.to_numeric(train_df[col], errors="coerce").median()
+        if pd.isna(med):
+            if not use_scale:
+                logging.warning("Column '%s' has all-NaN in train; filling with 0.0", col)
+            med = 0.0
+        global_medians[col] = float(med)
+
+    by_scale = None
+    if use_scale:
+        by_scale = {}
+        for scale in sorted(set(train_df["Region_Scale"].unique())):
+            scale_data = train_df[train_df["Region_Scale"] == scale]
+            medians = {}
+            for col in columns:
+                if col not in scale_data.columns:
+                    continue
+                med = pd.to_numeric(scale_data[col], errors="coerce").median()
+                if pd.notna(med):
+                    medians[col] = float(med)
+            by_scale[scale] = medians
+    return {"by_scale": by_scale, "global": global_medians}
+
+
+def apply_medians(
+    frame: pd.DataFrame,
+    medians: dict,
+    features: list,
+    time_known: Optional[List[str]] = None,
+    categorical_columns: Optional[List[str]] = None,
+) -> pd.DataFrame:
+    """Fill *frame*'s missing continuous features from :func:`compute_train_medians`.
+
+    In place, like the imputation it serves.  A Region_Scale the medians do
+    not cover falls back to the global median of each feature.
+    """
+    columns = _imputed_columns(features, time_known, categorical_columns)
+    by_scale = medians.get("by_scale")
+    global_medians = medians.get("global", {})
+
+    if by_scale is not None:
+        if "Region_Scale" not in frame.columns:
+            return frame
+        for scale in frame["Region_Scale"].unique():
+            mask = frame["Region_Scale"] == scale
+            s_medians = by_scale.get(scale, {})
+            for col in columns:
+                if col not in frame.columns:
+                    continue
+                fill_val = s_medians.get(col, global_medians.get(col, 0.0))
+                frame.loc[mask, col] = frame.loc[mask, col].fillna(fill_val)
+    else:
+        for col in columns:
+            if col in frame.columns and col in global_medians:
+                frame[col] = frame[col].fillna(global_medians[col])
+    return frame
+
+
 def impute_with_train_medians(
     train_df: pd.DataFrame,
     val_df: pd.DataFrame,
@@ -301,13 +389,6 @@ def impute_with_train_medians(
     median for features that are entirely NaN within a scale group.  Raises
     an error if a Region_Scale present in val/test has zero rows in train.
     """
-    if time_known is None:
-        time_known = ["Year", "DeltaYears"]
-    if categorical_columns is None:
-        categorical_columns = CATEGORICAL_COLUMNS
-
-    excluded = set(categorical_columns) | set(time_known)
-
     use_scale = (
         _data_flag("SCALE_AWARE_IMPUTATION")
         and "Region_Scale" in train_df.columns
@@ -327,58 +408,15 @@ def impute_with_train_medians(
                     f"Fix: check the split logic or the dataset — every Region_Scale must appear in the training set."
                 )
 
-        # Compute per-scale medians from train
-        scale_medians = {}
-        for scale in sorted(train_scales):
-            scale_data = train_df[train_df["Region_Scale"] == scale]
-            medians = {}
-            for col in features:
-                if col in excluded or col.endswith("_is_missing") or col not in scale_data.columns:
-                    continue
-                med = pd.to_numeric(scale_data[col], errors="coerce").median()
-                if pd.notna(med):
-                    medians[col] = med
-            scale_medians[scale] = medians
+    medians = compute_train_medians(train_df, features, time_known, categorical_columns)
+    for frame in (train_df, val_df, test_df):
+        apply_medians(frame, medians, features, time_known, categorical_columns)
 
-        # Also compute global medians as fallback for features missing within a scale
-        global_medians = {}
-        for col in features:
-            if col in excluded or col.endswith("_is_missing") or col not in train_df.columns:
-                continue
-            med = pd.to_numeric(train_df[col], errors="coerce").median()
-            global_medians[col] = med if pd.notna(med) else 0.0
-
-        # Apply imputation per scale
-        for frame in (train_df, val_df, test_df):
-            if "Region_Scale" not in frame.columns:
-                continue
-            for scale in frame["Region_Scale"].unique():
-                mask = frame["Region_Scale"] == scale
-                s_medians = scale_medians.get(scale, {})
-                for col in features:
-                    if col in excluded or col.endswith("_is_missing") or col not in frame.columns:
-                        continue
-                    fill_val = s_medians.get(col, global_medians.get(col, 0.0))
-                    frame.loc[mask, col] = frame.loc[mask, col].fillna(fill_val)
-
+    if use_scale:
         logging.info(
             "Scale-aware imputation applied across %d Region_Scale groups: %s",
             len(train_scales), sorted(train_scales),
         )
-    else:
-        # Original global imputation
-        for col in features:
-            if col in excluded or col.endswith("_is_missing"):
-                continue
-            if col not in train_df.columns:
-                continue
-            median_value = pd.to_numeric(train_df[col], errors="coerce").median()
-            if pd.isna(median_value):
-                logging.warning("Column '%s' has all-NaN in train; filling with 0.0", col)
-                median_value = 0.0
-            for frame in (train_df, val_df, test_df):
-                if col in frame.columns:
-                    frame[col] = frame[col].fillna(median_value)
 
     return train_df, val_df, test_df
 
@@ -561,7 +599,18 @@ def load_and_process_data(version=None) -> pd.DataFrame:
         raise FileNotFoundError(hint)
         
     logging.info(f"Reading processed dataset: {dataset_path}")
-    processed_series = pd.read_csv(dataset_path)
+    return pivot_processed_series(pd.read_csv(dataset_path))
+
+
+def pivot_processed_series(processed_series: pd.DataFrame, register_regions: bool = True) -> pd.DataFrame:
+    """One row per (series, Year) with a column per Variable.
+
+    *processed_series* is the wide table ``make process-data`` writes: the
+    identifier columns, ``Variable`` and one column per year.  Tables in the
+    same layout from elsewhere (scripts/predict.py) come through here too;
+    they pass ``register_regions=False`` so a handful of new scenarios does
+    not redefine the region list the run was trained with.
+    """
     # Identify year and non-year columns robustly
     all_cols = list(processed_series.columns)
     year_cols = [c for c in all_cols if str(c).isdigit()]
@@ -591,7 +640,7 @@ def load_and_process_data(version=None) -> pd.DataFrame:
 
     # Derive REGION_CATEGORIES from the actual data so embeddings always
     # cover every region present, regardless of target-filtering changes.
-    if 'Region' in var_pivoted.columns:
+    if register_regions and 'Region' in var_pivoted.columns:
         set_region_categories(var_pivoted['Region'])
 
     return var_pivoted
