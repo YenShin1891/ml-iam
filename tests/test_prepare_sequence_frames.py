@@ -68,3 +68,22 @@ def test_derive_splits_returns_these_frames(monkeypatch):
     assert splits["features"] == ["x"] and splits["targets"] == ["y"]
     assert seen["assignment"] is None
     assert {"tft_target_offset", "tft_min_encoder_length", "tft_max_encoder_length", "tft_time_idx_column"} <= set(splits)
+
+
+def test_a_resampling_that_the_unobserved_row_drop_undoes_is_reported(prepared_frame, monkeypatch, caplog):
+    import configs.data as data_config
+
+    monkeypatch.setattr(preprocess, "OUTPUT_VARIABLES", ["A", "B"])
+    monkeypatch.setattr(data_config, "KEEP_PARTIAL_TARGETS", True)
+    monkeypatch.setattr(data_config, "IMPUTE_IRREGULAR_INTERVALS", True)
+    monkeypatch.setattr(data_config, "INTERPOLATE_TARGETS", False)
+    monkeypatch.setattr(data_config, "NORMALIZE_TARGETS_BY_POPULATION", False)
+    # M0 reports every ten years; every other group keeps its five-year steps.
+    frame = prepared_frame[(prepared_frame["Model"] != "M0") | prepared_frame["Year"].isin([2020, 2030])]
+
+    with caplog.at_level("INFO"):
+        prepared, _, _ = preprocess.prepare_features_and_targets_sequence(frame.copy())
+
+    assert "inserted 1 rows with no observed target" in caplog.text
+    assert "IMPUTE_IRREGULAR_INTERVALS has no effect: 1 of the 1 rows" in caplog.text
+    assert sorted(prepared.loc[prepared["Model"] == "M0", "Year"]) == [2020, 2030]

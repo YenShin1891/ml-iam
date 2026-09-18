@@ -132,7 +132,8 @@ KEEP_PARTIAL_TARGETS = True
 
 # When True, resample groups that have only 10- or 20-year intervals onto a
 # uniform 5-year grid by inserting intermediate rows with interpolated values.
-# Inserted rows get __observed = 0 so they are masked in loss and metrics,
-# just like other unobserved targets.  This is an alternative to relying on
-# DeltaYears to encode irregular spacing.
+# Inserted rows get __observed = 0.  With KEEP_PARTIAL_TARGETS they are then
+# dropped again with every other row that has no observed target, so the flag
+# changes nothing the models see (the sequence prep logs a warning saying so);
+# it only takes effect when KEEP_PARTIAL_TARGETS is False.
 IMPUTE_IRREGULAR_INTERVALS = True

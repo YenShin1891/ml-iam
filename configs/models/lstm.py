@@ -9,20 +9,21 @@ class LSTMTrainerConfig:
     """Training configuration for LSTM model, following TFT pattern."""
 
     # Model architecture
-    hidden_size: int = 128
-    num_layers: int = 2
-    dropout: float = 0.1
+    # Tunable defaults are the previous search's winner (lstm_89).
+    hidden_size: int = 328
+    num_layers: int = 3
+    dropout: float = 0.2817897033573976
     bidirectional: bool = False
 
     # Categorical embeddings
     embedding_dim: int = 16
 
     # Dense layers after LSTM
-    dense_hidden_size: int = 64
-    dense_dropout: float = 0.1
+    dense_hidden_size: int = 48
+    dense_dropout: float = 0.0830681252451273
 
     # Training parameters
-    learning_rate: float = 0.01
+    learning_rate: float = 0.00035721241710283896
     batch_size: int = 128
     max_epochs: int = 100
     patience: int = 5
@@ -35,7 +36,7 @@ class LSTMTrainerConfig:
 
     # Optimizer
     optimizer: str = "adam"
-    weight_decay: float = 0
+    weight_decay: float = 4.2088678254142294e-08
 
     # Scheduler
     scheduler: Optional[str] = None

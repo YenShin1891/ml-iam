@@ -11,6 +11,7 @@ installation keep working without the deep-learning stack.
 
 import datetime
 import logging
+import re
 import math
 from dataclasses import dataclass
 from itertools import product
@@ -96,9 +97,9 @@ def raw_feature_names(features: Sequence[str]) -> List[str]:
 def load_prepared_run(store: RunStore) -> PreparedRun:
     """Rebuild the run's train/val/test frames from its cached data and split.
 
-    The chain is the one the TFT phases run, so a trajectory's rows here are
-    the rows the test phase predicted from.  Refuses a run without a saved
-    split rather than deriving one: probing must never write into a run.
+    Sequence models use the same imputed frames as their test phases. XGB
+    keeps missing inputs and leading history for its autoregressive seed.
+    Refuses a run without a saved split: probing must never write into a run.
     """
     if not store.has_splits():
         raise FileNotFoundError(
@@ -106,7 +107,21 @@ def load_prepared_run(store: RunStore) -> PreparedRun:
             "re-run its preprocess phase."
         )
     data = store.load_processed_data()
-    frames = prepare_sequence_frames(data, store.load_splits())
+    if store.run_id.startswith("xgb_"):
+        from src.data.preprocess import SequenceFrames, prepare_features_and_targets, split_data
+
+        saved_features, targets = store.load_features()
+        n_lags = max(int(match.group(1) or 1) for f in saved_features if (match := re.match(r"prev(\d*)_", f)))
+        rows, _, _ = prepare_features_and_targets(data, lag_required=False, n_lags=n_lags)
+        # Lag inputs belong to the autoregressive model, not to the sliders.
+        inputs = [f for f in saved_features if not re.match(r"prev\d*_", f)]
+        for feature in raw_feature_names(inputs):
+            rows[f"{feature}_is_missing"] = rows[feature].isna().astype(float)
+        rows["Step"] = rows.groupby(GROUP_KEYS, observed=True).cumcount()
+        train, val, test = split_data(rows, assignment=store.load_splits())
+        frames = SequenceFrames(train, val, test, inputs, targets)
+    else:
+        frames = prepare_sequence_frames(data, store.load_splits())
 
     parts = []
     for name in ("train", "val", "test"):
@@ -569,21 +584,45 @@ def apply_levers(
 ) -> pd.DataFrame:
     """The trajectory with each edited input replaced by its anchored path.
 
-    Only the named feature columns change, and only after the fixed history;
-    ids, targets, masks, indicators and the time index stay as they were.
+    MER is the GDP lever: PPP follows its relative change in raw units.
+    History, identifiers, targets and missingness indicators stay unchanged.
     """
+    group_keys = [key for key in GROUP_KEYS if key in rows]
+    if group_keys:
+        groups = rows.groupby(group_keys, sort=False, dropna=False).indices
+        if len(groups) > 1:
+            parts = []
+            for positions in groups.values():
+                part = apply_levers(rows.iloc[positions], edits, history_steps)
+                part.index = positions
+                parts.append(part)
+            combined = pd.concat(parts).sort_index()
+            combined.index = rows.index
+            return combined
     out = rows.copy()
     years = [int(y) for y in out["Year"]]
     history_years = years[:history_steps]
     for feature, anchors in edits.items():
-        if feature not in out.columns or not anchors:
+        if feature == "GDP|PPP" or feature not in out.columns or not anchors:
             continue
         baseline = pd.Series(pd.to_numeric(out[feature], errors="coerce").to_numpy(dtype=float), index=years)
         path = interpolate_lever_path(years, history_years, baseline, anchors)
         column = pd.Series(path, index=out.index)
-        if pd.api.types.is_numeric_dtype(out[feature]):
+        if pd.api.types.is_float_dtype(out[feature]):
             column = column.astype(out[feature].dtype)
         out[feature] = column
+    if edits.get("GDP|MER") and {"GDP|MER", "GDP|PPP"} <= set(rows.columns):
+        mer_source = pd.to_numeric(rows["GDP|MER"], errors="coerce")
+        ppp_source = pd.to_numeric(rows["GDP|PPP"], errors="coerce")
+        forecast = rows["Year"].astype(int) > max(history_years)
+        zero = forecast & mer_source.eq(0)
+        if zero.any():
+            identity = {key: rows[key].iloc[0] for key in group_keys}
+            logging.warning("GDP linkage skipped: source MER is zero for %s at years %s; PPP retained", identity, rows.loc[zero, "Year"].tolist())
+        valid = forecast & mer_source.ne(0) & np.isfinite(mer_source) & np.isfinite(ppp_source) & np.isfinite(out["GDP|MER"])
+        derived = ppp_source.copy().astype(float)
+        derived.loc[valid] = ppp_source.loc[valid] * (out.loc[valid, "GDP|MER"] / mer_source.loc[valid])
+        out["GDP|PPP"] = derived
     return out
 
 

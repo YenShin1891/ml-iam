@@ -94,7 +94,7 @@ CAVEAT = (
 
 @st.cache_resource(show_spinner="Loading the emulator…")
 def _engine(run_id: str):
-    from src.inference.tft_predict import load_engine
+    from src.inference.engines import load_engine
 
     return load_engine(run_id, map_location=WHATIF_ACCELERATOR)
 
@@ -115,12 +115,14 @@ def _region_table(run_id: str) -> Optional[pd.DataFrame]:
         return region_metrics_from_predictions(
             run_id, state.horizon_df, state.horizon_y_true, state.preds, state.targets
         )
+    if all(state.get(key) is not None for key in ("test_data", "y_test", "preds", "targets")):
+        return region_metrics_from_predictions(run_id, state.test_data, state.y_test, state.preds, state.targets)
     return None
 
 
 @st.cache_data(show_spinner=False)
 def _candidates(run_id: str, region: str):
-    return candidate_baselines(_prepared(run_id), region)
+    return candidate_baselines(_prepared(run_id), region, min_steps=_engine(run_id).min_steps)
 
 
 @st.cache_data(show_spinner=False)
@@ -138,9 +140,17 @@ def _ar6_band(run_id: str, region: str) -> pd.DataFrame:
     return ar6_target_bands(frame[frame["Region"] == region], prepared.targets)
 
 
+@st.cache_data(show_spinner="Selecting source scenarios…")
+def _comparison_sources(run_id, region, history_steps, min_steps, preferred):
+    return comparison_sources(
+        _prepared(run_id), region, _bands(run_id, region),
+        WHATIF_COMBINATION_DEFAULTS, history_steps, min_steps, preferred,
+    )
+
+
 @st.cache_data(show_spinner="Emulating the unchanged inputs…")
 def _baseline_prediction(run_id: str, region: str, model: str, scenario: str) -> pd.DataFrame:
-    from src.inference.tft_predict import predict_windows
+    from src.inference.engines import predict_windows
 
     rows = baseline_rows(_prepared(run_id), region, model, scenario)
     return predict_windows(_engine(run_id), rows)
@@ -166,7 +176,8 @@ def _bump_generation() -> None:
 
 
 def _widget_key(name: str) -> str:
-    return f"whatif_w_{st.session_state.whatif_gen}_{name}"
+    run_id = st.session_state.get("current_run_id", "preview")
+    return f"whatif_w_{run_id}_{st.session_state.get('whatif_gen', 0)}_{name}"
 
 
 def _specs() -> Dict[str, LeverSpec]:
@@ -174,6 +185,11 @@ def _specs() -> Dict[str, LeverSpec]:
 
 
 def _on_multiplier_change(feature: str, key: str) -> None:
+    # A delayed browser event can arrive after switching runs cleared these.
+    if (key != _widget_key(f"{feature}_mult")
+            or feature not in st.session_state.get("whatif_specs", {})
+            or key not in st.session_state or "whatif_edits" not in st.session_state):
+        return
     spec = _specs()[feature]
     multiplier = float(st.session_state[key])
     edits = st.session_state.whatif_edits
@@ -186,6 +202,10 @@ def _on_multiplier_change(feature: str, key: str) -> None:
 
 
 def _on_anchor_change(feature: str, year: int, key: str) -> None:
+    if (key != _widget_key(f"{feature}_{year}")
+            or feature not in st.session_state.get("whatif_specs", {})
+            or key not in st.session_state or "whatif_edits" not in st.session_state):
+        return
     spec = _specs()[feature]
     edits = st.session_state.whatif_edits
     anchors = edits.setdefault(feature, {y: b.base for y, b in spec.anchors.items()})
@@ -201,6 +221,8 @@ def _on_anchor_change(feature: str, year: int, key: str) -> None:
 
 
 def _apply_preset(name: str) -> None:
+    if not st.session_state.get("whatif_specs") or "whatif_edits" not in st.session_state:
+        return
     specs = list(_specs().values())
     # Each pair controls one input. Preserve choices made in the other pairs.
     st.session_state.whatif_edits.update(preset_edits(WHATIF_PRESETS[name], specs))
@@ -319,7 +341,7 @@ def _render_controls(specs: List[LeverSpec], anchor_years: List[int]) -> None:
                     help=None if available else "This baseline does not have a movable input for this preset.",
                 )
     st.button("Reset levers", key="whatif_reset", on_click=_reset_levers)
-    st.caption("GDP MER starts from the selected IAM scenario's original time series.")
+    st.caption("GDP MER controls both GDP inputs. PPP follows the same relative change at each forecast year; source PPP/MER ratios and historical values are preserved.")
 
     advanced = st.toggle(
         "Unlock per-decade anchors", key="whatif_advanced",
@@ -329,6 +351,22 @@ def _render_controls(specs: List[LeverSpec], anchor_years: List[int]) -> None:
         _render_anchor_controls(specs, anchor_years)
     else:
         _render_multiplier_controls(specs)
+
+
+def _render_gdp_values(rows, history_steps):
+    if not {"GDP|MER", "GDP|PPP"} <= set(rows.columns):
+        return
+    edited = apply_levers(rows, st.session_state.whatif_edits, history_steps)
+    with st.expander("GDP values · PPP follows MER", expanded=False):
+        st.caption("Read-only values in the source scenario's units, before model scaling. PPP = source PPP × edited MER / source MER. When source MER is zero, PPP stays unchanged and the skip is logged.")
+        st.dataframe(pd.DataFrame({
+            "Year": rows["Year"].to_numpy(),
+            "Period": ["Fixed history" if i < history_steps else "Forecast" for i in range(len(rows))],
+            "MER · source": rows["GDP|MER"].to_numpy(),
+            "MER · edited": edited["GDP|MER"].to_numpy(),
+            "PPP · source": rows["GDP|PPP"].to_numpy(),
+            "PPP · derived": edited["GDP|PPP"].to_numpy(),
+        }), hide_index=True, use_container_width=True)
 
 
 def _render_overlay(specs: List[LeverSpec]) -> None:
@@ -359,7 +397,7 @@ def _render_overlay(specs: List[LeverSpec]) -> None:
 def _render_run(run_id, engine, prepared, region, candidate, rows, history_steps, specs, region_r2, on_plot_saved) -> None:
     edits = st.session_state.whatif_edits
     if st.button("Run emulator", type="primary", key="whatif_run"):
-        from src.inference.tft_predict import check_vocabulary, predict_windows
+        from src.inference.engines import check_vocabulary, predict_windows
 
         problems = check_vocabulary(engine, rows)
         if problems:
@@ -417,9 +455,7 @@ def _render_combinations(run_id, engine, prepared, region, candidate, rows, hist
     chosen = list(WHATIF_COMBINATION_DEFAULTS)
     year = WHATIF_DISTRIBUTION_YEAR
     outputs = [t for t in WHATIF_COMPARISON_OUTPUTS if t in prepared.targets]
-    sources, unavailable = comparison_sources(
-        prepared, region, _bands(run_id, region), chosen, history_steps, engine.min_steps, candidate.key,
-    )
+    sources, unavailable = _comparison_sources(run_id, region, history_steps, engine.min_steps, candidate.key)
     if unavailable:
         st.info("No source with all four movable inputs in: " + ", ".join(unavailable) + ". These groups are not included.")
     if not sources:
@@ -431,7 +467,7 @@ def _render_combinations(run_id, engine, prepared, region, candidate, rows, hist
         f"All {per_group} High/Low combinations for each baseline group: {count} paths plus the original emulations. "
         "The panels on the right compare AR6 and generated values in 2050."
     )
-    st.caption("Each run uses the full model input set. Only carbon price, solar cost, population and GDP MER vary; all other inputs retain their starting scenario's values.")
+    st.caption("Each run uses the full model input set. Carbon price, solar cost, population and GDP MER are the four independent factors. PPP follows MER proportionally at each forecast year; other inputs retain their starting scenario's values.")
     with st.expander("How to read this chart", expanded=False):
         st.caption("This panel only explains the chart. Opening it does not change any settings or results.")
         st.caption(
@@ -441,28 +477,30 @@ def _render_combinations(run_id, engine, prepared, region, candidate, rows, hist
             "- **Filled area:** the minimum to maximum generated value at each year. It is not a confidence interval.\n"
             "- **Color shades:** the starting scenario's AR6 category group (C1–4, C5–6 or C7–8). Overlapping lines and areas look darker; darkness is not a probability.\n\n"
             "**Right: compare the outcomes in 2050**\n\n"
-            "- **AR6, left box:** reported values from the original scenarios in that group and region.\n"
-            "- **Synthetic, right box:** values from the generated High/Low combinations.\n"
+            "- **AR6, left box:** values observed at exactly 2050 from available IAM families in the same category and region. This comparison is not restricted to the starting scenario’s IAM family.\n"
+            "- **High/Low, right box:** values from the 16 runs generated from one starting scenario in that category. Its Model_Family input remains unchanged.\n"
             "- **Black diamond:** the unchanged emulation in 2050. Each box shows the median and middle 50%; whiskers span the 5th–95th percentiles.\n\n"
             "The group labels describe the starting scenarios. The generated paths have not been assigned new climate categories."
         )
     with st.expander("View data sources", expanded=False):
-        st.write("These are the starting scenarios used to generate the colored paths. They are chosen automatically; there is nothing to select here.")
+        st.caption("**Inputs to the emulator:** one starting IAM scenario per category. The family below is the Model_Family input supplied to the emulator; it stays fixed across that scenario’s 16 runs.")
+        st.caption("**AR6 reference:** observed 2050 values from available IAM families in the same category and region. These boxes are not restricted to the families listed below.")
         if run_id == "preview":
             st.info("Preview only: the model and scenario names below are fictional examples, not real AR6 sources.")
         st.dataframe(pd.DataFrame([
-            {"Chart group": group, "Source IAM": selected.model, "Starting scenario": selected.scenario,
+            {"Category": group, "IAM family input": str(source_rows["Model_Family"].iloc[0]),
+             "IAM model": selected.model, "Starting scenario": selected.scenario,
              "Generated paths": per_group}
-            for group, (selected, _, _) in sources.items()
+            for group, (selected, source_rows, _) in sources.items()
         ]), hide_index=True, use_container_width=True)
-        st.caption("One source per group must report all four inputs and have enough data for the emulator. Other inputs retain their source values. Source names are provided so you can trace where the chart starts, not as settings you need to choose.")
+        st.caption("One source per group must report all four inputs and have enough data for the emulator. PPP follows MER; other inputs retain their source values. Source names are provided so you can trace where the chart starts, not as settings you need to choose.")
     signature = (run_id, region, tuple((g, c.key) for g, (c, _, _) in sources.items()), tuple(chosen))
     saved = st.session_state.get("whatif_combinations")
     if saved is not None and (saved["signature"] != signature or "ensembles" not in saved):
         st.session_state.whatif_combinations = None
         saved = None
     if st.button("Run all High/Low combinations", key="whatif_run_combinations", type="primary", disabled=not chosen or not outputs or not sources):
-        from src.inference.tft_predict import check_vocabulary, predict_windows
+        from src.inference.engines import check_vocabulary, predict_windows
 
         problems = [f"{group}: {problem}" for group, (_, source_rows, _) in sources.items() for problem in check_vocabulary(engine, source_rows)]
         if problems:
@@ -546,7 +584,7 @@ def render_whatif_view(run_id: str, on_plot_saved: Optional[Callable[[], None]] 
 
     model_type = run_id.split("_", 1)[0]
     if model_type not in WHATIF_ENGINES:
-        st.info("Live emulation is available for TFT runs only; the XGB and LSTM engines are not wired up yet.")
+        st.info("Live emulation is available for TFT, LSTM and XGB runs.")
         return
     try:
         engine = _engine(run_id)
@@ -576,6 +614,9 @@ def render_whatif_view(run_id: str, on_plot_saved: Optional[Callable[[], None]] 
         return
     hidden = len(gated) - len(offered)
 
+    if st.session_state.get("whatif_gdp_linkage") != "source-ratio-v1":
+        _invalidate_result()
+        st.session_state.whatif_gdp_linkage = "source-ratio-v1"
     _state_default("whatif_gen", 0)
     _state_default("whatif_edits", {})
     _state_default("whatif_preset", None)
@@ -646,6 +687,7 @@ def render_whatif_view(run_id: str, on_plot_saved: Optional[Callable[[], None]] 
     )
 
     _render_controls(specs, anchor_years)
+    _render_gdp_values(rows, history_steps)
     _render_overlay(specs)
     _render_run(run_id, engine, prepared, region, candidate, rows, history_steps, specs, region_row[R2_COLUMN], on_plot_saved)
     _render_combinations(run_id, engine, prepared, region, candidate, rows, history_steps, specs, region_row[R2_COLUMN], on_plot_saved)

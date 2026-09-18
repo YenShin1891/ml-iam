@@ -5,15 +5,14 @@ from configs.data import OUTPUT_VARIABLES
 # When the URL has just ?run_id=xgb (or lstm, tft), resolve to these defaults.
 # Update these when you have a new best run for each model.
 DEFAULT_RUNS = {
-    "xgb": "xgb_76",
-    "lstm": "lstm_76",
-    "tft": "tft_94",
+    "xgb": "xgb_85",
+    "lstm": "lstm_89",
+    "tft": "tft_95",
 }
 
 # ── What-if emulator view ─────────────────────────────────────────────────
-# Model types the view can run live.  XGB rolls out autoregressively and the
-# LSTM predicts fixed windows; neither has an engine here yet.
-WHATIF_ENGINES = {"tft"}
+# Model types supported by the saved-checkpoint CPU inference adapters.
+WHATIF_ENGINES = {"tft", "lstm", "xgb"}
 
 # The model is loaded and run on this accelerator.  "cpu" keeps the dashboard
 # off the GPUs a training job on the same host may be using.

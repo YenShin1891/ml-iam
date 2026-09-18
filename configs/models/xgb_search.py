@@ -16,17 +16,21 @@ from src.trainers.search import (
 class XGBDefaultParams:
     """Default XGBoost hyperparameters used when search is skipped.
 
-    The previous search's winner; independent of the space below.  No round
-    count: like a searched run, the final fit early-stops on the validation
-    set rather than training for a number fixed in advance.
+    The previous search's winner (xgb_85); independent of the space below.
+    No round count: like a searched run, the final fit early-stops on the
+    validation set rather than training for a number fixed in advance.
     """
 
-    max_depth: int = 9
-    min_child_weight: int = 10
-    gamma: float = 0.0
-    eta: float = 0.1
-    reg_alpha: float = 1.0
-    reg_lambda: float = 10.0
+    max_depth: int = 17
+    min_child_weight: int = 3
+    gamma: float = 0.05988567454877808
+    eta: float = 0.03323227712717957
+    reg_alpha: float = 0.0006118466600411781
+    reg_lambda: float = 24.067485967955477
+    subsample: float = 0.8145098177471501
+    colsample_bytree: float = 0.8968951911726731
+    # Context length, not a booster argument; see XGBSearchSpace.
+    n_lags: int = 2
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -36,6 +40,9 @@ class XGBDefaultParams:
             "eta": self.eta,
             "reg_alpha": self.reg_alpha,
             "reg_lambda": self.reg_lambda,
+            "subsample": self.subsample,
+            "colsample_bytree": self.colsample_bytree,
+            "n_lags": self.n_lags,
         }
 
 

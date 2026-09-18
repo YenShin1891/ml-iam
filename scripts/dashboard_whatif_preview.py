@@ -17,7 +17,7 @@ import streamlit as st
 from configs.dashboard import WHATIF_COMBINATION_DEFAULTS, WHATIF_KEY_LEVERS, WHATIF_COMPARISON_OUTPUTS, WHATIF_DISTRIBUTION_YEAR
 from configs.data import OUTPUT_VARIABLES
 from scripts import dashboard_whatif as view
-from src.inference import tft_predict
+from src.inference import engines
 from src.inference.whatif import (
     WHATIF_CATEGORY_GROUPS, PreparedRun, BaselineCandidate, apply_levers, assemble_result, build_lever_specs,
     ar6_distribution_samples, baseline_rows, candidate_baselines, high_low_combinations, lever_bands, resolve_anchor_years,
@@ -207,6 +207,7 @@ def main():
     view._state_default("whatif_saved", None)
     st.session_state.whatif_specs = {spec.feature: spec for spec in specs}
     view._render_controls(specs, anchor_years)
+    view._render_gdp_values(rows, 3)
     view._render_overlay(specs)
     # Only this separate preview entry point replaces inference with drawing data.
     def source_for(frame):
@@ -219,11 +220,12 @@ def main():
     if "preview_output_dir" not in st.session_state:
         st.session_state.preview_output_dir = tempfile.mkdtemp(prefix="mliam-preview-")
     with patch.object(view, "_baseline_prediction", side_effect=predict_baseline), \
+         patch.object(view, "_prepared", return_value=prepared), \
          patch.object(view, "save_whatif_outputs", partial(save_whatif_outputs, output_dir=st.session_state.preview_output_dir)), \
          patch.object(view, "_ar6_band", return_value=None), \
          patch.object(view, "_bands", return_value=lever_bands(prepared.frame, prepared.raw_features)), \
-         patch.object(tft_predict, "check_vocabulary", return_value=[]), \
-         patch.object(tft_predict, "predict_windows", side_effect=lambda _engine, frame: illustrative_prediction(frame, source_for(frame))):
+         patch.object(engines, "check_vocabulary", return_value=[]), \
+         patch.object(engines, "predict_windows", side_effect=lambda _engine, frame: illustrative_prediction(frame, source_for(frame))):
         view._render_run("preview", engine, prepared, "World", candidate, rows, 3, specs, float("nan"), None)
         view._render_combinations("preview", engine, prepared, "World", candidate, rows, 3, specs, float("nan"), None)
     if st.session_state.get("whatif_combinations") is None:

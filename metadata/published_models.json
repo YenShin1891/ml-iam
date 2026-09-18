@@ -1,0 +1,26 @@
+{
+  "_comment": "Trained runs published with the paper. scripts/fetch_models.py reads this file; scripts/export_run_bundle.py produces the archives and their checksums.",
+  "doi": "10.5281/zenodo.22828667",
+  "zenodo_record": "22828667",
+  "url_template": "https://zenodo.org/records/{record}/files/{name}?download=1",
+  "models": {
+    "xgb_85": {
+      "archive": "xgb_85.tar.gz",
+      "sha256": "78b5cad6c214241f7b3d69001ce0d630579e75beac5b0b5d3a456fe7c6ddabe5",
+      "bytes": 24385417,
+      "description": "XGBoost, autoregressive; needs target history at the first timesteps"
+    },
+    "lstm_89": {
+      "archive": "lstm_89.tar.gz",
+      "sha256": "532cf3e8d6d47a445b909f9baf9d9722a80174975979abfc29808285efb454f0",
+      "bytes": 8684884,
+      "description": "LSTM; reads input variables only"
+    },
+    "tft_95": {
+      "archive": "tft_95.tar.gz",
+      "sha256": "3ba21606b859b0968ae446f82ef64956967915c35f963fdb7e1fd178a5e8939d",
+      "bytes": 55549866,
+      "description": "Temporal Fusion Transformer; reads input variables only, needs 15 timesteps"
+    }
+  }
+}

@@ -3,6 +3,7 @@
 import datetime
 import json
 import os
+import textwrap
 from typing import Mapping, Optional, Sequence, Tuple
 
 import matplotlib.pyplot as plt
@@ -60,9 +61,9 @@ def _style_result_axis(axis):
         spine.set_linewidth(.8)
 
 
-def _result_legend(fig, handles, labels=None):
+def _result_legend(fig, handles, labels=None, *, bottom=.12):
     fig.legend(handles=handles, labels=labels, loc="lower center",
-               bbox_to_anchor=(.5, .12 / fig.get_figheight()), ncol=3,
+               bbox_to_anchor=(.5, bottom / fig.get_figheight()), ncol=3,
                fontsize=CHART_LEGEND_SIZE, frameon=False, columnspacing=2)
 
 
@@ -83,9 +84,22 @@ def plot_whatif_comparison(ensembles, reference_samples=None, *, year=2050, targ
         raise ValueError("Every selected output must be present in every ensemble.")
     ncols = min(2, len(targets))
     nrows = (len(targets) + ncols - 1) // ncols
-    fig = plt.figure(figsize=(9 * ncols, 4.0 * nrows + 1.5))
+    families = list(dict.fromkeys(bundle["original"].model_family for bundle in ensembles.values()))
+    family_label = ", ".join(families)
+    caption_parts = [
+        f"{first.run_id.split('_', 1)[0].upper()} uses {family_label} scenario inputs, keeping the IAM family fixed for each set of High/Low runs.",
+        f"AR6 boxes use values observed at {year} in the same category and region, across available IAM families.",
+        "Categories describe the starting scenarios; generated paths have not been assigned new climate categories.",
+        "Boxes: median / IQR; whiskers: 5–95%.  n = AR6 scenarios / High–Low runs.",
+    ]
+    caption = "\n".join(textwrap.fill(part, width=130 if ncols == 2 else 64) for part in caption_parts)
+    caption_height = .3 * len(caption.splitlines()) + .25
+    use_empty_slot = ncols == 2 and len(targets) % ncols != 0
+    legend_space = 0 if use_empty_slot else (1.4 if ncols == 2 else 2.8)
+    bottom_space = caption_height + 1.0 + legend_space
+    fig = plt.figure(figsize=(9 * ncols, 4.0 * nrows + bottom_space - 1))
     height = fig.get_figheight()
-    outer = fig.add_gridspec(nrows, ncols, left=.07, right=.985, top=1 - 1.5 / height, bottom=1.8 / height, hspace=.28, wspace=.24)
+    outer = fig.add_gridspec(nrows, ncols, left=.07, right=.985, top=1 - .8 / height, bottom=bottom_space / height, hspace=.28, wspace=.24)
     groups = list(ensembles)
     for i, target in enumerate(targets):
         pair = outer[i // ncols, i % ncols].subgridspec(1, 2, width_ratios=[1.4, 1], wspace=.08)
@@ -146,7 +160,7 @@ def plot_whatif_comparison(ensembles, reference_samples=None, *, year=2050, targ
             text_y = max(anchor_y + 5 * pixels_per_point, previous_y + 17 * pixels_per_point)
             label.set_position((-5, (text_y - anchor_y) / pixels_per_point))
             previous_y = text_y
-        for axis, heading in ((ax, "Synthetic time series"), (dist, f"{year} distribution")):
+        for axis, heading in ((ax, "High/Low time series"), (dist, f"{year} distribution")):
             axis.text(.03, .97, heading, transform=axis.transAxes, va="top", fontsize=18,
                       zorder=10, bbox=dict(facecolor="white", edgecolor="none", alpha=.8, pad=2))
         ax.text(-.17, 1.02, chr(97 + i), transform=ax.transAxes, fontsize=19, fontweight="bold")
@@ -156,18 +170,32 @@ def plot_whatif_comparison(ensembles, reference_samples=None, *, year=2050, targ
         dist.set_xticks(range(len(groups)))
         dist.set_xticklabels(groups, fontsize=CHART_TICK_SIZE)
         dist.set_xlim(-.55, len(groups) - .45)
-        dist.set_xlabel("Source group", fontsize=CHART_LABEL_SIZE)
+        dist.set_xlabel("Category", fontsize=CHART_LABEL_SIZE)
         dist.tick_params(axis="y", labelleft=False)
         for axis in (ax, dist):
             _style_result_axis(axis)
-    handles = [Line2D([], [], color="#65829b", linewidth=.8, label="Every High/Low path (shading: full range)"),
-               Line2D([], [], color="#444444", linestyle="--", label="Original emulation"),
-               Line2D([], [], marker="s", markerfacecolor="white", markeredgecolor="#65829b", linestyle="", label="AR6 (left box)"),
-               Line2D([], [], marker="s", color="#65829b", linestyle="", label="Synthetic (right box)"),
-               Line2D([], [], marker="D", color="#202020", linestyle="", label=f"Original at {year}")]
-    _result_legend(fig, handles)
-    fig.suptitle(f"{first.region} · High/Low combinations and AR6 comparison", fontsize=26, y=1 - .12 / height)
-    fig.text(.5, 1 - .68 / height, "Groups follow the source baseline; generated paths have not been reclassified.\nBoxes: median / IQR; whiskers: 5–95%; n: AR6 / generated samples.", ha="center", va="top", fontsize=16, color="#555555")
+    line_handles = [
+        Line2D([], [], color="#65829b", linewidth=1, label="High/Low runs"),
+        Patch(facecolor="#65829b", alpha=.2, label="Generated min–max range"),
+        Line2D([], [], color="#444444", linestyle="--", label="Baseline (unchanged inputs)"),
+    ]
+    box_handles = [
+        Patch(facecolor="white", edgecolor="#65829b", label="AR6 · across IAM families (left)"),
+        Patch(facecolor="#65829b", label="High/Low · starting scenario (right)"),
+        Line2D([], [], marker="D", color="#202020", linestyle="", label="Baseline (unchanged inputs)"),
+    ]
+    if use_empty_slot:
+        slot = outer[-1, -1].get_position(fig)
+        positions = [(slot.x0 + .02, slot.y1), (slot.x0 + .02, slot.y1 - 1.5 / height)]
+    else:
+        top = (caption_height + legend_space + .3) / height
+        positions = [(.07, top), (.57, top)] if ncols == 2 else [(.07, top), (.07, top - 1.4 / height)]
+    for position, title, handles in zip(positions, ("Time series", f"{year} distributions"), (line_handles, box_handles)):
+        fig.legend(handles=handles, loc="upper left", bbox_to_anchor=position,
+                   title=title, title_fontsize=18, fontsize=16, frameon=False, borderaxespad=0)
+    fig.suptitle(f"{first.region} · High/Low experiments vs AR6 scenarios", fontsize=26, y=1.0)
+    fig.text(.07, (caption_height + .12) / height, caption,
+             ha="left", va="top", fontsize=16, linespacing=1.35, color="#555555")
     return fig
 
 

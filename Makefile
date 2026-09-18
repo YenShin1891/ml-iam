@@ -3,7 +3,7 @@
 SHELL := /bin/bash
 .ONESHELL:
 
-.PHONY: process-data train train-bg stop status dashboard unit-test check-env
+.PHONY: process-data train train-bg stop status dashboard unit-test check-env fetch-models predict
 
 # Allow overrides via environment variables (resolved at recipe time under conda)
 RAW_DIR ?=
@@ -158,6 +158,35 @@ status:
 unit-test:
 	@$(call enter_env,$(CONDA_ENV))
 	"$$PY" -m pytest tests -q
+
+
+# ----------------------
+# Published trained models
+# ----------------------
+
+# Download the trained runs published with the paper into RESULTS_PATH.
+#   make fetch-models                  # all of them
+#   make fetch-models MODELS=tft_95    # one
+#   make fetch-models MODELS=tft_95 ARCHIVE=~/Downloads/tft_95.tar.gz
+MODELS ?= all
+ARCHIVE ?=
+fetch-models:
+	@$(call enter_env,$(CONDA_ENV))
+	"$$PY" scripts/fetch_models.py --run_id $(MODELS) $(if $(ARCHIVE),--archive "$(ARCHIVE)",)
+
+# Emulate new scenarios with a trained run (no training data needed).
+#   make predict RUN_ID=tft_95 INPUT=my_scenarios.csv OUTPUT=emulated.csv
+#   make predict RUN_ID=tft_95 DESCRIBE=1      # what the run expects
+INPUT ?=
+OUTPUT ?=
+DESCRIBE ?=
+predict:
+	@$(call enter_env,$(CONDA_ENV))
+	if [ -n "$(DESCRIBE)" ]; then \
+		"$$PY" scripts/predict.py --run_id "$(RUN_ID)" --describe; \
+	else \
+		"$$PY" scripts/predict.py --run_id "$(RUN_ID)" --input "$(INPUT)" --output "$(OUTPUT)"; \
+	fi
 
 
 # ----------------------
