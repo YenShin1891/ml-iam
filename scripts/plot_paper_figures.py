@@ -10,11 +10,15 @@ Usage:
       --out /root/paper_figures/fig4_trajectories_CO2.png
   python scripts/plot_paper_figures.py fig6 --runs xgb_85 lstm_89 tft_95 \
       --out /root/paper_figures/fig6_shap_CO2.png
+  python scripts/plot_paper_figures.py figS10 --runs tft_95 lstm_89 \
+      --out /root/paper_figures/figS10_embeddings.png
 
 fig3: IAM vs. emulated CO2 scatter per model (prints R^2 per model).
 fig4: C1-C3 World CO2 trajectories + emulator-minus-IAM error row.
 fig6: CO2 SHAP beeswarm per model from the saved SHAP arrays (prints the
       top-8 features per model; --panel-dir keeps the per-model panels).
+figS10: PCA of the Model_Family and Region embeddings, one row per run
+      (prints the nearest neighbours behind the panels).
 Run with CUDA_VISIBLE_DEVICES="" -- nothing here needs a GPU.
 """
 import argparse
@@ -69,9 +73,26 @@ def main() -> None:
     _add_common(p6, "paper_figures/fig6_shap_CO2.png")
     p6.set_defaults(dpi=300)
     p6.add_argument("--panel-dir", default=None, help="keep the per-model panel PNGs here")
+    ps = sub.add_parser("figS10", help="embedding PCA, family + region panels per run")
+    ps.add_argument("--runs", nargs="+", default=["tft_95", "lstm_89"], help="lstm_*/tft_* run ids, one row each")
+    ps.add_argument("--names", nargs="+", default=None)
+    ps.add_argument("--n-countries", type=int, default=8, help="data-richest ISO3 regions to label and tie to their R10 region")
+    ps.add_argument("--out", default="paper_figures/figS10_embeddings.png")
+    ps.add_argument("--dpi", type=int, default=300)
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING,
                         format="%(levelname)s %(name)s: %(message)s")
+    if args.figure == "figS10":
+        from scripts.plot_embeddings import plot_paper_panels
+
+        results = plot_paper_panels(args.runs, args.out, names=args.names, n_countries=args.n_countries, dpi=args.dpi)
+        for run_id, res in results.items():
+            print(f"== {run_id}")
+            print(res["family_neighbours"][["label", "nn1", "nn1_cosine", "nn2", "nn3"]].to_string(index=False))
+            print(res["region_ranks"][["country", "macro_region", "rank_of_macro_region", "of_n_neighbours"]].to_string(index=False))
+            print("featured countries:", res["featured_countries"])
+        print("saved", args.out)
+        return
     names = _names(args)
 
     if args.figure == "fig3":

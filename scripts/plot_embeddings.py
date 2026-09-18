@@ -21,6 +21,11 @@ read with care.
 PCA is the default: with 14-16 families, t-SNE draws artefacts more than
 structure. It stays available behind --method tsne.
 
+plot_paper_panels() draws the supplementary figure (per run: family PCA
+by solution concept, and region PCA with the data-richest countries tied
+to their R10 region) in the manuscript style; scripts/plot_paper_figures.py
+figS10 calls it.
+
 Usage:
   python scripts/plot_embeddings.py --model lstm --run_id lstm_89
   python scripts/plot_embeddings.py --model tft  --run_id tft_94 --method tsne
@@ -60,14 +65,14 @@ MODEL_FAMILY_TYPE: Dict[str, str] = {
     "LUT": "energy-system PE",
     "PyPSA": "energy-system PE",
     "DDPP": "energy-system PE",
-    "REMIND": "intertemporal optimisation",
-    "WITCH": "intertemporal optimisation",
-    "MERGE": "intertemporal optimisation",
+    "REMIND": "intertemporal optimization",
+    "WITCH": "intertemporal optimization",
+    "MERGE": "intertemporal optimization",
 }
 MODEL_TYPE_COLOURS = {
     "CGE": "#d95f02",
     "energy-system PE": "#1b9e77",
-    "intertemporal optimisation": "#7570b3",
+    "intertemporal optimization": "#7570b3",
     "unknown": "#999999",
 }
 
@@ -323,6 +328,140 @@ def _plot_region_scatter(labels, weight, method, title, path):
     fig.tight_layout()
     fig.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(fig)
+
+
+# ----------------------------------------------------------------------------
+# Manuscript figure
+# ----------------------------------------------------------------------------
+
+SMALL_FAMILY_ROWS = 500  # families under this many training rows draw hollow
+
+
+def _place_labels(ax, coords, texts, fontsize, min_gap=0.07, **kwargs):
+    """Annotate points, flipping a label to the lower-left of its point when
+    another labelled point lies within *min_gap* of it (axes fraction), so
+    near-coincident points do not print on top of each other."""
+    span = coords.max(axis=0) - coords.min(axis=0)
+    frac = (coords - coords.min(axis=0)) / np.where(span > 0, span, 1)
+    placed = []
+    for i in np.argsort(coords[:, 0]):
+        crowded = any(np.hypot(*(frac[i] - frac[j])) < min_gap for j in placed)
+        if crowded:
+            ax.annotate(texts[i], coords[i], textcoords="offset points", xytext=(-7, -6),
+                        ha="right", va="top", fontsize=fontsize, **kwargs)
+        else:
+            ax.annotate(texts[i], coords[i], textcoords="offset points", xytext=(7, 4),
+                        fontsize=fontsize, **kwargs)
+        placed.append(i)
+
+
+def _draw_family_panel(ax, tables, counts, TICK, LEGEND, AXIS_LABEL, legend: bool):
+    import matplotlib.pyplot as plt
+
+    labels, weight = tables["Model_Family"]
+    labels, weight, n_train, _ = _keep_trained(labels, weight, counts["Model_Family"])
+    coords, axis_labels = _project_2d(weight, "pca")
+    for label, (x, y), n in zip(labels, coords, n_train):
+        colour = MODEL_TYPE_COLOURS[MODEL_FAMILY_TYPE.get(label, "unknown")]
+        small = n < SMALL_FAMILY_ROWS
+        ax.scatter(x, y, s=90, facecolor="white" if small else colour, edgecolor=colour,
+                   linewidths=1.8, zorder=3)
+    _place_labels(ax, coords, labels, TICK - 1)
+    if legend:
+        handles = [plt.Line2D([], [], marker="o", linestyle="", markersize=9, markerfacecolor=c,
+                              markeredgecolor=c, label=k) for k, c in MODEL_TYPE_COLOURS.items() if k != "unknown"]
+        handles.append(plt.Line2D([], [], marker="o", linestyle="", markersize=9, markerfacecolor="white",
+                                  markeredgecolor="#555555", markeredgewidth=1.8,
+                                  label=f"< {SMALL_FAMILY_ROWS:,} training rows"))
+        ax.legend(handles=handles, fontsize=LEGEND - 1, loc="lower center", bbox_to_anchor=(0.5, 1.01),
+                  ncol=2, frameon=False, columnspacing=1.2, handletextpad=0.4)
+    ax.set_xlabel(axis_labels[0], fontsize=AXIS_LABEL)
+    ax.set_ylabel(axis_labels[1], fontsize=AXIS_LABEL)
+    ax.margins(x=0.12)  # room for the labels at the right
+    return _nearest_neighbours(labels, _cosine_similarity(weight), k=3)
+
+
+def _draw_region_panel(ax, tables, counts, n_countries, TICK, LEGEND, AXIS_LABEL, legend: bool):
+    labels, weight = tables["Region"]
+    labels, weight, n_train, _ = _keep_trained(labels, weight, counts["Region"])
+    coords, axis_labels = _project_2d(weight, "pca")
+    scales = [region_scale(label) for label in labels]
+    index = {label: i for i, label in enumerate(labels)}
+    iso = sorted((i for i, s in enumerate(scales) if s == "ISO3"), key=lambda i: -n_train[i])
+    featured = [i for i in iso[:n_countries] if labels[i] in COUNTRY_MACRO_REGION]
+    r10 = [i for i, s in enumerate(scales) if s == "R10"]
+    other = [i for i in range(len(labels)) if i not in featured and i not in r10]
+
+    iso_colour, r10_colour = SCALE_COLOURS["ISO3"], SCALE_COLOURS["R10"]
+    ax.scatter(coords[other, 0], coords[other, 1], s=22, color="#c8c8c8", edgecolor="none", zorder=2,
+               label="other regions")
+    for i in featured:
+        j = index.get(COUNTRY_MACRO_REGION[labels[i]])
+        if j is not None:
+            ax.plot([coords[i, 0], coords[j, 0]], [coords[i, 1], coords[j, 1]],
+                    color="#9a9a9a", linewidth=1.0, zorder=1)
+    ax.scatter(coords[r10, 0], coords[r10, 1], s=80, color=r10_colour, edgecolor="black",
+               linewidths=0.6, zorder=3, label="R10 macro-region")
+    ax.scatter(coords[featured, 0], coords[featured, 1], s=80, color=iso_colour, edgecolor="black",
+               linewidths=0.6, zorder=4, label=f"{len(featured)} data-richest countries")
+    # Macro-regions label to the lower left, countries to the upper right, so
+    # a country sitting on its region does not print on top of it.
+    for i in r10:
+        ax.annotate(labels[i].replace("R10", ""), coords[i], textcoords="offset points",
+                    xytext=(-6, -5), ha="right", va="top", fontsize=TICK - 3, color="#1a5c47")
+    _place_labels(ax, coords[featured], [labels[i] for i in featured], TICK - 2, min_gap=0.05,
+                  fontweight="bold", color="#3b2e8c")
+    if legend:
+        ax.legend(fontsize=LEGEND - 1, loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=3,
+                  frameon=False, columnspacing=1.2, handletextpad=0.4)
+    ax.set_xlabel(axis_labels[0], fontsize=AXIS_LABEL)
+    ax.set_ylabel(axis_labels[1], fontsize=AXIS_LABEL)
+    ax.margins(0.1)
+    return _macro_region_ranks(labels, _cosine_similarity(weight)), [labels[i] for i in featured]
+
+
+def plot_paper_panels(run_ids: List[str], out_path: str, names: List[str] = None,
+                      n_countries: int = 8, dpi: int = 300) -> Dict[str, Dict[str, object]]:
+    """Supplementary figure of the categorical embeddings: one row per run.
+
+    Left column: Model_Family PCA coloured by solution concept; families with
+    fewer than SMALL_FAMILY_ROWS training rows are hollow. Right column:
+    Region PCA with the *n_countries* ISO3 regions that have the most
+    training rows and every R10 macro-region labelled, each labelled country
+    joined to the R10 region that contains it -- a short tie means the model
+    put the country next to its macro-region. Everything else is small and
+    unlabelled. The model type comes from the run id prefix (lstm_/tft_).
+
+    Returns {run_id: {"family_neighbours", "region_ranks", "featured_countries"}}.
+    """
+    import matplotlib.pyplot as plt
+
+    from src.visualization.paper_figures import AXIS_LABEL, LEGEND, TICK, apply_style, panel_label, times_bold
+
+    apply_style()
+    font = times_bold()
+    names = names or [rid.split("_")[0].upper() for rid in run_ids]
+    n = len(run_ids)
+    fig, axes = plt.subplots(n, 2, figsize=(12, 5.4 * n), squeeze=False)
+    results = {}
+    for row, (run_id, name) in enumerate(zip(run_ids, names)):
+        model = "lstm" if run_id.startswith("lstm") else "tft"
+        tables = _load_lstm_tables(run_id) if model == "lstm" else _load_tft_tables(run_id)
+        counts = _train_row_counts(run_id)
+        ax_f, ax_r = axes[row]
+        fam = _draw_family_panel(ax_f, tables, counts, TICK, LEGEND, AXIS_LABEL, legend=(row == 0))
+        ranks, featured = _draw_region_panel(ax_r, tables, counts, n_countries, TICK, LEGEND, AXIS_LABEL,
+                                             legend=(row == 0))
+        for col, (ax, what) in enumerate(((ax_f, "model family"), (ax_r, "region"))):
+            ax.grid(alpha=0.3)
+            ax.tick_params(labelsize=TICK - 1)
+            panel_label(ax, 2 * row + col, f"{name} {what}", y=-0.22, font=font)
+        results[run_id] = {"family_neighbours": fam, "region_ranks": ranks, "featured_countries": featured}
+    fig.tight_layout(w_pad=2.5, h_pad=3.0)
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    return results
 
 
 # ----------------------------------------------------------------------------
