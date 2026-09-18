@@ -32,6 +32,15 @@ Researcher looking to replicate or extend this work?
 👉 **Or: Full pipeline (LSTM/TFT)**: [Advanced Training](#-advanced-training-lstmtft)
 </td>
 </tr>
+<tr>
+<td colspan="2">
+
+### ⚡ **Run the trained models on your own scenarios**
+No training and no AR6 download needed: fetch the published weights and emulate a CSV of new scenarios on a CPU.
+
+👉 **[Use the trained models](#-use-the-trained-models)** · full guide: [docs/USING_THE_EMULATOR.md](docs/USING_THE_EMULATOR.md)
+</td>
+</tr>
 </table>
 
 ---
@@ -329,6 +338,25 @@ make unit-test        # or: python -m pytest tests -q
 
 ---
 
+## ⚡ Use the trained models
+
+The runs reported in the paper (`xgb_85`, `lstm_89`, `tft_95`) are published on Zenodo: [10.5281/zenodo.22828667](https://doi.org/10.5281/zenodo.22828667).
+
+```bash
+cp configs/paths-template.py configs/paths.py      # RESULTS_PATH is where the runs are unpacked
+make fetch-models                                  # or MODELS=tft_95
+make predict RUN_ID=tft_95 DESCRIBE=1              # inputs, regions and model families the run knows
+make predict RUN_ID=tft_95 INPUT=my_scenarios.csv OUTPUT=emulated.csv
+```
+
+The input is a CSV in the IAMC wide layout (`Model, Scenario, Region, Variable, 2020, 2025, ...`) holding the input Variables of your scenarios. The LSTM and TFT read inputs only; XGBoost also needs the target values at the first three timesteps. Input Variables you do not have can be left out.
+
+The archives hold weights, scalers, category vocabularies, imputation medians and the train/val/test assignment of series identifiers, and **no AR6 values**. With your own AR6 download the split assignment rebuilds the paper's exact test set, so the reported metrics can be reproduced.
+
+**[docs/USING_THE_EMULATOR.md](docs/USING_THE_EMULATOR.md)** covers the input format in full, what the emulator should and should not be used for, reproducing the test metrics, retraining, and publishing a run of your own.
+
+---
+
 ## 🎨 Explore Your Results
 
 Launch the interactive Streamlit dashboard to explore results:
@@ -396,11 +424,7 @@ wheel is enough). TFT runs only, for now.
 
 ### Can I use pre-trained models for inference?
 
-Currently, we do not provide pre-trained models for direct inference. To use ML-IAM, you need to train models yourself using the pipeline. We may release pre-trained models in the future.
-
-**For now:**
-- Use the [Emulation Viewer](https://mliam.dev/) to explore pre-computed scenarios
-- Train models yourself following the [Quick Training](#-quick-training-xgboost) guide
+Yes. The three runs reported in the paper are published as small archives of weights and summary statistics; see [Use the trained models](#-use-the-trained-models). They contain no AR6 data, and `scripts/predict.py` needs none.
 
 ### How do I add new target variables?
 
