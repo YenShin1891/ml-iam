@@ -206,5 +206,10 @@ class TFTTrainerConfig:
     # Final training: more room to converge
     final_max_epochs: int = 100
     final_patience: int = 20
-    # Use Union for flexibility: -1 for all, int count, list of device indices, or "auto"
-    devices: Union[int, List[int], str] = "auto"
+    # Devices of the final fit: -1 for all, int count, list of device indices,
+    # or "auto".  One, like the search trials: batch_size and learning_rate
+    # are selected on single-GPU trials, and under multi-GPU DDP the same
+    # values mean an N-times larger effective batch and 1/N of the optimizer
+    # steps per epoch (tft_95's eight-GPU final fit took 79,900 steps where
+    # its winning trial took 383,760).
+    devices: Union[int, List[int], str] = 1
