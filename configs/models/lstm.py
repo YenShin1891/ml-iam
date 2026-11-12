@@ -30,13 +30,8 @@ class LSTMTrainerConfig:
     final_patience: int = 20
     gradient_clip_val: float = 1.0
 
-    # Device configuration.  One device, for the search trials and the final
-    # fit alike: batch_size and learning_rate are selected on single-GPU
-    # trials, and under multi-GPU DDP the same values mean an N-times larger
-    # effective batch and 1/N of the optimizer steps per epoch (lstm_89's
-    # eight-GPU final fit took 23,900 steps where its winning trial took
-    # 190,800, and ended less converged).
-    devices: Union[int, List[int], str] = 1
+    # Device configuration
+    devices: Union[int, List[int], str] = "auto"
     accelerator: str = "auto"
 
     # Optimizer

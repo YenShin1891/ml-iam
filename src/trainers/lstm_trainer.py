@@ -646,7 +646,7 @@ def create_lstm_search_trainer(
     return Trainer(
         max_epochs=config.max_epochs,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
-        devices=config.devices,  # one GPU per trial; the caller names it
+        devices=config.devices,  # Multi-device for search to handle 8 processes per GPU
         strategy="auto",
         gradient_clip_val=config.gradient_clip_val,
         callbacks=[early_stop],
