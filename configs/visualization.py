@@ -24,10 +24,30 @@ DEFAULT_REGION: str = "R10"
 # when creating SHAP plots. This keeps SHAP computation tractable.
 SHAP_MAX_SCENARIO_GROUPS: int = 300
 
-# Number of background samples GradientExplainer draws per explained row for
-# the neural-network models. Higher is more accurate and proportionally slower;
-# cost is n_rows * this * n_targets forward/backward passes.
-SHAP_GRADIENT_NSAMPLES: int = 100
+# Number of interpolation points expected gradients evaluates per explained
+# window for the neural-network models: this many pairs of a background
+# window and a position between it and the explained one.  Higher is more
+# accurate and proportionally slower.  The estimate is unbiased and its noise
+# falls with this number; at 400 the attributions of a window miss the
+# prediction difference they decompose by roughly 6-7% for both models.
+SHAP_GRADIENT_NSAMPLES: int = 400
+
+# How many of those points go through the model at once.  It does not change
+# the result, only the time and memory: the TFT needs about 3 GB per 100.
+SHAP_GRADIENT_BATCH_SIZE: int = 200
+
+# How many sequence windows the neural-network models explain, and how many
+# they use as the expected-gradients background.  Both are seeded random
+# draws from every window of the sampled scenario groups.
+SHAP_NN_EXPLAINED_WINDOWS: int = 500
+SHAP_NN_BACKGROUND_WINDOWS: int = 200
+
+# The x axis of every SHAP beeswarm.  Each output's SHAP values are divided
+# by its sum over features of mean |SHAP|, so a value is measured against
+# that output's total attribution whatever units the model predicts in --
+# XGBoost's scaled targets, the LSTM's standardised ones or the TFT's native
+# ones.
+SHAP_NORMALISED_XLABEL: str = "Normalised SHAP value\n(SHAP / the output's total mean |SHAP|)"
 
 
 # -----------------------------

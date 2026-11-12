@@ -25,6 +25,7 @@ from .helpers import (
     render_external_plot,
     build_feature_display_names,
     draw_shap_beeswarm,
+    normalise_shap_values,
     filter_index_frame_by_region,
     sample_scenario_groups,
 )
@@ -80,21 +81,6 @@ def drop_unobserved_lag_rows(frame: pd.DataFrame, features: List[str], log_prefi
         "%s: dropped %d of %d rows with an unobserved lag", log_prefix, int((~observed).sum()), len(frame),
     )
     return frame[observed]
-
-
-def normalise_shap_values(shap_values: np.ndarray) -> np.ndarray:
-    """Scale each target's SHAP values by its sum of mean |SHAP|.
-
-    Targets of different magnitude then share one axis.  Every feature keeps
-    its own attribution, lagged columns of other targets included.  Returns a
-    new array.
-    """
-    shap_values = np.array(shap_values, dtype=float)  # a copy: normalised in place below
-    for i in range(shap_values.shape[2]):
-        total = float(np.sum(np.mean(np.abs(shap_values[:, :, i]), axis=0)))
-        if total > 0:
-            shap_values[:, :, i] /= total
-    return shap_values
 
 
 def write_shap_rankings(run_id: str, shap_values: np.ndarray, targets: List[str], features: List[str]) -> None:
@@ -178,8 +164,8 @@ def draw_shap_plot(run_id, shap_values, X_test, features, targets, exclude_top=F
             display_subset,
             max_display=n_display,
             xlim_range=xlim_range,
+            title=title,
         )
-        ax_indiv.set_title(title)
         fig_indiv.tight_layout()
         indiv_filename = f"{targets[i]}_no_top.png" if exclude_top else f"{targets[i]}.png"
         fig_indiv.savefig(os.path.join(indiv_plots_dir, indiv_filename), dpi=300, bbox_inches='tight')
