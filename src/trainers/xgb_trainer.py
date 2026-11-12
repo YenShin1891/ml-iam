@@ -1078,6 +1078,7 @@ def hyperparameter_search(
     splits_by_n_lags: Dict[int, Dict],
     run_id: str,
     use_cv: bool = True,
+    lag_scope: Optional[str] = None,
 ) -> Tuple[Dict, Dict]:
     """Two-stage random search, the same protocol the LSTM and TFT searches run.
 
@@ -1094,6 +1095,9 @@ def hyperparameter_search(
     sequence_length and the TFT's encoder length.  Every variant drops the
     same leading rows, so the lag counts are scored on the same elements.
 
+    *lag_scope* is the run's recorded lag scope (RunStore.lag_scope); None
+    leaves XGBTrainerConfig's default.
+
     Returns
     -------
     Tuple[Dict, Dict]
@@ -1104,7 +1108,8 @@ def hyperparameter_search(
         early-stops for itself.
     """
     space = XGBSearchSpace()
-    trainer_cfg = XGBTrainerConfig()
+    trainer_cfg = XGBTrainerConfig() if lag_scope is None else XGBTrainerConfig(lag_scope=lag_scope)
+    logging.info("XGB lag scope: %s", trainer_cfg.lag_scope)
     gpu_pool = _visible_gpu_pool()
     logging.info("XGB search space: %s", space.summary())
     logging.info(
@@ -1231,6 +1236,7 @@ def train_and_save_model(
     targets: List[str],
     best_params: Dict,
     run_id: str,
+    lag_scope: Optional[str] = None,
     ) -> None:
     """Train the final model on the training split alone, holding out val.
 
@@ -1240,6 +1246,9 @@ def train_and_save_model(
     fit their finals in.  The model used to be fitted on train and val
     concatenated, which left XGBoost with strictly more data than the other
     two models and no genuinely held-out split of its own.
+
+    *lag_scope* is the run's recorded lag scope (RunStore.lag_scope), the one
+    its search scored under; None leaves XGBTrainerConfig's default.
     """
     logging.info("Training final model with best parameters...")
 
@@ -1249,7 +1258,7 @@ def train_and_save_model(
         try:
             y_train_df = pd.DataFrame(y_train, columns=targets)
             y_val_df = pd.DataFrame(y_val, columns=targets)
-            trainer_cfg = XGBTrainerConfig()
+            trainer_cfg = XGBTrainerConfig() if lag_scope is None else XGBTrainerConfig(lag_scope=lag_scope)
             # Runs searched before the round count stopped being written into
             # best_params still have one saved on disk.  It is not a parameter
             # of this fit -- which sees a different amount of data and early-

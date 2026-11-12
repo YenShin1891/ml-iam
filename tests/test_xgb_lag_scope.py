@@ -92,3 +92,72 @@ def test_a_model_saved_without_the_record_reads_every_lag(tmp_path):
     assert loaded.lag_scope == "all" and loaded.hidden_columns == [[], [], []]
     rows = X.to_numpy()[:30]
     assert np.allclose(loaded.predict(rows), model.predict(rows))
+
+
+# ---------------------------------------------------------------------------
+# The scope is a setting of the run: chosen in its YAML, recorded when the run
+# is created, and read back by the search and the final fit.
+# ---------------------------------------------------------------------------
+
+def _resolved(tmp_path, monkeypatch, obj):
+    from scripts import train_from_config as launcher
+
+    monkeypatch.setattr(launcher, "_meta_dir", lambda _run_id: tmp_path)
+    config = tmp_path / "run.yaml"
+    config.write_text("model: xgb\n")
+    cfg = launcher._parse_config(obj)
+    launcher._write_run_metadata(cfg, run_id="xgb_01", config_path=config, env={}, cuda_by_phase_resolved={})
+    return json.loads((tmp_path / "run_config.resolved.json").read_text())
+
+
+def test_a_new_run_records_the_scope_its_yaml_names(tmp_path, monkeypatch):
+    resolved = _resolved(tmp_path, monkeypatch, {"model": "xgb", "phases": ["preprocess"], "lag_scope": "own"})
+    assert resolved["lag_scope"] == "own"
+
+
+def test_a_new_run_records_the_default_scope_when_its_yaml_names_none(tmp_path, monkeypatch):
+    from configs.models.xgb import XGBTrainerConfig
+
+    resolved = _resolved(tmp_path, monkeypatch, {"model": "xgb", "phases": ["preprocess"]})
+    assert resolved["lag_scope"] == XGBTrainerConfig().lag_scope
+
+
+def test_the_launcher_refuses_a_scope_it_cannot_honour():
+    from scripts import train_from_config as launcher
+
+    with pytest.raises(ValueError, match="must be one of"):
+        launcher._parse_config({"model": "xgb", "phases": ["preprocess"], "lag_scope": "some"})
+    with pytest.raises(ValueError, match="xgb runs only"):
+        launcher._parse_config({"model": "linear", "phases": ["preprocess"], "lag_scope": "own"})
+    resumed = launcher._parse_config({"model": "xgb", "run_id": "xgb_01", "resume": "train", "lag_scope": "own"})
+    with pytest.raises(ValueError, match="fixed when a run is created"):
+        launcher._validate_model_constraints(resumed)
+
+
+def test_the_run_store_reads_the_recorded_scope(tmp_path, monkeypatch):
+    import src.utils.run_store as run_store_module
+    from src.utils.run_store import RunStore
+
+    monkeypatch.setattr(run_store_module, "get_run_root", lambda _run_id: str(tmp_path))
+    store = RunStore("xgb_01")
+    assert store.lag_scope() == "all"            # no record: a run from before the setting
+    store.record_settings(lag_scope="own")
+    assert store.lag_scope() == "own"
+
+
+def test_the_final_fit_uses_the_scope_it_is_handed(tmp_path, monkeypatch):
+    from src.trainers import xgb_trainer
+
+    monkeypatch.setattr(xgb_trainer, "get_run_root", lambda _run_id: str(tmp_path))
+    monkeypatch.setattr(xgb_trainer, "_first_visible_gpu_token", lambda *a, **k: "")
+    monkeypatch.setattr(
+        xgb_trainer, "get_xgb_params",
+        lambda params, trainer_cfg=None: {**params, "tree_method": "hist", "device": "cpu", "n_jobs": 1},
+    )
+    X, y = _data()
+    xgb_trainer.train_and_save_model(
+        X.iloc[:200], y.iloc[:200].to_numpy(), X.iloc[200:].reset_index(drop=True), y.iloc[200:].to_numpy(),
+        TARGETS, {"max_depth": 3}, "xgb_01", lag_scope="own",
+    )
+    saved = json.loads((tmp_path / "checkpoints" / "final_best_lag_scope.json").read_text())
+    assert saved["lag_scope"] == "own"

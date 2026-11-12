@@ -326,6 +326,9 @@ def main(argv=None):
             # a run that predates the setting.
             from configs.data import LAG_FILL
             store.record_settings(model=model, run_id=run_id, dataset=args.dataset, lag_fill=LAG_FILL)
+        if model == "xgb":
+            from configs.models.xgb import XGBTrainerConfig
+            store.record_settings(lag_scope=XGBTrainerConfig().lag_scope)
         _log_run_header(run_id, model, args, {"phases": list(_ALLOWED_PHASES)})
 
         for phase in _ALLOWED_PHASES:

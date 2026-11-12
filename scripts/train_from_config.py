@@ -44,6 +44,7 @@ class RunConfig:
     target_normalizer_mode: Optional[str] = None  # TFT: "encoder_floored" or "global"
     search_shard: Optional[str] = None  # "index/count" when several machines split one search
     lag_fill: Optional[str] = None  # XGB/linear: how target gaps are filled before lagging
+    lag_scope: Optional[str] = None  # XGB: which lagged outputs each booster reads
     note: Optional[str] = None
 
 
@@ -247,6 +248,15 @@ def _parse_config(obj: Dict[str, Any]) -> RunConfig:
         if model not in _LAG_MODELS:
             raise ValueError(f"'lag_fill' applies to {sorted(_LAG_MODELS)} runs only; {model} builds no lag features")
 
+    lag_scope = obj.get("lag_scope")
+    if lag_scope is not None:
+        from configs.models.xgb import LAG_SCOPES
+
+        if lag_scope not in LAG_SCOPES:
+            raise ValueError(f"'lag_scope' must be one of {sorted(LAG_SCOPES)}")
+        if model != "xgb":
+            raise ValueError(f"'lag_scope' applies to xgb runs only; {model} has no per-output boosters")
+
     note = obj.get("note")
     if note is not None and not isinstance(note, str):
         raise ValueError("'note' must be a string when provided")
@@ -264,6 +274,7 @@ def _parse_config(obj: Dict[str, Any]) -> RunConfig:
         target_normalizer_mode=target_normalizer_mode,
         search_shard=search_shard,
         lag_fill=lag_fill,
+        lag_scope=lag_scope,
         note=note,
     )
 
@@ -328,6 +339,14 @@ def _write_run_metadata(
 
     lag_fill = (cfg.lag_fill or LAG_FILL) if cfg.model in _LAG_MODELS else None
 
+    # The same for the lag scope of an XGBoost run: a record without one marks
+    # a run whose boosters read every lag (RunStore.lag_scope).
+    lag_scope = None
+    if cfg.model == "xgb":
+        from configs.models.xgb import XGBTrainerConfig
+
+        lag_scope = cfg.lag_scope or XGBTrainerConfig().lag_scope
+
     # Write resolved config (JSON for easy parsing)
     resolved = {
         "model": cfg.model,
@@ -341,6 +360,7 @@ def _write_run_metadata(
         "search_shard": cfg.search_shard,
         "keep_partial_targets": cfg.keep_partial_targets,
         "lag_fill": lag_fill,
+        "lag_scope": lag_scope,
         "note": cfg.note,
         "phases": list(cfg.phases),
     }
@@ -417,6 +437,12 @@ def _validate_model_constraints(cfg: RunConfig) -> None:
         raise ValueError(
             "'lag_fill' is fixed when a run is created: its model was fitted on lags built "
             "that way.  Start a new run to change it."
+        )
+
+    if cfg.lag_scope is not None and _continues_existing_run(cfg):
+        raise ValueError(
+            "'lag_scope' is fixed when a run is created: its search and its final fit must "
+            "read the same lags.  Start a new run to change it."
         )
 
     if cfg.run_id is None and cfg.phases[0] != "preprocess":

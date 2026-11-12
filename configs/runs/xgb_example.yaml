@@ -20,6 +20,13 @@ cuda_visible_devices:
 # Omit 'search' to skip hyperparameter search and use defaults instead.
 phases: [preprocess, search, train, test, plot]
 
+# Optional: how target gaps are filled before the lag features are built
+# ("carry_forward" or "linear"), and which lagged outputs each per-output
+# booster reads ("own_and_complete", "own" or "all"; see configs/models/xgb.py).
+# Both are fixed when the run is created.
+# lag_fill: carry_forward
+# lag_scope: own_and_complete
+
 # Optional note saved into session state (supported by xgb launcher)
 note: "With interpolation, extrapolation, and scale-aware imputation."
 
