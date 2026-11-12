@@ -70,6 +70,7 @@ def recorded_frames(monkeypatch):
         load_best_params = staticmethod(lambda: {"n_lags": 2})
         splits_for = staticmethod(lambda _data: None)
         load_artifact = staticmethod(lambda _name: None)
+        lag_fill = staticmethod(lambda: "carry_forward")
 
     evaluate_splits._build_split_results_xgb(FakeStore(), "xgb_99")
     return seen

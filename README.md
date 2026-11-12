@@ -275,7 +275,8 @@ MAX_YEAR = 2100         # Upper year limit
 N_LAG_FEATURES = 2      # Lagged timesteps fed to XGBoost (LSTM/TFT use their own history)
 MAX_SERIES_LENGTH = 15  # Encoder + decoder span for the sequence models
 KEEP_PARTIAL_TARGETS = True   # Train on rows where only some targets are observed
-INTERPOLATE_TARGETS = True    # Fill interior gaps before computing lag features
+INTERPOLATE_TARGETS = True    # Fill target gaps before computing lag features
+LAG_FILL = "carry_forward"    # ...with the last reported value ("linear" = runs up to xgb_85)
 ```
 
 ### Model Hyperparameters

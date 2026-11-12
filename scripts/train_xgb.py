@@ -33,6 +33,7 @@ def derive_splits(data, store=None, n_lags=None):
     split_assignment = store.splits_for(data) if store is not None else None
     prepared, features, targets = prepare_features_and_targets(
         data, lag_required=True, n_lags=n_lags,
+        lag_fill=store.lag_fill() if store is not None else None,
     )
     (
         X_train, y_train, X_train_index_columns,

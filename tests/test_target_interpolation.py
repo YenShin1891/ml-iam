@@ -138,3 +138,57 @@ def test_only_coarse_series_are_resampled_and_the_rest_pass_through():
     fine = out[out["Scenario"] == "fine"].sort_values("Year")
     assert fine["Year"].tolist() == [2020, 2025, 2030]
     assert fine["A__observed"].tolist() == [1.0, 1.0, 1.0]
+
+
+def test_carry_forward_uses_nothing_reported_after_the_gap():
+    frame = pd.DataFrame({
+        "Model": "M", "Scenario": "S", "Region": "World",
+        "Year": [2010, 2015, 2020, 2025, 2030],
+        "A": [np.nan, 1.0, np.nan, 5.0, np.nan],
+        "B": [2.0, np.nan, np.nan, np.nan, 8.0],
+    })
+
+    linear = interpolate_targets(frame.copy(), GROUP_COLS, TARGETS)
+    carried = interpolate_targets(frame.copy(), GROUP_COLS, TARGETS, method="carry_forward")
+
+    assert linear["A"].tolist()[1:] == [1.0, 3.0, 5.0, 5.0]       # the gap sees 2025
+    assert carried["A"].tolist()[1:] == [1.0, 1.0, 5.0, 5.0]      # the gap does not
+    assert np.isnan(carried["A"].iloc[0])                          # nothing before the first report
+    assert carried["B"].tolist() == [2.0, 2.0, 2.0, 2.0, 8.0]
+    assert carried["A__observed"].tolist() == [0.0, 1.0, 0.0, 1.0, 0.0]
+
+    # Changing a later report must not change anything earlier.
+    later = frame.copy()
+    later.loc[3, "A"] = 500.0
+    moved = interpolate_targets(later, GROUP_COLS, TARGETS, method="carry_forward")
+    assert moved["A"].tolist()[1:3] == carried["A"].tolist()[1:3]
+
+
+def test_lag_after_a_gap_does_not_hold_the_rows_own_target(monkeypatch):
+    import configs.data as data_config
+    from src.data import preprocess
+
+    monkeypatch.setattr(preprocess, "OUTPUT_VARIABLES", TARGETS)
+    monkeypatch.setattr(data_config, "KEEP_PARTIAL_TARGETS", True)
+    years = [2010, 2015, 2020, 2025, 2030, 2035]
+    frame = pd.DataFrame({
+        "Model": "M", "Model_Family": "M", "Scenario": "S", "Scenario_Category": "C1", "Region": "World",
+        "Year": years, "feat": 1.0,
+        "A": [1.0, 2.0, 3.0, 4.0, np.nan, 10.0],
+        "B": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+    })
+
+    def last_row(lag_fill):
+        prepared, _, _ = preprocess.prepare_features_and_targets(frame.copy(), n_lags=2, lag_fill=lag_fill)
+        return prepared[prepared["Year"] == 2035].iloc[0]
+
+    assert last_row("linear")["prev_A"] == 7.0          # (4 + 10) / 2: the label leaks in
+    assert last_row("carry_forward")["prev_A"] == 4.0
+    assert last_row("carry_forward")["prev2_A"] == 4.0
+
+
+def test_unknown_fill_method_is_refused():
+    import pytest
+
+    with pytest.raises(ValueError, match="fill method"):
+        interpolate_targets(_frame(), GROUP_COLS, TARGETS, method="spline")

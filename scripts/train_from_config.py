@@ -39,6 +39,7 @@ class RunConfig:
     keep_partial_targets: Optional[bool] = None
     target_normalizer_mode: Optional[str] = None  # TFT: "encoder_floored" or "global"
     search_shard: Optional[str] = None  # "index/count" when several machines split one search
+    lag_fill: Optional[str] = None  # XGB/linear: how target gaps are filled before lagging
     note: Optional[str] = None
 
 
@@ -233,6 +234,13 @@ def _parse_config(obj: Dict[str, Any]) -> RunConfig:
 
     search_shard = _parse_search_shard(obj.get("search_shard"))
 
+    lag_fill = obj.get("lag_fill")
+    if lag_fill is not None:
+        from configs.data import LAG_FILL_METHODS
+
+        if lag_fill not in LAG_FILL_METHODS:
+            raise ValueError(f"'lag_fill' must be one of {sorted(LAG_FILL_METHODS)}")
+
     note = obj.get("note")
     if note is not None and not isinstance(note, str):
         raise ValueError("'note' must be a string when provided")
@@ -249,6 +257,7 @@ def _parse_config(obj: Dict[str, Any]) -> RunConfig:
         keep_partial_targets=keep_partial_targets,
         target_normalizer_mode=target_normalizer_mode,
         search_shard=search_shard,
+        lag_fill=lag_fill,
         note=note,
     )
 
@@ -306,6 +315,10 @@ def _write_run_metadata(
     except Exception as e:
         logging.warning("Could not copy original run config for provenance: %s", e)
 
+    # Always a concrete value: a record without one marks a run that predates
+    # the setting (RunStore.lag_fill reads those as "linear").
+    from configs.data import LAG_FILL
+
     # Write resolved config (JSON for easy parsing)
     resolved = {
         "model": cfg.model,
@@ -318,6 +331,7 @@ def _write_run_metadata(
         "target_normalizer_mode": cfg.target_normalizer_mode,
         "search_shard": cfg.search_shard,
         "keep_partial_targets": cfg.keep_partial_targets,
+        "lag_fill": cfg.lag_fill or LAG_FILL,
         "note": cfg.note,
         "phases": list(cfg.phases),
     }
@@ -388,6 +402,12 @@ def _validate_model_constraints(cfg: RunConfig) -> None:
     if cfg.run_id is not None and not cfg.run_id.startswith(f"{cfg.model}_"):
         raise ValueError(
             f"run_id '{cfg.run_id}' does not match model '{cfg.model}'. Expected prefix '{cfg.model}_'."
+        )
+
+    if cfg.lag_fill is not None and _continues_existing_run(cfg):
+        raise ValueError(
+            "'lag_fill' is fixed when a run is created: its model was fitted on lags built "
+            "that way.  Start a new run to change it."
         )
 
     if cfg.run_id is None and cfg.phases[0] != "preprocess":

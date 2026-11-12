@@ -236,7 +236,8 @@ def prepare_new_inputs(run_id: str, table: pd.DataFrame, engine) -> PreparedInpu
         n_lags = int(engine.metadata["n_lags"])
         history = int(engine.encoder_length)
         frame, _, _ = preprocess.prepare_features_and_targets(
-            _all_rows_kept(long, targets), lag_required=False, n_lags=n_lags
+            _all_rows_kept(long, targets), lag_required=False, n_lags=n_lags,
+            lag_fill=store.lag_fill(),
         )
         frame["Step"] = frame.groupby(ID_COLUMNS, observed=True).cumcount()
         frame = _drop_short(frame, engine.min_steps, notes)

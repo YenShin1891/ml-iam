@@ -53,6 +53,27 @@ class RunStore:
         return path
 
     # ------------------------------------------------------------------
+    # Settings recorded when the run was created
+    # ------------------------------------------------------------------
+
+    def lag_fill(self) -> str:
+        """How this run fills target gaps before building lag features.
+
+        Read from the run's recorded config.  A run recorded before the
+        setting existed was built with linear interpolation, whatever
+        configs.data says today; a run with no record at all takes the
+        current default.
+        """
+        import configs.data as data_config
+
+        path = self.root / "meta" / "run_config.resolved.json"
+        if not path.exists():
+            return data_config.LAG_FILL
+        with open(path, "r", encoding="utf-8") as handle:
+            recorded = json.load(handle).get("lag_fill")
+        return recorded or "linear"
+
+    # ------------------------------------------------------------------
     # Cache: expensive preprocessing (melt + pivot_table)
     # ------------------------------------------------------------------
 

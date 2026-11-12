@@ -109,6 +109,18 @@ REGION_SCALE_ORDER = ["World", "R5", "R6", "R10", "ISO3"]
 # This fills partial year coverage so lags are computed from real values.
 INTERPOLATE_TARGETS = True
 
+# How a gap in a target series is filled before the lag features are built
+# (XGBoost and the linear baseline; only with INTERPOLATE_TARGETS).
+#   "carry_forward"  the last reported value: a lag never holds anything
+#                    reported after the timestep it stands for.
+#   "linear"         the straight line between the reports either side of the
+#                    gap.  The lag of the step after a gap then contains that
+#                    step's own target.  Runs up to xgb_85 were built this way.
+# A run records its setting (meta/run_config.resolved.json) and later phases
+# read it back, so changing this affects new runs only.
+LAG_FILL = "carry_forward"
+LAG_FILL_METHODS = ("carry_forward", "linear")
+
 # When True, impute missing continuous features using train medians
 # computed per Region_Scale group instead of a single global median.
 SCALE_AWARE_IMPUTATION = True
