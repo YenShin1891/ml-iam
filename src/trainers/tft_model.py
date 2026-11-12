@@ -144,19 +144,23 @@ def create_tft_model(
             monitor.  Sets an unreachably high patience so the
             ReduceLROnPlateau scheduler never fires.
     """
-    from configs.data import KEEP_PARTIAL_TARGETS
+    from src.data.preprocess import observed_mask_columns
+
+    # Masked exactly when the dataset carries a mask column for every target.
+    # Read off the dataset rather than configs.data.KEEP_PARTIAL_TARGETS: a
+    # spawned search worker re-imports the config and would not see a run's
+    # override, while the dataset it is handed cannot disagree with itself.
+    flag_columns = observed_mask_columns(train_dataset.target_names)
+    masked = all(name in train_dataset.reals for name in flag_columns)
 
     if n_targets > 1:
         output_size = [1] * n_targets
-        if KEEP_PARTIAL_TARGETS:
-            loss = MultiLoss([MaskedRMSE() for _ in range(n_targets)])
-        else:
-            loss = MultiLoss([RMSE() for _ in range(n_targets)])
+        loss = MultiLoss([(MaskedRMSE if masked else RMSE)() for _ in range(n_targets)])
     else:
         output_size = 1
-        loss = MaskedRMSE() if KEEP_PARTIAL_TARGETS else RMSE()
+        loss = MaskedRMSE() if masked else RMSE()
 
-    model_cls = MaskedTFT if KEEP_PARTIAL_TARGETS else SyncedTFT
+    model_cls = MaskedTFT if masked else SyncedTFT
 
     kwargs = dict(
         hidden_size=params["hidden_size"],
@@ -175,12 +179,12 @@ def create_tft_model(
         kwargs["reduce_on_plateau_patience"] = 999999
 
     from configs.data import TFT_OBSERVED_FLAGS_AS_INPUTS
-    if KEEP_PARTIAL_TARGETS and not TFT_OBSERVED_FLAGS_AS_INPUTS:
+    if masked and not TFT_OBSERVED_FLAGS_AS_INPUTS:
         # The flags stay in the dataset, so every batch still carries them
         # for the loss mask, but they are left out of the variables the
         # network selects from.  from_dataset would otherwise list every
         # known real as an encoder and decoder input.
-        flags = {name for name in train_dataset.reals if name.endswith("__observed")}
+        flags = set(flag_columns)
         inputs = [name for name in train_dataset._time_varying_known_reals if name not in flags]
         kwargs["time_varying_reals_encoder"] = inputs + list(train_dataset._time_varying_unknown_reals)
         kwargs["time_varying_reals_decoder"] = inputs

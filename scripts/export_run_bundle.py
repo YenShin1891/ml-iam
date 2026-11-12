@@ -53,7 +53,8 @@ ARTIFACTS = (
     "lstm_scaler_y.pkl",
 )
 CHECKPOINT_KEYS_DROPPED = ("callbacks", "optimizer_states", "lr_schedulers", "loops")
-RESOLVED_KEYS = ("run_id", "model", "dataset", "keep_partial_targets", "target_normalizer_mode", "two_window")
+RESOLVED_KEYS = ("run_id", "model", "dataset", "keep_partial_targets", "target_normalizer_mode", "two_window",
+                 "lag_fill")
 LOCAL_PATH = re.compile(rb"(?<![A-Za-z0-9_./-])/(?:mnt|root|home|Users)/[A-Za-z0-9_./-]{3,}")
 LIBRARIES = ("python", "numpy", "pandas", "scikit-learn", "xgboost", "torch", "lightning",
              "pytorch-lightning", "pytorch-forecasting")

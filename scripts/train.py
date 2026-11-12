@@ -320,6 +320,12 @@ def main(argv=None):
         _seed(model)
 
         store = RunStore(run_id)
+        if model in ("xgb", "linear"):
+            # train_from_config.py records this for the runs it creates; a run
+            # created here needs it too, or its later phases would read it as
+            # a run that predates the setting.
+            from configs.data import LAG_FILL
+            store.record_settings(model=model, run_id=run_id, dataset=args.dataset, lag_fill=LAG_FILL)
         _log_run_header(run_id, model, args, {"phases": list(_ALLOWED_PHASES)})
 
         for phase in _ALLOWED_PHASES:

@@ -26,6 +26,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from scripts.train import _ALLOWED_MODELS, _ALLOWED_PHASES, _assert_resume_run_exists
 
 
+# The models whose features include lagged targets.
+_LAG_MODELS = ("xgb", "linear")
+
+
 @dataclass(frozen=True)
 class RunConfig:
     model: str
@@ -240,6 +244,8 @@ def _parse_config(obj: Dict[str, Any]) -> RunConfig:
 
         if lag_fill not in LAG_FILL_METHODS:
             raise ValueError(f"'lag_fill' must be one of {sorted(LAG_FILL_METHODS)}")
+        if model not in _LAG_MODELS:
+            raise ValueError(f"'lag_fill' applies to {sorted(_LAG_MODELS)} runs only; {model} builds no lag features")
 
     note = obj.get("note")
     if note is not None and not isinstance(note, str):
@@ -315,9 +321,12 @@ def _write_run_metadata(
     except Exception as e:
         logging.warning("Could not copy original run config for provenance: %s", e)
 
-    # Always a concrete value: a record without one marks a run that predates
-    # the setting (RunStore.lag_fill reads those as "linear").
+    # Always a concrete value for a model with lag features: a record without
+    # one marks a run that predates the setting (RunStore.lag_fill reads those
+    # as "linear").
     from configs.data import LAG_FILL
+
+    lag_fill = (cfg.lag_fill or LAG_FILL) if cfg.model in _LAG_MODELS else None
 
     # Write resolved config (JSON for easy parsing)
     resolved = {
@@ -331,7 +340,7 @@ def _write_run_metadata(
         "target_normalizer_mode": cfg.target_normalizer_mode,
         "search_shard": cfg.search_shard,
         "keep_partial_targets": cfg.keep_partial_targets,
-        "lag_fill": cfg.lag_fill or LAG_FILL,
+        "lag_fill": lag_fill,
         "note": cfg.note,
         "phases": list(cfg.phases),
     }

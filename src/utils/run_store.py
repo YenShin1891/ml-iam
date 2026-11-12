@@ -56,22 +56,35 @@ class RunStore:
     # Settings recorded when the run was created
     # ------------------------------------------------------------------
 
+    def _settings_path(self) -> Path:
+        return self.root / "meta" / "run_config.resolved.json"
+
+    def recorded_settings(self) -> Dict[str, Any]:
+        """The settings recorded when the run was created; {} when there are none."""
+        path = self._settings_path()
+        if not path.exists():
+            return {}
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except Exception as exc:  # noqa: BLE001 - an unreadable record is no record
+            logging.warning("Could not read %s: %s", path, exc)
+            return {}
+
+    def record_settings(self, **values: Any) -> None:
+        """Add *values* to the run's recorded settings, keeping what is there."""
+        settings = {**self.recorded_settings(), **values}
+        with open(self._writable(self._settings_path()), "w", encoding="utf-8") as handle:
+            json.dump(settings, handle, indent=2, sort_keys=True)
+
     def lag_fill(self) -> str:
         """How this run fills target gaps before building lag features.
 
-        Read from the run's recorded config.  A run recorded before the
-        setting existed was built with linear interpolation, whatever
-        configs.data says today; a run with no record at all takes the
-        current default.
+        Every run created since the setting exists records it.  A run without
+        the record -- no settings file, or one written before the setting --
+        was built with linear interpolation, whatever configs.data says today.
         """
-        import configs.data as data_config
-
-        path = self.root / "meta" / "run_config.resolved.json"
-        if not path.exists():
-            return data_config.LAG_FILL
-        with open(path, "r", encoding="utf-8") as handle:
-            recorded = json.load(handle).get("lag_fill")
-        return recorded or "linear"
+        return self.recorded_settings().get("lag_fill") or "linear"
 
     # ------------------------------------------------------------------
     # Cache: expensive preprocessing (melt + pivot_table)

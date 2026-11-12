@@ -132,3 +132,20 @@ def test_the_flags_can_still_be_inputs(monkeypatch):
     monkeypatch.setattr(data_config, "TFT_OBSERVED_FLAGS_AS_INPUTS", True)
     model = create_tft_model(_dataset(), PARAMS, n_targets=2)
     assert "B__observed" in model.reals
+
+
+def test_a_dataset_without_flags_gets_the_plain_loss(monkeypatch):
+    """Whatever the global flag says: a spawned search worker does not see a run's override."""
+    monkeypatch.setattr(data_config, "KEEP_PARTIAL_TARGETS", True)
+    frame = pd.DataFrame({
+        "Model": "M", "Scenario": "S", "Region": "World", "Step": range(8),
+        "feat": np.arange(8.0), "A": np.arange(8.0), "B": np.arange(8.0) * 2,
+    })
+    dataset = TimeSeriesDataSet(
+        frame, time_idx="Step", target=TARGETS, group_ids=["Model", "Scenario", "Region"],
+        max_encoder_length=2, min_encoder_length=2, max_prediction_length=4, min_prediction_length=1,
+        time_varying_known_reals=["feat"],
+    )
+    model = create_tft_model(dataset, PARAMS, n_targets=2)
+    assert not any(isinstance(metric, MaskedRMSE) for metric in model.loss.metrics)
+    assert type(model).__name__ == "SyncedTFT"

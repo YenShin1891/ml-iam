@@ -32,9 +32,37 @@ def test_the_recorded_setting_wins_over_the_default(store, monkeypatch):
     assert store.lag_fill() == "carry_forward"
 
 
-def test_a_run_without_a_record_takes_the_default(store, monkeypatch):
+def test_a_run_without_any_record_predates_the_setting(store, monkeypatch):
     monkeypatch.setattr(data_config, "LAG_FILL", "carry_forward")
+    assert store.lag_fill() == "linear"
+
+
+def test_recording_keeps_what_was_already_recorded(store):
+    _record(store, dataset="v1")
+    store.record_settings(lag_fill="carry_forward")
+    assert store.recorded_settings() == {"dataset": "v1", "lag_fill": "carry_forward"}
     assert store.lag_fill() == "carry_forward"
+
+
+def test_an_unreadable_record_is_no_record(store):
+    meta = store.root / "meta"
+    meta.mkdir(parents=True)
+    meta.joinpath("run_config.resolved.json").write_text("{not json")
+    assert store.lag_fill() == "linear"
+
+
+def test_models_without_lag_features_record_none_and_refuse_the_key(tmp_path, monkeypatch):
+    from scripts import train_from_config as launcher
+
+    monkeypatch.setattr(launcher, "_meta_dir", lambda _run_id: tmp_path)
+    config = tmp_path / "run.yaml"
+    config.write_text("model: tft\n")
+    cfg = launcher._parse_config({"model": "tft", "phases": ["preprocess", "train"]})
+    launcher._write_run_metadata(cfg, run_id="tft_01", config_path=config, env={}, cuda_by_phase_resolved={})
+    assert json.loads((tmp_path / "run_config.resolved.json").read_text())["lag_fill"] is None
+
+    with pytest.raises(ValueError, match="builds no lag features"):
+        launcher._parse_config({"model": "tft", "phases": ["preprocess"], "lag_fill": "linear"})
 
 
 def test_a_new_run_records_a_concrete_setting(tmp_path, monkeypatch):
