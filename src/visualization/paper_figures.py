@@ -41,7 +41,7 @@ from configs.data import (
     REGION_CODE_TO_LABEL,
     SPLIT_SEED,
 )
-from configs.visualization import DEFAULT_REGION, SHAP_MAX_DISPLAY
+from configs.visualization import DEFAULT_REGION, SHAP_MAX_DISPLAY, SHAP_NORMALISED_XLABEL
 from src.data.preprocess import encode_categorical_columns
 from src.data.process_data import SCENARIO_CATEGORY_CSV, relabel_scenario_categories
 from src.utils.run_store import RunStore
@@ -51,9 +51,10 @@ from src.visualization.helpers import (
     backfill_group_labels,
     build_feature_display_names,
     filter_index_frame_by_region,
+    normalise_shap_values,
     sample_scenario_groups,
 )
-from src.visualization.shap_nn import _align_feature_names
+from src.visualization.shap_nn import SHAP_CACHE_FORMAT, _align_feature_names
 
 logger = logging.getLogger(__name__)
 
@@ -396,8 +397,32 @@ def plot_trajectories_by_category(
 # --------------------------------------------------------------------------- #
 # Figure 6: SHAP beeswarms for Emissions|CO2
 # --------------------------------------------------------------------------- #
-def _plots_dir(store: RunStore) -> str:
-    return os.path.join(str(store.root), "plots")
+def _plots_dir(store: RunStore, shap_dir: Optional[str] = None) -> str:
+    """Where the run's SHAP arrays are read from: *shap_dir*, or its plots directory."""
+    return shap_dir if shap_dir else os.path.join(str(store.root), "plots")
+
+
+def _current_shap_cache(directory: str, model_type: str) -> Optional[Dict[str, np.ndarray]]:
+    """The model's self-describing SHAP cache in *directory*, if it has one.
+
+    The cache holds the attributions together with the inputs they explain.
+    Arrays saved before it existed carry no format and are read the old way.
+    """
+    path = os.path.join(directory, f"{model_type}_shap_cache.npz")
+    if not os.path.exists(path):
+        return None
+    with np.load(path, allow_pickle=True) as cache:
+        if "format" not in cache.files or int(cache["format"]) != SHAP_CACHE_FORMAT:
+            return None
+        return {name: cache[name] for name in cache.files}
+
+
+def _beeswarm_from_cache(cache: Dict[str, np.ndarray], target: str) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+    """One target's beeswarm inputs from a cache: SHAP summed and inputs averaged over the steps."""
+    temporal, test_inputs = cache["temporal_shap"], cache["test_inputs"]
+    names = build_feature_display_names(_align_feature_names(cache["feature_names"].tolist(), temporal.shape[2]))
+    ti = cache["targets"].tolist().index(target)
+    return normalise_shap_values(temporal.sum(axis=1))[:, :, ti], test_inputs.mean(axis=1), names
 
 
 def _require_frozen_split(store: RunStore) -> None:
@@ -428,7 +453,7 @@ def _sampled_region_frame(frame: pd.DataFrame, region_series, log_prefix: str) -
     return filtered
 
 
-def _reconstruct_xgb(run_id: str, target: str) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+def _reconstruct_xgb(run_id: str, target: str, shap_dir: Optional[str] = None) -> Tuple[np.ndarray, np.ndarray, List[str]]:
     from scripts.train_xgb import derive_splits
 
     store = RunStore(run_id)
@@ -441,13 +466,13 @@ def _reconstruct_xgb(run_id: str, target: str) -> Tuple[np.ndarray, np.ndarray, 
     sampled = shap_xgb.drop_unobserved_lag_rows(sampled, features, log_prefix=f"{run_id} SHAP")
     X_test = sampled.drop(columns=NON_FEATURE_COLUMNS, errors="ignore").reset_index(drop=True)
 
-    shap_values = np.load(os.path.join(_plots_dir(store), "shap_values.npy"))
+    shap_values = np.load(os.path.join(_plots_dir(store, shap_dir), "shap_values.npy"))
     if shap_values.shape[:2] != (len(X_test), len(features)) or list(X_test.columns) != features:
         raise ValueError(
             f"{run_id}: saved SHAP values {shap_values.shape} do not match the reconstructed "
             f"test matrix {X_test.shape} / feature order"
         )
-    normalised = shap_xgb.normalise_shap_values(shap_values)
+    normalised = normalise_shap_values(shap_values)
 
     # Feature values only colour the dots; encode any label columns as the
     # SHAP plotting phase does (shap_xgb.draw_shap_plot).
@@ -458,11 +483,17 @@ def _reconstruct_xgb(run_id: str, target: str) -> Tuple[np.ndarray, np.ndarray, 
     return normalised[:, :, ti], X_values, build_feature_display_names(features)
 
 
-def _reconstruct_lstm(run_id: str, target: str) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+def _reconstruct_lstm(run_id: str, target: str, shap_dir: Optional[str] = None) -> Tuple[np.ndarray, np.ndarray, List[str]]:
     from configs.models.lstm import LSTMTrainerConfig
     from scripts.train_lstm import _region_labels, derive_splits
 
     store = RunStore(run_id)
+    cache = _current_shap_cache(_plots_dir(store, shap_dir), "lstm")
+    if cache is not None:
+        return _beeswarm_from_cache(cache, target)
+
+    # Arrays saved before the cache existed hold the attributions alone, for
+    # the windows of the first 100 rows; rebuild those windows.
     _require_frozen_split(store)
     data = store.load_processed_data()
     splits = derive_splits(data, store)
@@ -481,8 +512,7 @@ def _reconstruct_lstm(run_id: str, target: str) -> Tuple[np.ndarray, np.ndarray,
     group_ids = sampled.groupby(series_cols, sort=False).ngroup().to_numpy()
     X_test = sampled.drop(columns=NON_FEATURE_COLUMNS, errors="ignore").reset_index(drop=True)
 
-    # Mirrors the preprocess_features / create_sequences closures inside
-    # shap_nn.get_lstm_shap_values (not importable): scale the continuous
+    # What shap_nn.get_lstm_shap_values did then: scale the continuous
     # features of the first 100 rows and cut windows that stay in one series.
     raw_features, _ = store.load_features()
     raw_features = meta.get("lstm_raw_features", raw_features)
@@ -495,24 +525,29 @@ def _reconstruct_lstm(run_id: str, target: str) -> Tuple[np.ndarray, np.ndarray,
     windows = [scaled[i:i + seq_len] for i in range(len(scaled) - seq_len + 1) if g[i] == g[i + seq_len - 1]]
     test_inputs = np.stack(windows)
 
-    temporal = np.load(os.path.join(_plots_dir(store), "lstm_shap_values_temporal.npy"))
+    temporal = np.load(os.path.join(_plots_dir(store, shap_dir), "lstm_shap_values_temporal.npy"))
     if temporal.shape[0] != test_inputs.shape[0] or temporal.shape[2] != test_inputs.shape[2]:
         raise ValueError(
             f"{run_id}: temporal SHAP {temporal.shape} does not match the reconstructed windows {test_inputs.shape}"
         )
     names = build_feature_display_names(_align_feature_names(list(features), temporal.shape[2]))
     ti = targets.index(target)
-    return temporal.sum(axis=1)[:, :, ti], test_inputs.mean(axis=1), names
+    return normalise_shap_values(temporal.sum(axis=1))[:, :, ti], test_inputs.mean(axis=1), names
 
 
-def _reconstruct_tft(run_id: str, target: str) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+def _reconstruct_tft(run_id: str, target: str, shap_dir: Optional[str] = None) -> Tuple[np.ndarray, np.ndarray, List[str]]:
     store = RunStore(run_id)
+    cache = _current_shap_cache(_plots_dir(store, shap_dir), "tft")
+    if cache is not None:
+        return _beeswarm_from_cache(cache, target)
+
+    # A cache from before the format existed: same arrays, no target names.
     _, targets = store.load_features()
-    cache = np.load(os.path.join(_plots_dir(store), "tft_shap_cache.npz"), allow_pickle=True)
+    cache = np.load(os.path.join(_plots_dir(store, shap_dir), "tft_shap_cache.npz"), allow_pickle=True)
     temporal, test_inputs = cache["temporal_shap"], cache["test_inputs"]
     names = build_feature_display_names(_align_feature_names(cache["feature_names"].tolist(), temporal.shape[2]))
     ti = list(targets).index(target)
-    return temporal.sum(axis=1)[:, :, ti], test_inputs.mean(axis=1), names
+    return normalise_shap_values(temporal.sum(axis=1))[:, :, ti], test_inputs.mean(axis=1), names
 
 
 _RECONSTRUCT = {"xgb": _reconstruct_xgb, "lstm": _reconstruct_lstm, "tft": _reconstruct_tft}
@@ -522,20 +557,26 @@ def reconstruct_co2_shap(
     run_id: str,
     model_type: Optional[str] = None,
     target: str = "Emissions|CO2",
+    shap_dir: Optional[str] = None,
 ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
     """(shap_matrix, X_matrix, display_names) behind *run_id*'s *target* beeswarm.
 
-    The SHAP phase saves the attributions but not the rows it scored, so the
-    feature matrix that colours the dots is rebuilt the way that phase built it:
+    The SHAP arrays are read from *shap_dir*, or from the run's ``plots``
+    directory when it is None.  Every model's values come back on one scale:
+    divided by the target's sum over features of mean |SHAP|
+    (``helpers.normalise_shap_values``).
 
-    * ``xgb``: ``scripts.train_xgb.derive_splits`` -> R10 region filter ->
-      scenario-group sampling -> rows with an unobserved lag dropped; saved ``plots/shap_values.npy`` is then
-      normalised per target by ``shap_xgb.normalise_shap_values``.
-    * ``lstm``: ``predictions.pkl`` horizon frame -> region filter -> sampling
-      -> ``lstm_scaler_X`` -> sequence windows of the first 100 rows;
-      ``plots/lstm_shap_values_temporal.npy`` summed over timesteps, inputs
-      averaged over timesteps.
-    * ``tft``: everything comes from ``plots/tft_shap_cache.npz``.
+    * ``xgb``: the SHAP phase saves the attributions but not the rows it
+      scored, so the matrix that colours the dots is rebuilt the way that
+      phase built it: ``scripts.train_xgb.derive_splits`` -> R10 region filter
+      -> scenario-group sampling -> rows with an unobserved lag dropped, next
+      to the saved ``shap_values.npy``.
+    * ``lstm`` and ``tft``: everything comes from ``<model>_shap_cache.npz``,
+      which holds the attributions and the windows they explain; SHAP is
+      summed and the inputs averaged over the steps.  Arrays saved before
+      that cache existed are read as they were written: for the LSTM,
+      ``predictions.pkl`` horizon frame -> region filter -> sampling ->
+      ``lstm_scaler_X`` -> sequence windows of the first 100 rows.
 
     *model_type* defaults to the run id prefix.  Both matrices are
     (n_samples, n_features); the names are the dashboard's display names.
@@ -543,7 +584,7 @@ def reconstruct_co2_shap(
     model_type = (model_type or run_id.split("_", 1)[0]).lower()
     if model_type not in _RECONSTRUCT:
         raise ValueError(f"model_type must be one of {sorted(_RECONSTRUCT)}, got {model_type!r}")
-    shap_matrix, X_matrix, names = _RECONSTRUCT[model_type](run_id, target)
+    shap_matrix, X_matrix, names = _RECONSTRUCT[model_type](run_id, target, shap_dir)
     shap_matrix, X_matrix = np.asarray(shap_matrix), np.asarray(X_matrix)
     if shap_matrix.shape != X_matrix.shape or len(names) != shap_matrix.shape[1]:
         raise ValueError(f"{run_id}: SHAP {shap_matrix.shape}, X {X_matrix.shape}, {len(names)} names")
@@ -577,8 +618,9 @@ def draw_shap_co2_panel(
 ) -> None:
     """One large-font beeswarm panel (no title), saved tightly cropped to *out_path*.
 
-    Same shap.summary_plot call and jitter seed as
-    ``helpers.draw_shap_beeswarm``; the fonts, the two-line feature labels
+    Same shap.summary_plot call, jitter seed and x-axis label as
+    ``helpers.draw_shap_beeswarm`` -- the values are expected on the shared
+    scale ``reconstruct_co2_shap`` returns; the fonts, the two-line feature labels
     (variable name bold, lag suffix regular), the dot size and the 3-bin x
     axis are the manuscript's.
     """
@@ -611,7 +653,7 @@ def draw_shap_co2_panel(
             else:
                 ax.text(-0.01, y, text, transform=row_tr, ha="right", va="center", fontsize=feature_size, fontweight="bold")
         ax.tick_params(axis="x", labelsize=tick_size)
-        ax.set_xlabel(ax.get_xlabel(), fontsize=tick_size)
+        ax.set_xlabel(SHAP_NORMALISED_XLABEL, fontsize=tick_size)
         if xtick_bins:
             ax.xaxis.set_major_locator(MaxNLocator(nbins=xtick_bins, steps=[1, 2, 5, 10]))
         for other in fig.axes:
@@ -659,13 +701,16 @@ def plot_shap_co2_beeswarms(
     out_path: Optional[str] = None,
     panel_dir: Optional[str] = None,
     dpi: int = 300,
+    shap_dirs: Optional[Dict[str, str]] = None,
 ) -> Dict[str, List[str]]:
     """Figure 6: *target* SHAP beeswarms, one large-font panel per run, in one row.
 
     Each panel is reconstructed with :func:`reconstruct_co2_shap`, drawn with
     :func:`draw_shap_co2_panel` and labelled '(a) XGBoost' etc. underneath in
     the manuscript's bold serif.  Per-panel PNGs go to *panel_dir* (a
-    temporary directory when None).  Returns ``{name: top-8 feature names}``
+    temporary directory when None).  *shap_dirs* maps a run id to the
+    directory its SHAP arrays are read from, for arrays kept outside the
+    run's own ``plots`` directory.  Returns ``{name: top-8 feature names}``
     in beeswarm order so the ranking can be checked against the run's own
     SHAP plots.
     """
@@ -677,7 +722,9 @@ def plot_shap_co2_beeswarms(
         os.makedirs(panel_dir, exist_ok=True)
         panel_paths = []
         for run_id, name in zip(run_ids, names):
-            shap_matrix, X_matrix, display = reconstruct_co2_shap(run_id, target=target)
+            shap_matrix, X_matrix, display = reconstruct_co2_shap(
+                run_id, target=target, shap_dir=(shap_dirs or {}).get(run_id),
+            )
             top[name] = top_shap_features(shap_matrix, display)
             logger.info("%s top-%d: %s", name, len(top[name]), top[name])
             path = os.path.join(panel_dir, f"{run_id}_{target.replace('|', '_')}_beeswarm.png")
