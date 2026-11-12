@@ -19,27 +19,49 @@ from src.utils.utils import get_run_root
 
 
 class MaskedRMSE(RMSE):
-    """RMSE that zeros loss on unobserved (interpolated) target elements.
+    """RMSE over the observed target elements only.
 
-    Before each forward pass the parent model sets ``_obs_mask`` to a
-    ``(batch, time)`` float tensor (1 = observed, 0 = interpolated).
-    If the mask is ``None`` the metric falls back to standard RMSE.
+    Before each loss computation the parent model sets ``_obs_mask`` to a
+    ``(batch, time)`` float tensor (1 = observed, 0 = zero-filled or
+    interpolated).  Unobserved elements contribute neither squared error nor
+    count, so the value is the root of the mean over observed elements.  With
+    no mask set the metric is the standard RMSE.
     """
 
     def __init__(self):
         super().__init__()
         self._obs_mask: Optional[torch.Tensor] = None
 
-    def loss(self, y_pred, target):
-        sq_err = torch.pow(self.to_prediction(y_pred) - target, 2)
-        if self._obs_mask is not None:
-            mask = self._obs_mask
-            # Align mask shape to sq_err (may need unsqueezing)
-            while mask.dim() < sq_err.dim():
-                mask = mask.unsqueeze(-1)
-            sq_err = sq_err * mask
-            self._obs_mask = None  # consume
-        return sq_err
+    def _update_losses_and_lengths(self, losses: torch.Tensor, lengths: torch.Tensor):
+        mask, self._obs_mask = self._obs_mask, None  # consume
+        if mask is None:
+            return super()._update_losses_and_lengths(losses, lengths)
+
+        mask = mask.to(losses.dtype)
+        if mask.shape[:2] != losses.shape[:2]:
+            raise ValueError(
+                f"Observed mask {tuple(mask.shape)} does not line up with the "
+                f"losses {tuple(losses.shape)}"
+            )
+        # Steps past a sample's decoder length are padding, not observations.
+        steps = torch.arange(losses.size(1), device=losses.device).unsqueeze(0)
+        mask = mask * (steps < lengths.to(losses.device).unsqueeze(-1)).to(losses.dtype)
+        while mask.dim() < losses.dim():
+            mask = mask.unsqueeze(-1)
+
+        total = (losses * mask).sum()
+        if not torch.isfinite(total):
+            total = torch.tensor(1e9, device=losses.device)
+        self.losses = self.losses + total
+        self.lengths = self.lengths + mask.sum().round().long()
+
+    def reduce_loss(self, losses, lengths, reduction=None):
+        # A batch can hold no observed element of one target.  0/0 would be
+        # NaN, and sqrt(0) has an infinite derivative, so return a zero that
+        # is still attached to the graph.
+        if (reduction or self.reduction) != "none" and int(lengths.sum()) == 0:
+            return losses.sum() * 0.0
+        return super().reduce_loss(losses, lengths, reduction=reduction)
 
 
 class SyncedTFT(TemporalFusionTransformer):
@@ -61,12 +83,17 @@ class MaskedTFT(SyncedTFT):
     metrics before each loss computation.
 
     Expects ``__observed`` columns to be present in ``time_varying_known_reals``
-    so they appear in ``x["decoder_cont"]``.
+    so they appear in ``x["decoder_cont"]``.  Whether the network also reads
+    them is decided when the model is created (see ``create_tft_model``).
     """
 
     def _set_obs_masks(self, x):
         """Extract per-target observed masks from decoder_cont and push them
-        into the corresponding MaskedRMSE instances."""
+        into the corresponding MaskedRMSE instances.
+
+        Raises when a mask cannot be found: a masked loss that silently runs
+        unmasked trains on zero-filled targets and reports nothing.
+        """
         loss = self.loss
         if isinstance(loss, MultiLoss):
             metrics = loss.metrics
@@ -74,26 +101,24 @@ class MaskedTFT(SyncedTFT):
             metrics = [loss]
 
         from src.data.preprocess import observed_mask_columns
-        targets = self.hparams.get("target", [])
-        if isinstance(targets, str):
-            targets = [targets]
-        obs_col_names = observed_mask_columns(targets)
+        # The targets live in the dataset parameters; pytorch-forecasting does
+        # not copy them into hparams.
+        obs_col_names = observed_mask_columns(self.target_names)
 
-        # x_reals lists all real-valued columns fed to the model
-        x_reals = self.hparams.get("x_reals", [])
-        decoder_cont = x.get("decoder_cont")
-        if decoder_cont is None:
-            return
+        # x_reals names the columns of the continuous tensors, in order
+        x_reals = list(self.hparams.x_reals)
+        decoder_cont = x["decoder_cont"]  # (batch, time, n_reals)
 
         for i, metric in enumerate(metrics):
             if not isinstance(metric, MaskedRMSE):
                 continue
-            if i < len(obs_col_names):
-                col_name = obs_col_names[i]
-                if col_name in x_reals:
-                    col_idx = x_reals.index(col_name)
-                    # decoder_cont shape: (batch, time, n_reals)
-                    metric._obs_mask = decoder_cont[:, :, col_idx]
+            if i >= len(obs_col_names) or obs_col_names[i] not in x_reals:
+                raise RuntimeError(
+                    f"No observed-mask column for target {i} "
+                    f"({obs_col_names[i] if i < len(obs_col_names) else 'unnamed'}) "
+                    "among the dataset's reals; the masked loss cannot be applied."
+                )
+            metric._obs_mask = decoder_cont[:, :, x_reals.index(obs_col_names[i])]
 
     def training_step(self, batch, batch_idx):
         x, y = batch
@@ -148,6 +173,17 @@ def create_tft_model(
         # empty scheduler dict which Lightning rejects.  Instead, set an
         # unreachably high patience so the scheduler never fires.
         kwargs["reduce_on_plateau_patience"] = 999999
+
+    from configs.data import TFT_OBSERVED_FLAGS_AS_INPUTS
+    if KEEP_PARTIAL_TARGETS and not TFT_OBSERVED_FLAGS_AS_INPUTS:
+        # The flags stay in the dataset, so every batch still carries them
+        # for the loss mask, but they are left out of the variables the
+        # network selects from.  from_dataset would otherwise list every
+        # known real as an encoder and decoder input.
+        flags = {name for name in train_dataset.reals if name.endswith("__observed")}
+        inputs = [name for name in train_dataset._time_varying_known_reals if name not in flags]
+        kwargs["time_varying_reals_encoder"] = inputs + list(train_dataset._time_varying_unknown_reals)
+        kwargs["time_varying_reals_decoder"] = inputs
 
     return model_cls.from_dataset(train_dataset, **kwargs)
 

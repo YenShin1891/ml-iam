@@ -142,6 +142,15 @@ POPULATION_COLUMN = "Population"
 # uses native multi-output regression with cross-target tree splits.
 KEEP_PARTIAL_TARGETS = True
 
+# The TFT's batches carry one <target>__observed flag per target and timestep
+# so its masked loss can skip unreported elements.  When False (the default)
+# the flags stop there: the network does not read them, so emulating a new
+# scenario needs no knowledge of which targets its IAM would have reported.
+# When True they are also model inputs at every timestep, as in runs up to
+# tft_95.  A trained checkpoint keeps whichever input list it was fitted
+# with, so this only affects models created from here on.
+TFT_OBSERVED_FLAGS_AS_INPUTS = False
+
 # When True, resample groups that have only 10- or 20-year intervals onto a
 # uniform 5-year grid by inserting intermediate rows with interpolated values.
 # Inserted rows get __observed = 0.  With KEEP_PARTIAL_TARGETS they are then
