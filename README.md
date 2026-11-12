@@ -100,6 +100,7 @@ conda activate ml-iam
 
 # Install dependencies
 pip install -r requirements.txt
+# pip install -r requirements-advanced.txt  # optional: LSTM/TFT (PyTorch) dependencies
 pip install -e .
 ```
 
@@ -360,12 +361,6 @@ The archives hold weights, scalers, category vocabularies, imputation medians an
 
 ## 🎨 Explore Your Results
 
-Launch the interactive Streamlit dashboard to explore results:
-
-```bash
-make dashboard RUN_ID=xgb_37
-```
-
 The dashboard runs in its own conda environment (`mliam_st` by default) so
 Streamlit's dependencies stay out of the training environment. Create it with:
 
@@ -381,12 +376,18 @@ If your environment names differ from the defaults (`ml-iam` for training,
 `make dashboard DASHBOARD_ENV=my_env`. `make check-env` prints which
 interpreter and library versions the make targets will actually use.
 
+Then launch the interactive Streamlit dashboard to explore results:
+
+```bash
+make dashboard RUN_ID=tft
+```
+
 Access at `http://localhost:8501`. Logs are saved under `logs/`.
 
 By default, individual plots are saved for index 6. Override with:
 
 ```bash
-make dashboard RUN_ID=xgb_37 SAVE_PLOTS="0,6"
+make dashboard RUN_ID=tft SAVE_PLOTS="0,6"
 ```
 
 **Features (WIP):**
