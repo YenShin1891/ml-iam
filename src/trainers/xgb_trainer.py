@@ -1,7 +1,9 @@
 import gc
+import json
 import logging
 import os
 import queue
+import re
 import subprocess
 import time
 from contextlib import contextmanager
@@ -20,6 +22,7 @@ from configs.models import (
     XGBSearchSpace,
 )
 from configs.data import N_LAG_FEATURES
+from configs.models.xgb import LAG_SCOPES
 from src.trainers.evaluation import test_xgb_autoregressively
 from .search import (
     allocate_pool,
@@ -33,18 +36,72 @@ from .search import (
 FINAL_MODEL_FILENAME = "final_best.json"
 
 
+_LAG_COLUMN = re.compile(r"^prev\d*_(.+)$")
+
+
+def hidden_lag_columns(feature_names: List[str], targets: List[str], y_df: pd.DataFrame, lag_scope: str) -> List[List[int]]:
+    """For each target's booster, the positions of the lag columns it must not read.
+
+    A booster always reads the lags of its own output.  Under
+    "own_and_complete" it also reads the lags of every output that *y_df*
+    (the training targets) reports on every row; under "own" nothing else;
+    under "all" every lag, which hides nothing.
+    """
+    if lag_scope not in LAG_SCOPES:
+        raise ValueError(f"Unknown lag_scope {lag_scope!r}; expected one of {LAG_SCOPES}")
+    if lag_scope == "all":
+        return [[] for _ in targets]
+
+    complete = set()
+    if lag_scope == "own_and_complete":
+        complete = {t for t in targets if t in y_df.columns and bool(y_df[t].notna().all())}
+
+    lag_of = {}
+    for position, name in enumerate(feature_names):
+        match = _LAG_COLUMN.match(str(name))
+        if match and match.group(1) in targets:
+            lag_of[position] = match.group(1)
+    return [
+        sorted(p for p, source in lag_of.items() if source != target and source not in complete)
+        for target in targets
+    ]
+
+
 class PerTargetXGBRegressor:
     """Wrapper that trains one XGBRegressor per target, dropping NaN rows
     independently per target.  Exposes the same `predict()` / `save_model()` /
     `load_model()` interface as XGBRegressor so that autoregressive evaluation
     works without modification.
+
+    *lag_scope* decides which lagged outputs each booster reads (see
+    ``XGBTrainerConfig.lag_scope``).  A column a booster must not read is
+    blanked to missing for that booster in fitting and in prediction alike,
+    so the feature layout, the rollout and SHAP stay as they are; the booster
+    simply never splits on it.
     """
 
-    def __init__(self, targets: List[str], **xgb_kwargs):
+    def __init__(self, targets: List[str], lag_scope: str = "all", **xgb_kwargs):
+        if lag_scope not in LAG_SCOPES:
+            raise ValueError(f"Unknown lag_scope {lag_scope!r}; expected one of {LAG_SCOPES}")
         self.targets = list(targets)
+        self.lag_scope = lag_scope
+        self.hidden_columns: List[List[int]] = [[] for _ in targets]
         self.models: List[XGBRegressor] = [
             XGBRegressor(**xgb_kwargs) for _ in targets
         ]
+
+    def _view(self, X, i: int):
+        """*X* as booster *i* may see it: its hidden lag columns set to missing."""
+        hidden = self.hidden_columns[i]
+        if not hidden:
+            return X
+        if isinstance(X, pd.DataFrame):
+            view = X.copy()
+            view.iloc[:, hidden] = np.nan
+            return view
+        view = np.array(X, dtype=float, copy=True)
+        view[..., hidden] = np.nan
+        return view
 
     def fit(self, X, y_df, *, eval_set=None, verbose=25):
         """Fit one model per target, dropping rows with NaN for that target.
@@ -53,10 +110,23 @@ class PerTargetXGBRegressor:
         *eval_set* is a list of ``(X_val, y_val_df)`` tuples — each val y is
         also a DataFrame.
         """
+        feature_names = list(X.columns) if isinstance(X, pd.DataFrame) else []
+        self.hidden_columns = hidden_lag_columns(feature_names, self.targets, y_df, self.lag_scope)
+        if self.lag_scope != "all":
+            if not feature_names:
+                raise ValueError("lag_scope needs named feature columns; fit on a DataFrame")
+            logging.info(
+                "XGB lag scope '%s': boosters read %s of %d lag columns",
+                self.lag_scope,
+                sorted({sum(1 for n in feature_names if _LAG_COLUMN.match(str(n))) - len(h) for h in self.hidden_columns}),
+                sum(1 for n in feature_names if _LAG_COLUMN.match(str(n))),
+            )
+
         for i, (target, model) in enumerate(zip(self.targets, self.models)):
             y_col = y_df[target]
             valid = y_col.notna()
-            X_t = X[valid] if isinstance(X, pd.DataFrame) else X[valid.values]
+            X_i = self._view(X, i)
+            X_t = X_i[valid] if isinstance(X_i, pd.DataFrame) else X_i[valid.values]
             y_t = y_col[valid]
             ev = None
             if eval_set:
@@ -64,7 +134,8 @@ class PerTargetXGBRegressor:
                 for Xv, yv_df in eval_set:
                     yv_col = yv_df[target]
                     vv = yv_col.notna()
-                    Xv_t = Xv[vv] if isinstance(Xv, pd.DataFrame) else Xv[vv.values]
+                    Xv_i = self._view(Xv, i)
+                    Xv_t = Xv_i[vv] if isinstance(Xv_i, pd.DataFrame) else Xv_i[vv.values]
                     yv_t = yv_col[vv]
                     ev.append((Xv_t, yv_t))
             logging.info(
@@ -89,8 +160,8 @@ class PerTargetXGBRegressor:
     def predict(self, X):
         """Predict all targets; returns (n, n_targets) array."""
         preds = []
-        for model in self.models:
-            p = model.predict(X)
+        for i, model in enumerate(self.models):
+            p = model.predict(self._view(X, i))
             if p.ndim == 1:
                 p = p.reshape(-1, 1)
             preds.append(p)
@@ -101,6 +172,14 @@ class PerTargetXGBRegressor:
         stem, ext = os.path.splitext(path)
         for i, model in enumerate(self.models):
             model.save_model(f"{stem}_{i}{ext}")
+        # Which lag columns each booster was fitted without.  Prediction must
+        # blank the same ones, so this travels with the boosters; a model
+        # saved without the file (runs up to xgb_87) reads every lag.
+        with open(f"{stem}_lag_scope.json", "w", encoding="utf-8") as handle:
+            json.dump(
+                {"lag_scope": self.lag_scope, "targets": self.targets, "hidden_columns": self.hidden_columns},
+                handle, indent=2,
+            )
 
     @classmethod
     def load_model(cls, path, targets: List[str]):
@@ -113,6 +192,15 @@ class PerTargetXGBRegressor:
             m = XGBRegressor()
             m.load_model(f"{stem}_{i}{ext}")
             obj.models.append(m)
+        obj.lag_scope = "all"
+        obj.hidden_columns = [[] for _ in targets]
+        scope_path = f"{stem}_lag_scope.json"
+        if os.path.exists(scope_path):
+            with open(scope_path, "r", encoding="utf-8") as handle:
+                saved = json.load(handle)
+            obj.lag_scope = saved["lag_scope"]
+            by_target = dict(zip(saved["targets"], saved["hidden_columns"]))
+            obj.hidden_columns = [list(by_target.get(t, [])) for t in obj.targets]
         return obj
 
 
@@ -481,6 +569,7 @@ def _train_single_fold(
     if KEEP_PARTIAL_TARGETS:
         regular_model = PerTargetXGBRegressor(
             targets=targets,
+            lag_scope=(trainer_cfg or XGBTrainerConfig()).lag_scope,
             n_estimators=num_boost_round,
             early_stopping_rounds=early_stopping_rounds,
             **xgb_params,
@@ -1185,6 +1274,7 @@ def train_and_save_model(
             if KEEP_PARTIAL_TARGETS:
                 model = PerTargetXGBRegressor(
                     targets=targets,
+                    lag_scope=trainer_cfg.lag_scope,
                     n_estimators=num_boost_round,
                     early_stopping_rounds=early_stopping_rounds,
                     **xgb_params,
