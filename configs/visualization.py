@@ -47,7 +47,7 @@ SHAP_NN_BACKGROUND_WINDOWS: int = 200
 # that output's total attribution whatever units the model predicts in --
 # XGBoost's scaled targets, the LSTM's standardised ones or the TFT's native
 # ones.
-SHAP_NORMALISED_XLABEL: str = "Normalised SHAP value\n(SHAP / the output's total mean |SHAP|)"
+SHAP_NORMALISED_XLABEL: str = "Normalized SHAP value\n(SHAP / the output's total mean |SHAP|)"
 
 
 # -----------------------------

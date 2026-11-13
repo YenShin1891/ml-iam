@@ -106,6 +106,13 @@ def load_marker_scenario(targets: list) -> Optional[pd.DataFrame]:
     return _marker_cache[cols] if len(cols) > 1 else None
 
 def create_single_scatter_plot(ax, test_data_valid, y_test_valid, preds_valid, target_index, targets, model_name, output_units, observed_mask_col=None):
+    # An element the IAM did not report holds a fill value, not a measurement:
+    # it is left out of the points as it is out of the R2.
+    if observed_mask_col is not None:
+        obs = np.asarray(observed_mask_col).astype(bool)
+        test_data_valid = test_data_valid[obs].reset_index(drop=True)
+        y_test_valid, preds_valid = np.asarray(y_test_valid)[obs], np.asarray(preds_valid)[obs]
+        observed_mask_col = None
     unique_years = sorted(test_data_valid['Year'].unique()) if len(test_data_valid) else []
     cmap = matplotlib.colormaps['viridis']
     colors = cmap(np.linspace(0, 1, len(unique_years))) if unique_years else []

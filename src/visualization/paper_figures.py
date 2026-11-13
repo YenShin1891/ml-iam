@@ -196,6 +196,15 @@ def load_run_predictions(run_id: str) -> pd.DataFrame:
             f"{run_id}: {len(data)} rows but y has {len(yy)} and preds {len(pp)} rows"
         )
 
+    # An element the IAM did not report is stored as a fill value, not a
+    # measurement.  The metrics leave it out (observed mask); so do the
+    # figures, by blanking it here -- their callers drop NaN rows.
+    from src.data.preprocess import observed_mask_from_frame
+
+    observed = observed_mask_from_frame(data, list(targets))
+    if observed is not None:
+        yy = np.where(np.asarray(observed, dtype=bool), yy.astype(float), np.nan)
+
     out = data[[c for c in META_COLUMNS if c in data.columns]].reset_index(drop=True)
     for i, t in enumerate(targets):
         out[f"y|{t}"] = yy[:, i]
