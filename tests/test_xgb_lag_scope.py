@@ -127,8 +127,9 @@ def test_the_launcher_refuses_a_scope_it_cannot_honour():
 
     with pytest.raises(ValueError, match="must be one of"):
         launcher._parse_config({"model": "xgb", "phases": ["preprocess"], "lag_scope": "some"})
-    with pytest.raises(ValueError, match="xgb runs only"):
-        launcher._parse_config({"model": "linear", "phases": ["preprocess"], "lag_scope": "own"})
+    with pytest.raises(ValueError, match="runs only"):
+        launcher._parse_config({"model": "lstm", "phases": ["preprocess"], "lag_scope": "own"})
+    assert launcher._parse_config({"model": "linear", "phases": ["preprocess"], "lag_scope": "own"}).lag_scope == "own"
     resumed = launcher._parse_config({"model": "xgb", "run_id": "xgb_01", "resume": "train", "lag_scope": "own"})
     with pytest.raises(ValueError, match="fixed when a run is created"):
         launcher._validate_model_constraints(resumed)

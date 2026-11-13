@@ -31,24 +31,30 @@ class PerTargetLinear:
     The counterpart of PerTargetXGBRegressor.  *skip_columns* are positions
     the fit ignores: the integer-coded categoricals stay in the frame, where
     the rollout groups trajectories by them, but only their one-hot columns
-    are regressed on.
+    are regressed on.  *hidden_columns* holds, per target, further positions
+    that target's fit ignores: the lag columns outside the run's lag scope
+    (xgb_trainer.hidden_lag_columns).
     """
 
-    def __init__(self, skip_columns=()):
+    def __init__(self, skip_columns=(), hidden_columns=None):
         self.skip_columns = sorted(int(c) for c in skip_columns)
+        self.hidden_columns = [sorted(int(c) for c in cols) for cols in (hidden_columns or [])]
         self.models = []
 
-    def _design(self, X):
+    def _design(self, X, j):
         import numpy as np
 
+        # getattr: models pickled before the lag scope existed have no such attribute.
+        hidden = getattr(self, "hidden_columns", None) or []
+        drop = sorted(set(self.skip_columns) | set(hidden[j] if j < len(hidden) else ()))
         X = np.asarray(X, dtype=float)
-        return np.delete(X, self.skip_columns, axis=1) if self.skip_columns else X
+        return np.delete(X, drop, axis=1) if drop else X
 
     def fit(self, X, y):
         import numpy as np
         from sklearn.linear_model import Ridge
 
-        X = self._design(X)
+        X = np.asarray(X, dtype=float)
         y = np.asarray(y, dtype=float)
         self.models = []
         for j in range(y.shape[1]):
@@ -58,16 +64,16 @@ class PerTargetLinear:
                 # identity, so 0 is its mean.
                 self.models.append(None)
                 continue
-            self.models.append(Ridge(alpha=RIDGE_ALPHA).fit(X[observed], y[observed, j]))
+            self.models.append(Ridge(alpha=RIDGE_ALPHA).fit(self._design(X[observed], j), y[observed, j]))
         return self
 
     def predict(self, X):
         import numpy as np
 
-        X = self._design(X)
+        X = np.asarray(X, dtype=float)
         return np.column_stack([
-            np.zeros(len(X)) if model is None else model.predict(X)
-            for model in self.models
+            np.zeros(len(X)) if model is None else model.predict(self._design(X, j))
+            for j, model in enumerate(self.models)
         ])
 
 
@@ -191,12 +197,22 @@ def train_linear(store):
     logging.info("Fitting the linear baseline...")
     splits = _splits_for(store)
 
-    model = PerTargetLinear(skip_columns=splits["skip_columns"])
+    import pandas as pd
+
+    from src.trainers.xgb_trainer import hidden_lag_columns
+
+    lag_scope = store.lag_scope()
+    hidden = hidden_lag_columns(
+        list(splits["X_train"].columns), splits["targets"],
+        pd.DataFrame(splits["y_train"], columns=splits["targets"]), lag_scope,
+    )
+    model = PerTargetLinear(skip_columns=splits["skip_columns"], hidden_columns=hidden)
     model.fit(splits["X_train"].values, splits["y_train"])
     logging.info(
-        "Fitted %d targets on %d rows x %d columns",
+        "Fitted %d targets on %d rows x %d columns (lag scope %s: %s lag columns hidden per target)",
         len(model.models), len(splits["X_train"]),
         len(splits["features"]) - len(splits["skip_columns"]),
+        lag_scope, sorted({len(cols) for cols in hidden}),
     )
 
     store.save_artifact(MODEL_ARTIFACT, model)

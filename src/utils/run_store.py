@@ -87,7 +87,7 @@ class RunStore:
         return self.recorded_settings().get("lag_fill") or "linear"
 
     def lag_scope(self) -> str:
-        """Which lagged outputs each of this run's XGBoost boosters reads.
+        """Which lagged outputs each of this run's per-output models reads (XGBoost, linear).
 
         Recorded when the run is created, so its search and its final fit
         agree whatever XGBTrainerConfig defaults to later.  A run without the

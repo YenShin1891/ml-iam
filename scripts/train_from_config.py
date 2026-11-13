@@ -44,7 +44,7 @@ class RunConfig:
     target_normalizer_mode: Optional[str] = None  # TFT: "encoder_floored" or "global"
     search_shard: Optional[str] = None  # "index/count" when several machines split one search
     lag_fill: Optional[str] = None  # XGB/linear: how target gaps are filled before lagging
-    lag_scope: Optional[str] = None  # XGB: which lagged outputs each booster reads
+    lag_scope: Optional[str] = None  # XGB, linear: which lagged outputs each per-output model reads
     note: Optional[str] = None
 
 
@@ -254,8 +254,8 @@ def _parse_config(obj: Dict[str, Any]) -> RunConfig:
 
         if lag_scope not in LAG_SCOPES:
             raise ValueError(f"'lag_scope' must be one of {sorted(LAG_SCOPES)}")
-        if model != "xgb":
-            raise ValueError(f"'lag_scope' applies to xgb runs only; {model} has no per-output boosters")
+        if model not in _LAG_MODELS:
+            raise ValueError(f"'lag_scope' applies to {sorted(_LAG_MODELS)} runs only; {model} builds no lag features")
 
     note = obj.get("note")
     if note is not None and not isinstance(note, str):
@@ -339,13 +339,17 @@ def _write_run_metadata(
 
     lag_fill = (cfg.lag_fill or LAG_FILL) if cfg.model in _LAG_MODELS else None
 
-    # The same for the lag scope of an XGBoost run: a record without one marks
-    # a run whose boosters read every lag (RunStore.lag_scope).
+    # The same for the lag scope: a record without one marks a run whose
+    # per-output models read every lag (RunStore.lag_scope).  The linear
+    # baseline reads every lag unless its YAML names the scope of the XGBoost
+    # run it is compared against.
     lag_scope = None
     if cfg.model == "xgb":
         from configs.models.xgb import XGBTrainerConfig
 
         lag_scope = cfg.lag_scope or XGBTrainerConfig().lag_scope
+    elif cfg.model == "linear":
+        lag_scope = cfg.lag_scope or "all"
 
     # Write resolved config (JSON for easy parsing)
     resolved = {
