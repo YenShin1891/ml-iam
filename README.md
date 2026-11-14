@@ -342,7 +342,8 @@ make unit-test        # or: python -m pytest tests -q
 
 ## ⚡ Use the trained models
 
-The runs reported in the paper (`xgb_85`, `lstm_89`, `tft_95`) are published on Zenodo: [10.5281/zenodo.22828667](https://doi.org/10.5281/zenodo.22828667).
+The paper reports four runs: `xgb_90` (XGBoost), `lstm_89` (LSTM), `tft_106` (TFT) and the ridge baseline `linear_04`.
+The archives on Zenodo ([10.5281/zenodo.22828667](https://doi.org/10.5281/zenodo.22828667)) hold `xgb_85`, `lstm_89` and `tft_95`: the LSTM is the paper's run, and the XGBoost and TFT archives are the runs of the previous manuscript version, which `xgb_90` and `tft_106` replace. `metadata/published_models.json` lists what `make fetch-models` downloads.
 
 ```bash
 cp configs/paths-template.py configs/paths.py      # RESULTS_PATH is where the runs are unpacked
@@ -426,7 +427,7 @@ wheel is enough). TFT runs only, for now.
 
 ### Can I use pre-trained models for inference?
 
-Yes. The three runs reported in the paper are published as small archives of weights and summary statistics; see [Use the trained models](#-use-the-trained-models). They contain no AR6 data, and `scripts/predict.py` needs none.
+Yes. Trained runs are published as small archives of weights and summary statistics; see [Use the trained models](#-use-the-trained-models). They contain no AR6 data, and `scripts/predict.py` needs none.
 
 ### How do I add new target variables?
 
