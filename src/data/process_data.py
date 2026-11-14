@@ -34,7 +34,7 @@ from src.utils.utils import setup_console_logging, LocalFormatter
 REPO_ROOT = Path(__file__).resolve().parents[2]
 METADATA_DIR = REPO_ROOT / "metadata"
 
-VAR_CLASSIFICATION_CSV = METADATA_DIR / "variable_classification_1019.csv"
+VAR_CLASSIFICATION_CSV = METADATA_DIR / "variable_classification_full.csv"
 SCENARIO_CATEGORY_CSV = METADATA_DIR / "scenario_category.csv"
 MODEL_BASE_YEAR_CSV = METADATA_DIR / "iam_base_years.csv"
 SSP_FAMILY_CSV = METADATA_DIR / "ssp_families.csv"
