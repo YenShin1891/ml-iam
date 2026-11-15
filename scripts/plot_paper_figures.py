@@ -34,6 +34,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 os.chdir(REPO_ROOT)  # relative metadata paths, as the dashboard resolves them
 
+from configs.paper import PAPER_RUNS  # noqa: E402
 from src.visualization import paper_figures as pf  # noqa: E402
 
 DEFAULT_RUNS = [r for r, _ in pf.RUNS]
@@ -78,7 +79,7 @@ def main() -> None:
         help="read RUN_ID's SHAP arrays from DIR instead of its plots directory (repeatable)",
     )
     ps = sub.add_parser("figS10", help="embedding PCA, family + region panels per run")
-    ps.add_argument("--runs", nargs="+", default=["tft_95", "lstm_89"], help="lstm_*/tft_* run ids, one row each")
+    ps.add_argument("--runs", nargs="+", default=[PAPER_RUNS["tft"], PAPER_RUNS["lstm"]], help="lstm_*/tft_* run ids, one row each")
     ps.add_argument("--names", nargs="+", default=None)
     ps.add_argument("--n-countries", type=int, default=8, help="data-richest ISO3 regions to label and tie to their R10 region")
     ps.add_argument("--out", default="paper_figures/figS10_embeddings.png")

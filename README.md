@@ -345,6 +345,7 @@ make unit-test        # or: python -m pytest tests -q
 ## ⚡ Use the trained models
 
 The paper reports four runs: `xgb_90` (XGBoost), `lstm_89` (LSTM), `tft_106` (TFT) and the ridge baseline `linear_04`.
+They are named in one place, `configs/paper.py`, which the dashboard shortcuts and the figure scripts' defaults follow.
 The archives on Zenodo ([10.5281/zenodo.22828667](https://doi.org/10.5281/zenodo.22828667)) hold `xgb_85`, `lstm_89` and `tft_95`: the LSTM is the paper's run, and the XGBoost and TFT archives are the runs of the previous manuscript version, which `xgb_90` and `tft_106` replace. `metadata/published_models.json` lists what `make fetch-models` downloads.
 
 ```bash
