@@ -31,7 +31,7 @@ def main(argv=None) -> int:
     parser.add_argument("--format", choices=("tidy", "iamc"), default="tidy",
                         help="tidy: a row per (series, Year), a column per target; "
                              "iamc: a row per Variable, a column per year")
-    parser.add_argument("--device", default="cpu", help="cpu (default) or gpu; only the TFT uses it")
+    parser.add_argument("--device", default="cpu", help="cpu (default) or cuda; only the TFT uses it")
     parser.add_argument("--describe", action="store_true", help="print what the run expects and exit")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
@@ -51,6 +51,8 @@ def main(argv=None) -> int:
         return 0
     if not args.input or not args.output:
         parser.error("--input and --output are required unless --describe is given")
+    if args.device == "gpu":  # the name the help used to give; torch calls it cuda
+        args.device = "cuda"
 
     try:
         table = read_scenario_table(args.input)
