@@ -103,6 +103,9 @@ def select_variables(stat_table: pd.DataFrame, output_variables: Iterable[str], 
     # Base mask: input variables and configured output variables
     mask = (selected["Type"] == "input") | (selected["Variable"].isin(list(output_variables)))
     
+    # "intermediate" variables are model-computed but can stand in for an input
+    # that is not reported as a variable.  By default they are left out like any
+    # output that is not a target; only this opt-in adds them to the inputs.
     if include_intermediate:
         mask = mask | (selected["Type"] == "intermediate")
     
@@ -489,6 +492,8 @@ def run_pipeline(
         tags.append("interp-targets")
     if getattr(dp, "SCALE_AWARE_IMPUTATION", False):
         tags.append("scale-impute")
+    # Opt-in (see TAGS in configs/data.py); off in the default configuration and
+    # in all runs reported in the paper, where intermediate counts as output.
     include_intermediate = "include-intermediate" in tags
     apply_base_year = "apply-base-year" in tags
     

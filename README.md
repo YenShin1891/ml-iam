@@ -142,6 +142,8 @@ This command:
 - `COMPLETENESS_RATIO`: Fraction of non-missing variables required to keep a row
 - `TAGS`: Extra behaviors (e.g. `"include-intermediate"`, `"apply-base-year"`)
 
+`metadata/variable_classification_full.csv` types every AR6 variable as `input`, `intermediate` or `output`. `output` covers everything a model computes (investment as well as emissions); `intermediate` marks computed variables that could stand in for an input the models do not report. By default, and in all runs reported in the paper, intermediate variables are treated as outputs and are not used as inputs; the `"include-intermediate"` tag is an opt-in that adds them to the inputs.
+
 ### Step 4: Create a Run Config
 
 All training is driven by a YAML run config. Copy an example and edit it:

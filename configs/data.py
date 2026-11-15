@@ -54,6 +54,15 @@ INCLUDE_DATE = True
 DATE_FMT = "%Y-%m-%d"
 # Tags include dynamic count of output variables
 # Pre-defined tags: include-intermediate, apply-base-year, with-ssp
+#
+# include-intermediate is off by default and was off for every run reported in
+# the paper.  The classification table (metadata/variable_classification_full.csv)
+# types each AR6 variable as input, intermediate or output:
+#   intermediate  not the exogenous input end of a model, but usable in place
+#                 of an input the models do not report as a variable;
+#   output        anything a model computes, investment as much as emissions.
+# Without the tag an intermediate variable is treated as an output and is never
+# a model input; with it, the intermediate variables join the inputs.
 TAGS = [f"out={len(OUTPUT_VARIABLES)}vars", "exclude-year", "apply-base-year"]
 SAVE_ANALYSIS = True
 
