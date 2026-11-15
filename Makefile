@@ -166,8 +166,8 @@ unit-test:
 
 # Download the trained runs published with the paper into RESULTS_PATH.
 #   make fetch-models                  # all of them
-#   make fetch-models MODELS=tft_95    # one
-#   make fetch-models MODELS=tft_95 ARCHIVE=~/Downloads/tft_95.tar.gz
+#   make fetch-models MODELS=tft_106   # one
+#   make fetch-models MODELS=tft_106 ARCHIVE=~/Downloads/tft_106.tar.gz
 MODELS ?= all
 ARCHIVE ?=
 fetch-models:
@@ -175,8 +175,8 @@ fetch-models:
 	"$$PY" scripts/fetch_models.py --run_id $(MODELS) $(if $(ARCHIVE),--archive "$(ARCHIVE)",)
 
 # Emulate new scenarios with a trained run (no training data needed).
-#   make predict RUN_ID=tft_95 INPUT=my_scenarios.csv OUTPUT=emulated.csv
-#   make predict RUN_ID=tft_95 DESCRIBE=1      # what the run expects
+#   make predict RUN_ID=tft_106 INPUT=my_scenarios.csv OUTPUT=emulated.csv
+#   make predict RUN_ID=tft_106 DESCRIBE=1     # what the run expects
 INPUT ?=
 OUTPUT ?=
 DESCRIBE ?=

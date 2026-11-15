@@ -26,7 +26,7 @@ their context lengths and horizons differ -- so compare R2 across a row, not
 the counts.
 
 Usage:
-  python scripts/analyze_model_family_r2.py --xgb-run xgb_85 --lstm-run lstm_89 --tft-run tft_95
+  python scripts/analyze_model_family_r2.py --xgb-run xgb_90 --lstm-run lstm_89 --tft-run tft_106
   python scripts/analyze_model_family_r2.py --lstm-run lstm_89
 """
 
@@ -156,9 +156,9 @@ def main(argv=None):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--xgb-run", default=None, help="XGB run id, e.g. xgb_85.")
+    parser.add_argument("--xgb-run", default=None, help="XGB run id, e.g. xgb_90.")
     parser.add_argument("--lstm-run", default=None, help="LSTM run id, e.g. lstm_89.")
-    parser.add_argument("--tft-run", default=None, help="TFT run id, e.g. tft_95.")
+    parser.add_argument("--tft-run", default=None, help="TFT run id, e.g. tft_106.")
     parser.add_argument("--linear-run", default=None, help="Linear baseline run id, e.g. linear_01.")
     parser.add_argument("--min-rows", type=int, default=5,
                         help="Families with fewer test rows are left out and logged (default: 5).")

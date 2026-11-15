@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Pack a trained run for publication: weights and summary statistics, no data.
 
-    python scripts/export_run_bundle.py --run_id tft_95 --out release/
+    python scripts/export_run_bundle.py --run_id tft_106 --out release/
 
 Writes ``<out>/<run_id>.tar.gz`` and adds its SHA-256 to ``<out>/checksums.json``.
 Unpacked under RESULTS_PATH/<model>/ (``make fetch-models`` does this), the

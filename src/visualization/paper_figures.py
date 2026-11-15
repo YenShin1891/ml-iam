@@ -227,7 +227,7 @@ def r_squared(y: np.ndarray, p: np.ndarray) -> float:
 # Figure 3
 # --------------------------------------------------------------------------- #
 def plot_co2_scatter(
-    run_ids: Sequence[str] = ("xgb_85", "lstm_89", "tft_95"),
+    run_ids: Sequence[str] = tuple(PAPER_RUNS.values()),
     names: Sequence[str] = ("XGBoost", "LSTM", "TFT"),
     target: str = "Emissions|CO2",
     out_path: Optional[str] = None,
@@ -303,7 +303,7 @@ def plot_co2_scatter(
 # Figure 4
 # --------------------------------------------------------------------------- #
 def plot_trajectories_by_category(
-    run_ids: Sequence[str] = ("xgb_85", "lstm_89", "tft_95"),
+    run_ids: Sequence[str] = tuple(PAPER_RUNS.values()),
     names: Sequence[str] = ("XGBoost", "LSTM", "TFT"),
     target: str = "Emissions|CO2",
     categories: Sequence[str] = ("C1", "C2", "C3"),
@@ -706,7 +706,7 @@ def _compose_row(panel_paths: Sequence[str], labels: Sequence[str], out_path: st
 
 
 def plot_shap_co2_beeswarms(
-    run_ids: Sequence[str] = ("xgb_85", "lstm_89", "tft_95"),
+    run_ids: Sequence[str] = tuple(PAPER_RUNS.values()),
     names: Sequence[str] = ("XGBoost", "LSTM", "TFT"),
     target: str = "Emissions|CO2",
     out_path: Optional[str] = None,
