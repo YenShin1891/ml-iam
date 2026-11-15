@@ -796,6 +796,38 @@ def plan_two_stage_search(
 # Reporting
 # --------------------------------------------------------------------------
 
+def in_sampled_order(space: "SearchSpace", rows: Sequence[Mapping[str, Any]]) -> List[Mapping[str, Any]]:
+    """*rows* in the order the search space drew their configurations.
+
+    A ledger does not keep that order: parallel workers append as they
+    finish, and a merged ledger is sorted by signature.  A running best taken
+    over either says nothing about how many trials the search needed.  Rows
+    that are not all draws of *space* come back as they were given.
+    """
+    rows = list(rows)
+    keys = space.param_keys
+
+    def loose(params: Mapping[str, Any]) -> str:
+        # Coarser than the ledger's own signature: a trial table read back
+        # from CSV can differ from the draw in the twelfth digit.
+        canonical = canonicalize_params(params, keys)
+        if len(canonical) != len(keys):
+            raise ValueError("row lacks searched parameters")
+        return json.dumps(
+            {k: float(format(v, ".9g")) if isinstance(v, float) else v for k, v in canonical.items()},
+            sort_keys=True,
+        )
+
+    position = {loose(params): index for index, params in enumerate(space.sample())}
+    try:
+        drawn = [position.get(loose(row)) for row in rows]
+    except ValueError:
+        return rows
+    if any(index is None for index in drawn):
+        return rows
+    return [row for _, row in sorted(zip(drawn, rows), key=lambda pair: pair[0])]
+
+
 def write_search_report(
     out_dir: str,
     space: "SearchSpace",
@@ -841,7 +873,9 @@ def write_search_report(
             writer.writerows(ranked)
         written["trials"] = trials_path
 
-        exploration = [row for row in rows if row.get("stage") == "stage1"] or rows
+        exploration = in_sampled_order(
+            space, [row for row in rows if row.get("stage") == "stage1"] or rows
+        )
         curve_path = os.path.join(out_dir, "budget_curve.csv")
         with open(curve_path, "w", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle)
