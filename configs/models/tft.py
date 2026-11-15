@@ -82,8 +82,10 @@ class TFTDatasetConfig:
     allow_missing_timesteps: bool = False
     pretrained_categorical_encoders: Dict[str, Any] = field(default_factory=dict)
     target_offset: int = 0  # Set 1 for warm start: reserves encoder context for future predictions (set 0 for cold start)
-    # "encoder_floored" (default): per-sample encoder normalization with scale floor
+    # "encoder_floored": per-sample encoder normalization with scale floor
     # "global": single global μ/σ per target from training data (TorchNormalizer)
+    # The value here is what a run without a recorded mode was fitted with;
+    # train_from_config.py records "global" for every new run.
     target_normalizer_mode: str = "encoder_floored"
     target_scale_floors: Dict[str, float] = field(default_factory=dict)
     scale_floor_fraction: float = 0.01  # fraction of global σ used as floor when no explicit floors given

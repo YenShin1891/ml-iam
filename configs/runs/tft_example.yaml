@@ -15,8 +15,9 @@ cuda_visible_devices:
 two_window: true
 
 # TFT target normalizer:
-#   "encoder_floored" (default) — per-sample μ/σ from encoder window, with scale floor
-#   "global" — single global μ/σ per target from all training data
+#   "global" (default for new runs) — single global μ/σ per target from all training data
+#   "encoder_floored" — per-sample μ/σ from the encoder window's true targets, with scale
+#                       floor; such a model cannot emulate a scenario whose outputs are unknown
 target_normalizer_mode: global
 
 # Splitting one search across machines.  Every machine derives the same 50

@@ -351,6 +351,15 @@ def _write_run_metadata(
     elif cfg.model == "linear":
         lag_scope = cfg.lag_scope or "all"
 
+    # A new TFT run normalizes its targets globally unless its YAML says
+    # otherwise.  The per-sample mode takes each window's center and scale
+    # from the true targets of its encoder steps, so such a model cannot
+    # emulate a scenario whose outputs are unknown.  A record without a value
+    # marks an older run fitted under the code default (encoder_floored).
+    target_normalizer_mode = cfg.target_normalizer_mode
+    if cfg.model == "tft" and target_normalizer_mode is None:
+        target_normalizer_mode = "global"
+
     # Write resolved config (JSON for easy parsing)
     resolved = {
         "model": cfg.model,
@@ -360,7 +369,7 @@ def _write_run_metadata(
         "cuda_visible_devices_by_phase": dict(cfg.cuda_visible_devices_by_phase),
         "cuda_visible_devices_resolved_by_phase": dict(cuda_by_phase_resolved),
         "two_window": cfg.two_window,
-        "target_normalizer_mode": cfg.target_normalizer_mode,
+        "target_normalizer_mode": target_normalizer_mode,
         "search_shard": cfg.search_shard,
         "keep_partial_targets": cfg.keep_partial_targets,
         "lag_fill": lag_fill,
@@ -511,6 +520,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # Before anything below creates the directory, which would let the
         # child's own existence check pass on an empty run.
         _assert_resume_run_exists(run_id)
+    elif cfg.run_id is not None and _meta_dir(run_id).joinpath("run_config.resolved.json").exists():
+        # Starting at preprocess means a new run, whose settings record is
+        # written from this config and today's defaults.  Over an existing
+        # run that would replace the lag fill, lag scope and prediction
+        # settings its model was fitted with.
+        raise ValueError(
+            f"Run '{run_id}' already exists and its phases start at 'preprocess', which would "
+            "rewrite the settings the run was trained with. Use 'resume: preprocess' to redo "
+            "that phase of the existing run, or drop 'run_id' to start a new one."
+        )
 
     # Prepare env for subprocesses
     child_env = dict(os.environ)

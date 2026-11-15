@@ -358,8 +358,12 @@ def main(argv=None):
 
     # Runs without a search phase still need parameters to train with, so the
     # defaults are written while preprocess is still the phase in progress.
+    # A run that plans a search gets none: if its search then fails or covers
+    # only a shard, a train phase must stop for lack of parameters rather
+    # than fit the defaults under the name of a search winner.
     inject_defaults = (
-        (lambda: _set_default_params(model, store)) if args.resume == "preprocess" else None
+        (lambda: _set_default_params(model, store))
+        if args.resume == "preprocess" and "search" not in phases else None
     )
     _run(model, args.resume, store, args, phases=phases, after=inject_defaults)
 

@@ -83,3 +83,28 @@ def test_phases_default_to_the_whole_pipeline():
     cfg = train_from_config._parse_config({"model": "xgb"})
 
     assert cfg.phases == ("preprocess", "search", "train", "test", "plot")
+
+
+def test_starting_an_existing_run_over_from_preprocess_is_refused(results, phases_run):
+    """It would rewrite the lag fill, lag scope and prediction settings the run was fitted with."""
+    yaml = "model: xgb\nrun_id: xgb_01\ndataset: pipeline-x\nphases: [preprocess, test]\n"
+    train_from_config.main(["--run", _config(results / "full.yaml", yaml)])
+    created = _recorded(results, "xgb_01")
+
+    with pytest.raises(ValueError, match="already exists"):
+        train_from_config.main(["--run", _config(results / "again.yaml", yaml)])
+
+    assert _recorded(results, "xgb_01") == created
+    assert phases_run == ["preprocess", "test"]
+
+
+def test_a_new_tft_run_records_the_global_normalizer_unless_told_otherwise(results, phases_run):
+    train_from_config.main(["--run", _config(results / "a.yaml", "model: tft\nrun_id: tft_01\nphases: [preprocess]\n")])
+    train_from_config.main(["--run", _config(
+        results / "b.yaml", "model: tft\nrun_id: tft_02\ntarget_normalizer_mode: encoder_floored\nphases: [preprocess]\n",
+    )])
+    train_from_config.main(["--run", _config(results / "c.yaml", "model: xgb\nrun_id: xgb_01\nphases: [preprocess]\n")])
+
+    assert _recorded(results, "tft_01")["target_normalizer_mode"] == "global"
+    assert _recorded(results, "tft_02")["target_normalizer_mode"] == "encoder_floored"
+    assert _recorded(results, "xgb_01")["target_normalizer_mode"] is None
