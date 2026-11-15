@@ -25,7 +25,7 @@ phases: [preprocess, search, train, test, plot]
 # booster reads ("own_and_complete", "own" or "all"; see configs/models/xgb.py).
 # Both are fixed when the run is created.
 # lag_fill: carry_forward
-# lag_scope: own_and_complete
+# lag_scope: own
 
 # Optional note saved into session state (supported by xgb launcher)
 note: "With interpolation, extrapolation, and scale-aware imputation."
