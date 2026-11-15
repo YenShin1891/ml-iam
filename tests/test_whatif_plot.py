@@ -68,8 +68,10 @@ def test_the_grid_draws_iam_and_both_forecasts_per_target(result):
     assert len(axes) == 9  # the dashboard's 3x3 grid, spare panels switched off
     assert [len(ax.lines) for ax in axes[:2]] == [3, 3]
     assert not axes[2].axison
-    labels = [text.get_text() for text in axes[0].get_legend().get_texts()]
-    assert "Emulator, edited inputs" in labels and "IAM (baseline scenario)" in labels
+    # One legend for the whole figure, collected across the panels.
+    assert all(ax.get_legend() is None for ax in axes)
+    labels = [text.get_text() for text in fig.legends[0].get_texts()]
+    assert "Emulator, edited inputs (panel color)" in labels and "IAM (baseline scenario)" in labels
     matplotlib.pyplot.close(fig)
 
 
