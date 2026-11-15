@@ -13,6 +13,20 @@ class XGBTrainerConfig:
     verbosity: int = 0
     max_bin: int = 256
 
+    # Which lagged outputs each per-output booster reads.
+    #   "own_and_complete"  its own output's lags, plus the lags of outputs
+    #                       that every training series reports.
+    #   "own"               its own output's lags only.
+    #   "all"               the lags of all outputs (runs up to xgb_87).
+    # An output that a series never reports has no lag: the column is missing
+    # in training, where it marks the series as not reporting that output,
+    # but the rollout fills it with the model's own prediction from the second
+    # step on, a combination the boosters were never fitted on.  Restricting
+    # each booster to lags that are always present removes both the mismatch
+    # and the reporting pattern from its inputs.  The choice is saved with the
+    # model, so later phases follow the model rather than this default.
+    lag_scope: str = "own_and_complete"
+
     # Training loop controls
     early_stopping_rounds: int = 15
     # Patience for the final fit, which trains longer than a search trial and
@@ -51,6 +65,9 @@ class XGBTrainerConfig:
     search_fit_verbose: Union[int, bool] = False
 
 
+LAG_SCOPES = ("own_and_complete", "own", "all")
+
 __all__ = [
     'XGBTrainerConfig',
+    'LAG_SCOPES',
 ]

@@ -160,7 +160,7 @@ def test_tft(store, use_two_window=False):
 
 def plot_tft(store):
     """Plot TFT predictions and SHAP analysis."""
-    from src.visualization import plot_scatter, plot_tft_shap
+    from src.visualization import plot_scatter
 
     logging.info("Plotting TFT predictions...")
     data = store.load_processed_data()
@@ -168,7 +168,6 @@ def plot_tft(store):
     pred_bundle = store.load_predictions()
     preds = pred_bundle["preds"]
     targets = splits["targets"]
-    features = splits["features"]
 
     horizon_df = pred_bundle.get("horizon_df")
     horizon_y_true = pred_bundle.get("horizon_y_true")
@@ -185,6 +184,23 @@ def plot_tft(store):
         )
         plot_scatter(store.run_id, test_data, test_targets, preds, targets, model_name="TFT")
 
-    # SHAP explains whole encoder windows, so it reads the full test split
-    # rather than the horizon rows; it reports its own failures.
-    plot_tft_shap(store.run_id, splits["test_data"], features, targets)
+    shap_tft(store, splits=splits)
+
+
+def shap_tft(store, out_dir=None, splits=None, use_cached=True):
+    """SHAP arrays and plots for the run's TFT.
+
+    They go to *out_dir*, or to the run's plots directory when it is None.
+    *splits* are the plot phase's, when it already has them.  *use_cached*
+    False computes the SHAP values again even when a cache of them exists.
+    """
+    from src.visualization import plot_tft_shap
+
+    if splits is None:
+        splits = derive_splits(store.load_processed_data(), store)
+    # SHAP explains whole encoder + decoder windows, so it reads the full test
+    # split rather than the horizon rows; it reports its own failures.
+    plot_tft_shap(
+        store.run_id, splits["test_data"], splits["features"], splits["targets"],
+        out_dir=out_dir, use_cached=use_cached,
+    )

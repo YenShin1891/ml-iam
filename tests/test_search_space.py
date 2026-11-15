@@ -481,3 +481,18 @@ def test_every_model_searches_the_same_context_lengths():
     from configs.data import CONTEXT_LENGTHS
 
     assert set(models.LSTMSearchSpace().distributions["sequence_length"].values) == set(CONTEXT_LENGTHS)
+
+
+def test_the_budget_curve_follows_the_sampled_order_not_the_ledger_order(space, tmp_path):
+    """A merged ledger is sorted by signature and workers append as they finish."""
+    drawn = space.sample()
+    losses = [0.9, 0.5, 0.7, 0.2] + [0.8] * (len(drawn) - 4)
+    rows = [{**params, "val_loss": loss, "stage": "stage1", "status": "completed"}
+            for params, loss in zip(drawn, losses)]
+    shuffled = sorted(rows, key=lambda row: row["val_loss"])  # best first: a flat curve if read as is
+
+    written = write_search_report(str(tmp_path), space, shuffled)
+
+    with open(written["budget_curve"]) as handle:
+        curve = [float(row["best_val_loss"]) for row in csv.DictReader(handle)]
+    assert curve[:4] == [0.9, 0.5, 0.5, 0.2]

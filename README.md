@@ -100,6 +100,7 @@ conda activate ml-iam
 
 # Install dependencies
 pip install -r requirements.txt
+# pip install -r requirements-advanced.txt  # optional: LSTM/TFT (PyTorch) dependencies
 pip install -e .
 ```
 
@@ -141,6 +142,8 @@ This command:
 - `COMPLETENESS_RATIO`: Fraction of non-missing variables required to keep a row
 - `TAGS`: Extra behaviors (e.g. `"include-intermediate"`, `"apply-base-year"`)
 
+`metadata/variable_classification_full.csv` types every AR6 variable as `input`, `intermediate` or `output`. `output` covers everything a model computes (investment as well as emissions); `intermediate` marks computed variables that could stand in for an input the models do not report. By default, and in all runs reported in the paper, intermediate variables are treated as outputs and are not used as inputs; the `"include-intermediate"` tag is an opt-in that adds them to the inputs.
+
 ### Step 4: Create a Run Config
 
 All training is driven by a YAML run config. Copy an example and edit it:
@@ -161,7 +164,7 @@ Example configs are provided for each model under `configs/runs/`.
 | `cuda_visible_devices` | `default` for all phases, override `search` for multi-GPU (e.g. `{default: "0", search: "0,1,2,3"}`) |
 | `note` | Free-text note saved with the run |
 | `two_window` | Use two-window prediction (TFT only, affects the test phase) |
-| `target_normalizer_mode` | TFT only: `encoder_floored` (default) or `global` |
+| `target_normalizer_mode` | TFT only: `global` (default for new runs) or `encoder_floored`, which reads true target values at prediction time |
 | `keep_partial_targets` | Train on rows where only some targets are observed (default from `configs/data.py`) |
 | `run_id` | Existing run ID to resume (e.g. `tft_01`). Required when using `resume`. |
 | `resume` | Phase to resume from: `preprocess`, `search`, `train`, `test`, or `plot`. Runs only that single phase using the existing run's data/config. |
@@ -275,7 +278,8 @@ MAX_YEAR = 2100         # Upper year limit
 N_LAG_FEATURES = 2      # Lagged timesteps fed to XGBoost (LSTM/TFT use their own history)
 MAX_SERIES_LENGTH = 15  # Encoder + decoder span for the sequence models
 KEEP_PARTIAL_TARGETS = True   # Train on rows where only some targets are observed
-INTERPOLATE_TARGETS = True    # Fill interior gaps before computing lag features
+INTERPOLATE_TARGETS = True    # Fill target gaps before computing lag features
+LAG_FILL = "carry_forward"    # ...with the last reported value ("linear" = runs up to xgb_85)
 ```
 
 ### Model Hyperparameters
@@ -340,7 +344,8 @@ make unit-test        # or: python -m pytest tests -q
 
 ## ⚡ Use the trained models
 
-The runs reported in the paper (`xgb_85`, `lstm_89`, `tft_95`) are published on Zenodo: [10.5281/zenodo.22828667](https://doi.org/10.5281/zenodo.22828667).
+The paper reports four runs: `xgb_90` (XGBoost), `lstm_89` (LSTM), `tft_106` (TFT) and the ridge baseline `linear_04`.
+The archives on Zenodo ([10.5281/zenodo.22828667](https://doi.org/10.5281/zenodo.22828667)) hold `xgb_85`, `lstm_89` and `tft_95`: the LSTM is the paper's run, and the XGBoost and TFT archives are the runs of the previous manuscript version, which `xgb_90` and `tft_106` replace. `metadata/published_models.json` lists what `make fetch-models` downloads.
 
 ```bash
 cp configs/paths-template.py configs/paths.py      # RESULTS_PATH is where the runs are unpacked
@@ -359,12 +364,6 @@ The archives hold weights, scalers, category vocabularies, imputation medians an
 
 ## 🎨 Explore Your Results
 
-Launch the interactive Streamlit dashboard to explore results:
-
-```bash
-make dashboard RUN_ID=xgb_37
-```
-
 The dashboard runs in its own conda environment (`mliam_st` by default) so
 Streamlit's dependencies stay out of the training environment. Create it with:
 
@@ -380,12 +379,18 @@ If your environment names differ from the defaults (`ml-iam` for training,
 `make dashboard DASHBOARD_ENV=my_env`. `make check-env` prints which
 interpreter and library versions the make targets will actually use.
 
+Then launch the interactive Streamlit dashboard to explore results:
+
+```bash
+make dashboard RUN_ID=tft
+```
+
 Access at `http://localhost:8501`. Logs are saved under `logs/`.
 
 By default, individual plots are saved for index 6. Override with:
 
 ```bash
-make dashboard RUN_ID=xgb_37 SAVE_PLOTS="0,6"
+make dashboard RUN_ID=tft SAVE_PLOTS="0,6"
 ```
 
 **Features (WIP):**
@@ -416,7 +421,7 @@ IAM's own and next to the emulator's forecast of the unchanged inputs.
 
 The model runs on the CPU, so the dashboard environment needs the deep
 learning stack (`requirements-dashboard.txt` pulls it in; a CPU-only torch
-wheel is enough). TFT runs only, for now.
+wheel is enough). It works with TFT, LSTM and XGBoost runs.
 
 ---
 
@@ -424,7 +429,7 @@ wheel is enough). TFT runs only, for now.
 
 ### Can I use pre-trained models for inference?
 
-Yes. The three runs reported in the paper are published as small archives of weights and summary statistics; see [Use the trained models](#-use-the-trained-models). They contain no AR6 data, and `scripts/predict.py` needs none.
+Yes. Trained runs are published as small archives of weights and summary statistics; see [Use the trained models](#-use-the-trained-models). They contain no AR6 data, and `scripts/predict.py` needs none.
 
 ### How do I add new target variables?
 

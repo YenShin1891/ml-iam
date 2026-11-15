@@ -73,6 +73,10 @@ def main() -> None:
     _add_common(p6, "paper_figures/fig6_shap_CO2.png")
     p6.set_defaults(dpi=300)
     p6.add_argument("--panel-dir", default=None, help="keep the per-model panel PNGs here")
+    p6.add_argument(
+        "--shap-dir", action="append", default=[], metavar="RUN_ID=DIR",
+        help="read RUN_ID's SHAP arrays from DIR instead of its plots directory (repeatable)",
+    )
     ps = sub.add_parser("figS10", help="embedding PCA, family + region panels per run")
     ps.add_argument("--runs", nargs="+", default=["tft_95", "lstm_89"], help="lstm_*/tft_* run ids, one row each")
     ps.add_argument("--names", nargs="+", default=None)
@@ -100,8 +104,10 @@ def main() -> None:
         for name, v in r2.items():
             print(f"{name:8s} R^2 = {v:.3f}")
     elif args.figure == "fig6":
+        shap_dirs = dict(item.split("=", 1) for item in args.shap_dir)
         top = pf.plot_shap_co2_beeswarms(
             run_ids=args.runs, names=names, target=args.target, out_path=args.out, panel_dir=args.panel_dir, dpi=args.dpi,
+            shap_dirs=shap_dirs,
         )
         for name, feats in top.items():
             print(f"{name} top-{len(feats)}:")

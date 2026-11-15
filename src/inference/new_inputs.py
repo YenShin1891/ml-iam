@@ -67,6 +67,7 @@ def describe_requirements(run_id: str) -> Dict[str, object]:
     features, targets = store.load_features()
     categories = store.load_categories()
     kind = model_kind(run_id)
+    seen = trained_labels(store.load_splits()) if store.has_splits() else {}
     lags = [int(m.group(1) or 1) for f in features if (m := re.match(r"prev(\d*)_", f))]
     return {
         "run_id": run_id,
@@ -74,11 +75,17 @@ def describe_requirements(run_id: str) -> Dict[str, object]:
         "input_variables": input_variables(features),
         "targets": list(targets),
         "target_units": {t: UNITS_BY_OUTPUT.get(t, "") for t in targets},
-        "regions": list(categories.get("Region", [])),
-        "model_families": list(categories.get("Model_Family", [])),
+        "regions": _usable(categories, seen, "Region"),
+        "model_families": _usable(categories, seen, "Model_Family"),
         "needs_target_history": kind == "xgb",
         "n_lags": max(lags) if lags else 0,
     }
+
+
+def _usable(categories: Dict[str, List[str]], seen: Dict[str, Dict[str, set]], column: str) -> List[str]:
+    """The vocabulary's labels that prepare_new_inputs accepts."""
+    labels = list(categories.get(column, []))
+    return [label for label in labels if label in seen[column]["any"]] if column in seen else labels
 
 
 # ── Reading ───────────────────────────────────────────────────────────────
@@ -106,13 +113,28 @@ def complete_scenario_table(table: pd.DataFrame) -> pd.DataFrame:
     if not year_columns:
         raise InputError("The scenario table has no year columns (headers such as 2020, 2025, ...).")
 
-    if "Model_Family" not in table.columns:
-        table["Model_Family"] = table["Model"].astype(str).map(get_model_family)
-    if "Scenario_Category" not in table.columns:
-        table["Scenario_Category"] = PLACEHOLDER_CATEGORY
-    table["Scenario_Category"] = table["Scenario_Category"].fillna(PLACEHOLDER_CATEGORY)
-    if "Region_Scale" not in table.columns:
-        table["Region_Scale"] = region_scales(table["Region"]).to_numpy()
+    # The optional identifiers are part of a series' identity downstream: a
+    # series whose rows disagree on one would be split in two, and rows left
+    # blank would be dropped.  Give each series one value, or say why not.
+    derived = {
+        "Model_Family": lambda: table["Model"].astype(str).map(get_model_family),
+        "Scenario_Category": lambda: pd.Series(PLACEHOLDER_CATEGORY, index=table.index),
+        "Region_Scale": lambda: pd.Series(region_scales(table["Region"]).to_numpy(), index=table.index),
+    }
+    for column, derive in derived.items():
+        if column not in table.columns:
+            table[column] = derive()
+            continue
+        values = table[column].where(table[column].astype(str).str.strip() != "")
+        per_series = values.groupby([table[c] for c in ID_COLUMNS], sort=False)
+        distinct = per_series.transform("nunique")
+        if (distinct > 1).any():
+            example = table.loc[distinct > 1, ID_COLUMNS].iloc[0].tolist()
+            raise InputError(
+                f"{column} takes more than one value within a (Model, Scenario, Region) series, "
+                f"e.g. {example}. Give each series one value, or drop the column."
+            )
+        table[column] = values.fillna(per_series.transform("first")).fillna(derive())
 
     duplicated = table.duplicated(ID_COLUMNS + ["Variable"])
     if duplicated.any():
@@ -126,16 +148,63 @@ def complete_scenario_table(table: pd.DataFrame) -> pd.DataFrame:
 # ── Preparation ───────────────────────────────────────────────────────────
 
 
-def _check_vocabulary(long: pd.DataFrame, categories: Dict[str, List[str]]) -> None:
+def trained_labels(assignment: pd.DataFrame) -> Dict[str, Dict[str, set]]:
+    """Per categorical column, the labels with any series and those the fit saw.
+
+    The vocabulary is wider than the training set: it is fixed before series
+    without usable rows are dropped, and a label can fall wholly outside the
+    training split.  Either way its embedding was never fitted.
+    """
+    from src.data.process_data import get_model_family
+
+    labels = {
+        "Region": assignment["Region"].astype(str),
+        "Model_Family": assignment["Model"].astype(str).map(get_model_family),
+    }
+    in_train = (assignment["split"] == "train").to_numpy()
+    return {
+        column: {"any": set(values), "train": set(values[in_train])}
+        for column, values in labels.items()
+    }
+
+
+def _check_vocabulary(
+    long: pd.DataFrame,
+    categories: Dict[str, List[str]],
+    assignment: Optional[pd.DataFrame] = None,
+    notes: Optional[List[str]] = None,
+) -> None:
+    """Refuse labels the run has no fitted embedding for.
+
+    *assignment* is the run's split table; without it only the vocabulary
+    can be checked.
+    """
+    seen = trained_labels(assignment) if assignment is not None else {}
     for column in CATEGORICAL_COLUMNS:
         known = categories.get(column)
         if not known or column not in long.columns:
             continue
-        unknown = sorted(set(long[column].astype(str)) - set(known))
+        given = set(long[column].astype(str))
+        unknown = sorted(given - set(known))
         if unknown:
             raise InputError(
                 f"{column} value(s) {unknown} are not in the run's vocabulary. The embeddings are "
                 f"learned per label, so an unseen one cannot be emulated. Known {column} labels: {known}"
+            )
+        if column not in seen:
+            continue
+        absent = sorted(given - seen[column]["any"])
+        if absent:
+            raise InputError(
+                f"{column} value(s) {absent} are in the run's vocabulary but none of its series carries "
+                f"them, so their embeddings were never fitted and they cannot be emulated. "
+                f"{column} labels with data: {sorted(seen[column]['any'])}"
+            )
+        held_out = sorted(given - seen[column]["train"])
+        if held_out and notes is not None:
+            notes.append(
+                f"WARNING: {column} value(s) {held_out} appear only in the run's validation or test "
+                f"series, never in training; their embeddings are unfitted and the predictions unreliable."
             )
 
 
@@ -230,13 +299,14 @@ def prepare_new_inputs(run_id: str, table: pd.DataFrame, engine) -> PreparedInpu
     notes: List[str] = []
     variables = input_variables(features)
     long = _long_frame(table, variables, targets, notes)
-    _check_vocabulary(long, store.load_categories())
+    _check_vocabulary(long, store.load_categories(), store.load_splits() if store.has_splits() else None, notes)
 
     if kind == "xgb":
         n_lags = int(engine.metadata["n_lags"])
         history = int(engine.encoder_length)
         frame, _, _ = preprocess.prepare_features_and_targets(
-            _all_rows_kept(long, targets), lag_required=False, n_lags=n_lags
+            _all_rows_kept(long, targets), lag_required=False, n_lags=n_lags,
+            lag_fill=store.lag_fill(),
         )
         frame["Step"] = frame.groupby(ID_COLUMNS, observed=True).cumcount()
         frame = _drop_short(frame, engine.min_steps, notes)

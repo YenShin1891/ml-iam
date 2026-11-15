@@ -53,6 +53,49 @@ class RunStore:
         return path
 
     # ------------------------------------------------------------------
+    # Settings recorded when the run was created
+    # ------------------------------------------------------------------
+
+    def _settings_path(self) -> Path:
+        return self.root / "meta" / "run_config.resolved.json"
+
+    def recorded_settings(self) -> Dict[str, Any]:
+        """The settings recorded when the run was created; {} when there are none."""
+        path = self._settings_path()
+        if not path.exists():
+            return {}
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except Exception as exc:  # noqa: BLE001 - an unreadable record is no record
+            logging.warning("Could not read %s: %s", path, exc)
+            return {}
+
+    def record_settings(self, **values: Any) -> None:
+        """Add *values* to the run's recorded settings, keeping what is there."""
+        settings = {**self.recorded_settings(), **values}
+        with open(self._writable(self._settings_path()), "w", encoding="utf-8") as handle:
+            json.dump(settings, handle, indent=2, sort_keys=True)
+
+    def lag_fill(self) -> str:
+        """How this run fills target gaps before building lag features.
+
+        Every run created since the setting exists records it.  A run without
+        the record -- no settings file, or one written before the setting --
+        was built with linear interpolation, whatever configs.data says today.
+        """
+        return self.recorded_settings().get("lag_fill") or "linear"
+
+    def lag_scope(self) -> str:
+        """Which lagged outputs each of this run's per-output models reads (XGBoost, linear).
+
+        Recorded when the run is created, so its search and its final fit
+        agree whatever XGBTrainerConfig defaults to later.  A run without the
+        record predates the setting, and its boosters read every lag.
+        """
+        return self.recorded_settings().get("lag_scope") or "all"
+
+    # ------------------------------------------------------------------
     # Cache: expensive preprocessing (melt + pivot_table)
     # ------------------------------------------------------------------
 

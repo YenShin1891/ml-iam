@@ -108,3 +108,33 @@ def test_a_dummy_the_target_never_varies_on_gets_no_weight():
 
     assert model.models[0].coef_[2] == 0.0
     assert np.abs(model.predict(X[:5])).max() < 10.0
+
+
+def test_a_hidden_lag_column_does_not_move_that_targets_prediction():
+    """Under a lag scope each target's fit drops the other outputs' lags."""
+    from src.trainers.xgb_trainer import hidden_lag_columns
+
+    rng = np.random.default_rng(0)
+    names = ["x", "prev_A", "prev_B"]
+    targets = ["A", "B"]
+    X = rng.normal(size=(200, 3))
+    y = np.column_stack([X[:, 1] + X[:, 2], X[:, 2] - X[:, 0]])
+    hidden = hidden_lag_columns(names, targets, pd.DataFrame(y, columns=targets), "own")
+    assert hidden == [[2], [1]]
+
+    model = train_linear.PerTargetLinear(hidden_columns=hidden).fit(X, y)
+    moved = X.copy()
+    moved[:, 2] += 5.0                      # prev_B: hidden from A, read by B
+    before, after = model.predict(X), model.predict(moved)
+
+    np.testing.assert_allclose(after[:, 0], before[:, 0])
+    assert not np.allclose(after[:, 1], before[:, 1])
+
+
+def test_a_model_saved_before_the_lag_scope_still_predicts():
+    X = np.random.default_rng(1).normal(size=(50, 3))
+    model = train_linear.PerTargetLinear().fit(X, X[:, :2])
+    expected = model.predict(X)
+    del model.hidden_columns                # as linear_01..03 were pickled
+
+    np.testing.assert_allclose(model.predict(X), expected)

@@ -11,6 +11,7 @@ from configs.data import (
     DEFAULT_DATASET,
     MAX_CONTEXT_LENGTH,
     N_LAG_FEATURES,
+    LAG_FILL_METHODS,
     OUTPUT_VARIABLES,
     INDEX_COLUMNS,
     NON_FEATURE_COLUMNS,
@@ -695,16 +696,30 @@ def _fill_linear_in_year(values: pd.Series, year: pd.Series, series: pd.Series) 
     return values.fillna(interior).fillna(previous)
 
 
+def _carry_forward(values: pd.Series, series: pd.Series) -> pd.Series:
+    """Each NaN takes the last observation before it in its *series*.
+
+    NaNs before the first observation stay NaN.  Nothing reported after a
+    timestep reaches it, which is what a lag feature needs.
+    """
+    values = pd.to_numeric(values, errors="coerce")
+    return values.fillna(values.groupby(series, sort=False).ffill())
+
+
 def interpolate_targets(
     data: pd.DataFrame,
     group_cols: list,
     output_variables: list,
+    method: str = "linear",
 ) -> pd.DataFrame:
-    """Interpolate target values within each group across years.
+    """Fill gaps in target values within each group across years.
 
-    For each (Model, Scenario, Region) group, fills interior NaN target
-    values using linear interpolation (weighted by year). This ensures lag
-    features are computed from real (interpolated) values instead of NaN.
+    For each (Model, Scenario, Region) group, fills NaN target values that
+    follow an observation, so lag features are computed from values instead
+    of NaN.  *method* "linear" draws the straight line (in Year) between the
+    observations either side of a gap; "carry_forward" repeats the last
+    observation and so uses nothing reported after the gap.  Both carry the
+    last observation past the end of a series.
 
     Only fills targets that have at least one non-NaN value in the group.
 
@@ -726,16 +741,22 @@ def interpolate_targets(
     # Vectorised over the groups: the per-group apply this replaces walked
     # 23k groups in Python, two minutes per phase, and relied on pandas
     # handing the grouping columns to the function, which pandas 3 stops doing.
+    if method not in LAG_FILL_METHODS:
+        raise ValueError(f"Unknown fill method {method!r}; expected one of {LAG_FILL_METHODS}")
+
     series = data.groupby(group_cols, sort=False).ngroup()
     for col in output_variables:
         if col in data.columns:
-            data[col] = _fill_linear_in_year(data[col], data["Year"], series)
+            if method == "carry_forward":
+                data[col] = _carry_forward(data[col], series)
+            else:
+                data[col] = _fill_linear_in_year(data[col], data["Year"], series)
 
     after_nans = data[output_variables].isna().sum().sum()
     filled = before_nans - after_nans
     logging.info(
-        "Target interpolation: filled %d NaN values (%d → %d remaining)",
-        filled, before_nans, after_nans,
+        "Target gap filling (%s): filled %d NaN values (%d → %d remaining)",
+        method, filled, before_nans, after_nans,
     )
     return data
 
@@ -904,6 +925,7 @@ def prepare_features_and_targets(
     data: pd.DataFrame,
     lag_required: bool = True,
     n_lags: int = N_LAG_FEATURES,
+    lag_fill: Optional[str] = None,
 ) -> tuple:
     """
     Prepare features and targets for XGBoost model.
@@ -915,7 +937,15 @@ def prepare_features_and_targets(
             length, the counterpart of the LSTM's sequence_length and the
             TFT's encoder length.  Every setting drops the same leading rows
             (MAX_CONTEXT_LENGTH) so the settings are scored alike.
+        lag_fill: How target gaps are filled before the lags are built (see
+            configs.data.LAG_FILL, the default).  Pass the run's own setting
+            (RunStore.lag_fill) so a run is always prepared the way it was
+            trained.
     """
+    if lag_fill is None:
+        import configs.data as data_config
+
+        lag_fill = data_config.LAG_FILL
     logging.info(
         "Preparing features and targets for XGBoost (n_lags=%d, lag_required=%s)...",
         n_lags,
@@ -935,7 +965,7 @@ def prepare_features_and_targets(
             data[obs_col] = data[col].notna().astype("float32")
 
     if _data_flag("INTERPOLATE_TARGETS"):
-        data = interpolate_targets(data, INDEX_COLUMNS, OUTPUT_VARIABLES)
+        data = interpolate_targets(data, INDEX_COLUMNS, OUTPUT_VARIABLES, method=lag_fill)
 
     prepared = add_lag_features(
         data, INDEX_COLUMNS, OUTPUT_VARIABLES,

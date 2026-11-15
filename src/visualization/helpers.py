@@ -11,7 +11,12 @@ from matplotlib.figure import Figure
 from PIL import Image
 
 from configs.data import SPLIT_SEED, UNITS_BY_OUTPUT
-from configs.visualization import DEFAULT_REGION, SHAP_MAX_SCENARIO_GROUPS, SHAP_GRID_FIGSIZE
+from configs.visualization import (
+    DEFAULT_REGION,
+    SHAP_GRID_FIGSIZE,
+    SHAP_MAX_SCENARIO_GROUPS,
+    SHAP_NORMALISED_XLABEL,
+)
 
 __all__ = [
     'make_grid',
@@ -19,6 +24,7 @@ __all__ = [
     'output_unit',
     'build_feature_display_names',
     'draw_shap_beeswarm',
+    'normalise_shap_values',
     'filter_by_region',
     'filter_index_frame_by_region',
     'sample_scenario_groups',
@@ -111,6 +117,23 @@ def build_feature_display_names(features: Sequence[str]) -> List[str]:
     return [_make_display_name(f) for f in features]
 
 
+def normalise_shap_values(shap_values: np.ndarray) -> np.ndarray:
+    """Scale each target's SHAP values by its sum of mean |SHAP|.
+
+    *shap_values* is (rows, features, targets).  Targets of different
+    magnitude -- and models that predict in different units -- then share one
+    axis: a value is measured against that target's total attribution.  Every
+    feature keeps its own attribution, lagged columns of other targets
+    included.  Returns a new array.
+    """
+    shap_values = np.array(shap_values, dtype=float)  # a copy: normalised in place below
+    for i in range(shap_values.shape[2]):
+        total = float(np.sum(np.mean(np.abs(shap_values[:, :, i]), axis=0)))
+        if total > 0:
+            shap_values[:, :, i] /= total
+    return shap_values
+
+
 def draw_shap_beeswarm(
     ax,
     shap_matrix,
@@ -120,16 +143,27 @@ def draw_shap_beeswarm(
     max_display: int = 8,
     xlim_range: Optional[tuple] = None,
     point_size: float = 5.0,
+    xlabel: Optional[str] = SHAP_NORMALISED_XLABEL,
+    title: Optional[str] = None,
 ):
-    """Draw SHAP beeswarm (dot) summary plot with color scale.
+    """Draw a SHAP beeswarm (dot) summary plot into the figure of *ax*.
+
+    shap clears the current figure before it draws, so *ax* only names the
+    figure: the beeswarm lands on a new Axes, which is returned.  Everything
+    set after the draw -- point size, x limits, x label, title -- goes on that
+    Axes; set on *ax* it would style an Axes the figure no longer holds.
 
     Parameters
-    - ax: Matplotlib Axes to draw the rendered image into via render_external_plot caller.
+    - ax: an Axes of the figure to draw into.
     - shap_matrix: array-like (n_samples, n_features)
     - X_matrix: array-like (n_samples, n_features) matching shap_matrix
     - feature_display_names: names for features, length = n_features
     - max_display: top features to display
     - xlim_range: optional (min, max) for x-axis
+    - point_size: marker area of the dots
+    - xlabel: x-axis label; None keeps shap's own.  The default states the
+      scale ``normalise_shap_values`` puts the values on.
+    - title: optional title of the beeswarm
     """
     import shap as _shap
     import matplotlib.pyplot as _plt
@@ -141,14 +175,9 @@ def draw_shap_beeswarm(
     if len(feature_display_names) != shap_arr.shape[1]:
         raise ValueError("feature_display_names length must match number of columns")
 
-    # Ensure SHAP draws into the provided Axes rather than whatever
-    # happens to be current in the global pyplot state.
-    try:
-        _plt.sca(ax)
-    except Exception:
-        # If we can't set the current axes, fall back to SHAP's default
-        # behaviour (which will use the current pyplot axes).
-        pass
+    # shap draws into whatever figure is current in the global pyplot state.
+    fig = ax.figure
+    _plt.figure(fig.number)
 
     _shap.summary_plot(
         shap_arr,
@@ -163,24 +192,20 @@ def draw_shap_beeswarm(
         # FutureWarning, one per plot, was about.
         rng=np.random.default_rng(SPLIT_SEED),
     )
-    # Reduce dot size by adjusting PathCollections on the target axes
-    try:
-        for coll in getattr(ax, 'collections', []):
-            try:
-                sizes = coll.get_sizes()
-                if sizes is not None and len(sizes) > 0:
-                    coll.set_sizes(np.full_like(sizes, point_size, dtype=float))
-                else:
-                    coll.set_sizes([point_size])
-            except Exception:
-                continue
-    except Exception:
-        pass
+    # The beeswarm's own Axes: the first one of the figure, ahead of the
+    # colour bar.
+    drawn = fig.axes[0] if fig.axes else ax
+    for coll in drawn.collections:
+        sizes = coll.get_sizes()
+        if sizes is not None and len(sizes) > 0:
+            coll.set_sizes(np.full_like(sizes, point_size, dtype=float))
     if xlim_range is not None:
-        try:
-            ax.set_xlim(xlim_range[0], xlim_range[1])
-        except Exception:
-            _plt.xlim(xlim_range[0], xlim_range[1])
+        drawn.set_xlim(xlim_range[0], xlim_range[1])
+    if xlabel is not None:
+        drawn.set_xlabel(xlabel, fontsize=drawn.xaxis.label.get_fontsize())
+    if title is not None:
+        drawn.set_title(title)
+    return drawn
 
 
 def filter_by_region(

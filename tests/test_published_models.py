@@ -183,3 +183,34 @@ def test_the_export_scan_finds_local_paths_but_not_torch_archive_names(tmp_path)
 
     (tmp_path / "leaky.json").write_text('{"dirpath": "/mnt/storage/results/tft/tft_01/final"}')
     assert [name for name, _ in _scan_for_local_paths(tmp_path)] == ["leaky.json"]
+
+
+def _series_table(**columns):
+    table = pd.DataFrame({
+        "Model": ["MESSAGE-X 1.0"] * 2, "Scenario": ["s"] * 2, "Region": ["World"] * 2,
+        "Variable": ["GDP|PPP", "Population"], "2020": [1.0, 2.0],
+    })
+    return table.assign(**columns)
+
+
+def test_an_optional_identifier_left_blank_on_some_rows_is_filled_from_its_series():
+    table = new_inputs.complete_scenario_table(_series_table(
+        Scenario_Category=["C3", None], Region_Scale=[None, "World"], Model_Family=["MESSAGE", ""],
+    ))
+
+    assert table["Scenario_Category"].tolist() == ["C3", "C3"]
+    assert table["Region_Scale"].tolist() == ["World", "World"]
+    assert table["Model_Family"].tolist() == ["MESSAGE", "MESSAGE"]
+
+
+def test_an_optional_identifier_that_disagrees_within_a_series_is_refused():
+    with pytest.raises(new_inputs.InputError, match="Scenario_Category takes more than one value"):
+        new_inputs.complete_scenario_table(_series_table(Scenario_Category=["C3", "C5"]))
+
+
+def test_a_bundle_the_registry_gives_no_checksum_for_is_refused(tmp_path):
+    from scripts.fetch_models import install
+
+    archive, _digest = _bundle(tmp_path)
+    with pytest.raises(RuntimeError, match="no SHA-256"):
+        install("xgb_01", archive, "", tmp_path / "results")

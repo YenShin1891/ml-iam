@@ -163,7 +163,9 @@ def _build_split_results_xgb(store, run_id, model="xgb"):
     # and the observed mask.  The split is deterministic given the run's
     # assignment, so re-deriving it reproduces the same rows in the same order
     # as the scaled matrices derive_splits just returned.
-    prepared, _, _ = prepare_features_and_targets(data, lag_required=True, n_lags=splits["n_lags"])
+    prepared, _, _ = prepare_features_and_targets(
+        data, lag_required=True, n_lags=splits["n_lags"], lag_fill=store.lag_fill(),
+    )
     train_data, val_data, test_data = split_data(prepared, assignment=store.splits_for(data))
 
     # Load the model and the run's own scalers once: passing them beats the

@@ -247,7 +247,7 @@ def _region_labels(frame, categories):
 
 def plot_lstm(store):
     """Plot LSTM predictions and SHAP plots."""
-    from src.visualization import plot_scatter, plot_lstm_shap
+    from src.visualization import plot_scatter
 
     logging.info("Plotting LSTM predictions...")
     data = store.load_processed_data()
@@ -255,12 +255,6 @@ def plot_lstm(store):
     pred_bundle = store.load_predictions()
     preds = pred_bundle["preds"]
     targets = splits["targets"]
-
-    # Determine features (prefer encoded features from train meta)
-    features = splits["features"]
-    if store.has_train_meta():
-        meta = store.load_train_meta()
-        features = meta.get("lstm_features", features)
 
     # Use horizon data if available, otherwise fall back to test data
     horizon_df = pred_bundle.get("horizon_df")
@@ -274,16 +268,39 @@ def plot_lstm(store):
             horizon_df[targets].values, horizon_df[POPULATION_COLUMN].values
         )
         plot_scatter(store.run_id, horizon_df, y_true_aligned, preds, targets, model_name="LSTM")
-        test_data_for_shap = horizon_df
     else:
         test_data = splits["test_data"]
         test_targets = denormalize_by_population(
             test_data[targets].values, test_data[POPULATION_COLUMN].values
         )
         plot_scatter(store.run_id, test_data, test_targets, preds, targets, model_name="LSTM")
-        test_data_for_shap = test_data
 
-    # Generate SHAP plots
+    shap_lstm(store, splits=splits, pred_bundle=pred_bundle)
+
+
+def shap_lstm(store, out_dir=None, splits=None, pred_bundle=None):
+    """SHAP arrays and plots for the run's LSTM.
+
+    They go to *out_dir*, or to the run's plots directory when it is None.
+    *splits* and *pred_bundle* are the plot phase's, when it already has them.
+    """
+    from src.visualization import plot_lstm_shap
+
+    if splits is None:
+        splits = derive_splits(store.load_processed_data(), store)
+    if pred_bundle is None:
+        pred_bundle = store.load_predictions()
+    targets = splits["targets"]
+
+    # Determine features (prefer encoded features from train meta)
+    features = splits["features"]
+    if store.has_train_meta():
+        features = store.load_train_meta().get("lstm_features", features)
+
+    # Use horizon data if available, otherwise fall back to test data
+    horizon_df = pred_bundle.get("horizon_df")
+    test_data_for_shap = horizon_df if horizon_df is not None else splits["test_data"]
+
     from configs.models.lstm import LSTMTrainerConfig
     sequence_length = LSTMTrainerConfig().sequence_length
     if store.has_train_meta():
@@ -296,4 +313,5 @@ def plot_lstm(store):
         store.run_id, test_data_for_shap, features, targets,
         sequence_length=sequence_length,
         region_series=_region_labels(test_data_for_shap, splits["categories"]),
+        out_dir=out_dir,
     )

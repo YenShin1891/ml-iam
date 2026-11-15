@@ -1,12 +1,19 @@
-"""SHAP plots for the sequence models (LSTM and TFT)."""
+"""SHAP plots for the sequence models (LSTM and TFT).
+
+Both models are explained with expected gradients -- the estimator behind
+shap.GradientExplainer, see ``_expected_gradients`` -- over a seeded random
+sample of windows, against a background drawn the same way.  Only continuous inputs are attributed: each explained window keeps its
+own categorical codes -- and, for the TFT, its own lengths and target scale --
+which are held fixed while the continuous inputs are interpolated
+towards the background.
+"""
 import logging
 import os
-from typing import Iterable, List, Optional, Set
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import matplotlib
 import numpy as np
 import pandas as pd
-import shap
 import torch
 
 from src.utils.utils import get_run_root
@@ -14,10 +21,13 @@ from configs.data import CATEGORICAL_COLUMNS, INDEX_COLUMNS, NON_FEATURE_COLUMNS
 from configs.visualization import (
     DEFAULT_REGION,
     SHAP_FONT_SIZE,
+    SHAP_GRADIENT_BATCH_SIZE,
     SHAP_GRADIENT_NSAMPLES,
     SHAP_GRID_FIGSIZE,
     SHAP_INDIVIDUAL_FIGSIZE,
     SHAP_MAX_DISPLAY,
+    SHAP_NN_BACKGROUND_WINDOWS,
+    SHAP_NN_EXPLAINED_WINDOWS,
 )
 from .helpers import (
     make_grid,
@@ -32,93 +42,181 @@ from .helpers import (
 __all__ = [
     'get_lstm_shap_values', 'plot_lstm_shap', 'draw_temporal_shap_plot', 'create_timestep_comparison_plots',
     'get_tft_shap_values', 'plot_tft_shap', 'draw_shap_all_timesteps_plot',
+    'draw_window_sample', 'normalise_temporal_shap', 'additivity_report', 'SHAP_CACHE_FORMAT',
 ]
 
+# Layout of <model>_shap_cache.npz.  A cache written before the sampling and
+# the TFT wrapper were fixed carries no format and is not read back.
+SHAP_CACHE_FORMAT = 2
 
-def _derive_tft_feature_names(
-    train_template,
-    session_features: Optional[List[str]],
-    available_columns: Optional[Iterable[str]] = None,
-    sample_batch: Optional[dict] = None,
-) -> List[str]:
-    """Build an encoder-aligned feature list from a saved TFT dataset template."""
 
-    base_features = list(session_features or [])
-    available_list = list(available_columns) if available_columns is not None else None
+def _plots_dir(run_id: str, out_dir: Optional[str] = None) -> str:
+    """Where SHAP arrays and plots go: *out_dir*, or the run's own plots directory."""
+    return out_dir if out_dir else os.path.join(get_run_root(run_id), "plots")
 
-    def _feature_count(batch: Optional[dict], key: str) -> Optional[int]:
-        if not isinstance(batch, dict):
-            return None
-        tensor = batch.get(key)
-        if tensor is None:
-            return None
-        if hasattr(tensor, "numel") and tensor.numel() == 0:
-            return 0
-        if hasattr(tensor, "shape") and len(tensor.shape) >= 3:
-            return int(tensor.shape[-1])
-        return None
 
-    cont_len = _feature_count(sample_batch, "encoder_cont")
-    cat_len = _feature_count(sample_batch, "encoder_cat")
+def draw_window_sample(
+    n_windows: int,
+    n_explained: int = SHAP_NN_EXPLAINED_WINDOWS,
+    n_background: int = SHAP_NN_BACKGROUND_WINDOWS,
+    seed: int = SPLIT_SEED,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Seeded positions of the windows to explain and of the background.
 
-    def _unique(names: Iterable[str]) -> List[str]:
-        seen: Set[str] = set()
-        ordered: List[str] = []
-        for name in names:
-            if name is None:
-                continue
-            if name not in seen:
-                seen.add(name)
-                ordered.append(name)
-        return ordered
+    Both are drawn without replacement from all *n_windows*, so neither
+    depends on the order the windows are stored in.  They are disjoint while
+    there are enough windows for both; otherwise the background is drawn
+    from all of them again.
+    """
+    if n_windows <= 0:
+        return np.empty(0, dtype=int), np.empty(0, dtype=int)
+    rng = np.random.default_rng(seed)
+    order = rng.permutation(n_windows)
+    explained = np.sort(order[:n_explained])
+    rest = order[n_explained:]
+    if len(rest) >= n_background:
+        background = np.sort(rest[:n_background])
+    else:
+        background = np.sort(rng.choice(n_windows, min(n_background, n_windows), replace=False))
+    return explained, background
 
-    cont_names: List[str] = []
-    cat_names: List[str] = []
 
-    if train_template is not None:
-        try:
-            cont_names = _unique(getattr(train_template, "reals", []))
-        except Exception as exc:  # noqa: BLE001
-            logging.warning(
-                "Failed to derive continuous feature names from TFT template: %s",
-                exc,
-            )
-            cont_names = []
-        try:
-            cat_names = _unique(getattr(train_template, "categoricals", []))
-        except Exception as exc:  # noqa: BLE001
-            logging.warning(
-                "Failed to derive categorical feature names from TFT template: %s",
-                exc,
-            )
-            cat_names = []
+def normalise_temporal_shap(temporal_shap: np.ndarray) -> np.ndarray:
+    """Put [samples, steps, features, targets] SHAP values on the shared scale.
 
-    fallback_cont = [f for f in base_features if f not in CATEGORICAL_COLUMNS]
-    fallback_cat = [f for f in base_features if f in CATEGORICAL_COLUMNS]
+    Each target is divided by its sum over features of mean |SHAP|, with SHAP
+    summed over the steps first -- the per-feature quantity the beeswarm
+    shows, and the one ``helpers.normalise_shap_values`` scales XGBoost's by.
+    """
+    temporal_shap = np.array(temporal_shap, dtype=float)
+    totals = np.abs(temporal_shap.sum(axis=1)).mean(axis=0).sum(axis=0)  # [targets]
+    return temporal_shap / np.where(totals > 0, totals, 1.0)
 
-    def _coerce(names: List[str], target_len: Optional[int], fallback: List[str], prefix: str) -> List[str]:
-        if target_len is None:
-            return names
-        trimmed = list(names[: target_len])
-        if len(trimmed) < target_len:
-            for candidate in fallback:
-                if candidate not in trimmed:
-                    trimmed.append(candidate)
-                if len(trimmed) == target_len:
-                    break
-        while len(trimmed) < target_len:
-            trimmed.append(f"{prefix}_{len(trimmed)}")
-        return trimmed
 
-    cont_names = _coerce(cont_names, cont_len, fallback_cont, "encoder_cont")
-    cat_names = _coerce(cat_names, cat_len, fallback_cat, "encoder_cat")
+def additivity_report(temporal_shap: np.ndarray, fx: np.ndarray, base_values: np.ndarray, targets: Sequence[str]) -> Dict:
+    """How well the attributions add up to the prediction they decompose.
 
-    derived = cont_names + cat_names
-    if derived:
-        return derived
-    if available_list:
-        return available_list
-    return base_features
+    For every explained window and target, the SHAP values summed over steps
+    and features should equal f(x) minus the mean of f over the background --
+    with the window's own fixed context, which is what *base_values* holds.
+    Reports the correlation between the two, pooled and per target, and the
+    error relative to the spread of the differences.
+    """
+    total = np.asarray(temporal_shap).sum(axis=(1, 2))               # [samples, targets]
+    delta = np.asarray(fx) - np.asarray(base_values)                 # [samples, targets]
+
+    def corr(a, b) -> float:
+        a, b = np.ravel(a), np.ravel(b)
+        if len(a) < 2 or np.std(a) == 0 or np.std(b) == 0:
+            return float("nan")
+        return float(np.corrcoef(a, b)[0, 1])
+
+    def relative_error(a, b) -> float:
+        spread = float(np.sqrt(np.mean(np.square(b))))
+        return float(np.sqrt(np.mean(np.square(a - b))) / spread) if spread > 0 else float("nan")
+
+    # Targets differ in magnitude, so the pooled figure is computed on each
+    # target's values divided by the spread of its own differences.
+    scale = np.sqrt(np.mean(np.square(delta), axis=0))
+    scale = np.where(scale > 0, scale, 1.0)
+    return {
+        "n_explained": int(total.shape[0]),
+        "correlation": corr(total / scale, delta / scale),
+        "relative_error": relative_error(total / scale, delta / scale),
+        "per_target": {
+            str(t): {"correlation": corr(total[:, i], delta[:, i]), "relative_error": relative_error(total[:, i], delta[:, i])}
+            for i, t in enumerate(targets)
+        },
+    }
+
+
+def _log_additivity(model_name: str, report: Dict) -> None:
+    worst = min(report["per_target"].items(), key=lambda kv: kv[1]["correlation"], default=(None, {"correlation": float("nan")}))
+    logging.info(
+        "%s SHAP additivity over %d windows: corr(sum SHAP, f(x) - background mean) = %.4f pooled "
+        "(relative error %.3f); lowest target %s at %.4f",
+        model_name, report["n_explained"], report["correlation"], report["relative_error"],
+        worst[0], worst[1]["correlation"],
+    )
+
+
+def _expected_gradients(wrapper, row: torch.Tensor, background: torch.Tensor, n_samples: int, seed: int = SPLIT_SEED) -> np.ndarray:
+    """Expected-gradients SHAP values of one window, shaped [steps, features, targets].
+
+    The estimator shap.GradientExplainer implements: the mean over background
+    windows b and positions a in [0, 1] of (x - b) * grad f(b + a (x - b)),
+    whose expectation sums to f(x) minus the background mean of f.  Written
+    out here because the library draws its samples one at a time in Python
+    and runs a forward pass per output: on the TFT that is about 18 s per
+    window at 500 samples.  Here a batch is one forward pass and one backward
+    pass per output, and the draws are balanced rather than independent:
+    *n_samples* is rounded up to a whole number of passes over the
+    background, so every background window is used equally often, and each
+    one's positions are stratified over [0, 1], one per pass.  The estimate
+    stays unbiased, its baseline is exactly the background mean, and its
+    noise at a given sample count is lower.
+    """
+    rng = np.random.default_rng(seed)
+    n_background = len(background)
+    rounds = max(1, -(-n_samples // n_background))
+    n_samples = rounds * n_background
+    picks = np.tile(np.arange(n_background), rounds)
+    # Pass r puts each background window's position in [r, r + 1) / rounds.
+    positions = (np.repeat(np.arange(rounds), n_background) + rng.random(n_samples)) / rounds
+    picks_t = torch.as_tensor(picks, device=background.device)
+    positions_t = torch.as_tensor(positions, dtype=row.dtype, device=row.device)
+
+    row = row.detach()
+    total = None
+    for chunk in torch.split(torch.arange(n_samples, device=row.device), SHAP_GRADIENT_BATCH_SIZE):
+        base = background[picks_t[chunk]].detach()
+        delta = row - base
+        point = (base + positions_t[chunk].reshape(-1, 1, 1) * delta).requires_grad_(True)
+        outputs = wrapper(point)                                      # [batch, targets]
+        n_targets = outputs.shape[1]
+        if total is None:
+            total = torch.zeros(*row.shape[1:], n_targets, dtype=torch.float64, device=row.device)
+        for k in range(n_targets):
+            (grad,) = torch.autograd.grad(outputs[:, k].sum(), point, retain_graph=k < n_targets - 1)
+            total[..., k] += (grad * delta).sum(dim=0).to(torch.float64)
+    return _to_numpy(total / n_samples)
+
+
+def _explain_windows(wrapper, inputs: torch.Tensor, background: torch.Tensor, contexts: Sequence) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Expected gradients for each window under its own fixed context.
+
+    A window is explained on batches of interpolations between it and
+    background windows.  The wrapper cannot tell which window a batch belongs
+    to, so it is handed the window's context -- what must not be
+    interpolated -- before each one and broadcasts it over the batch.
+
+    Returns the SHAP values [windows, steps, features, targets], f(x) for
+    every window and the mean of f over the background under that window's
+    context, both [windows, targets]: the two sides of the additivity check.
+    """
+    per_row, fx, base = [], [], []
+    # cuDNN's RNN backward requires training mode, and the models are in eval
+    # mode; the native implementation has no such limit.
+    with torch.backends.cudnn.flags(enabled=False):
+        for j in range(len(inputs)):
+            wrapper.set_row(contexts[j])
+            row = inputs[j:j + 1]
+            per_row.append(_expected_gradients(wrapper, row, background, SHAP_GRADIENT_NSAMPLES))
+            with torch.no_grad():
+                fx.append(_to_numpy(wrapper(row.detach()))[0])
+                over_background = [_to_numpy(wrapper(chunk.detach())) for chunk in torch.split(background, 256)]
+                base.append(np.concatenate(over_background, axis=0).mean(axis=0))
+    return np.stack(per_row, axis=0), np.asarray(fx, dtype=np.float64), np.asarray(base, dtype=np.float64)
+
+
+def _save_shap_arrays(plots_dir: str, model_type: str, payload: Dict) -> None:
+    """Write the two .npy arrays and the self-describing cache next to them."""
+    os.makedirs(plots_dir, exist_ok=True)
+    np.save(os.path.join(plots_dir, f"{model_type}_shap_values_temporal.npy"), payload["temporal_shap"])
+    np.save(os.path.join(plots_dir, f"{model_type}_shap_values.npy"), payload["averaged_shap"])
+    cache_path = os.path.join(plots_dir, f"{model_type}_shap_cache.npz")
+    np.savez_compressed(cache_path, format=np.array(SHAP_CACHE_FORMAT), **payload)
+    logging.info("Saved %s SHAP arrays and cache to %s", model_type.upper(), plots_dir)
 
 
 def _align_feature_names(feature_names: Optional[List[str]], feature_count: int) -> List[str]:
@@ -156,34 +254,52 @@ def _to_numpy(x):
         pass
     return np.array(x)
 
-def _stack_shap_outputs(shap_values) -> np.ndarray:
-    """Normalise GradientExplainer output to [samples, time, features, targets].
+def _timestep_labels(sequence_length: int, encoder_length: Optional[int] = None) -> List[str]:
+    """Axis labels for the steps of a window; "t" is the last encoder step.
 
-    Older shap releases return one array per output; newer ones a single
-    array with the outputs on the last axis, or none of it for one output.
+    With *encoder_length* shorter than the window, the steps after it are the
+    decoder's and count forward from "t+1".
     """
-    if isinstance(shap_values, list):
-        stacked = np.array([_to_numpy(sv) for sv in shap_values], dtype=np.float64)
-        return np.transpose(stacked, (1, 2, 3, 0))
-    stacked = np.array(_to_numpy(shap_values), dtype=np.float64)
-    if stacked.ndim == 3:
-        stacked = np.expand_dims(stacked, axis=-1)
-    return stacked
-
-
-def _timestep_labels(sequence_length: int) -> List[str]:
-    """Axis labels for encoder positions; the last step is the latest one."""
-    return [
+    encoder_length = sequence_length if encoder_length is None else min(int(encoder_length), sequence_length)
+    encoder = [
         "t" if steps_back == 0 else f"t-{steps_back}"
-        for steps_back in range(sequence_length - 1, -1, -1)
+        for steps_back in range(encoder_length - 1, -1, -1)
     ]
+    return encoder + [f"t+{k}" for k in range(1, sequence_length - encoder_length + 1)]
 
 
-def get_lstm_shap_values(run_id, X_test: pd.DataFrame, sequence_length=1, group_ids=None):
-    """Expected-gradients SHAP for the LSTM over the first rows of *X_test*.
+class _LSTMPredictionWrapper(torch.nn.Module):
+    """Maps a window's continuous inputs to the LSTM's outputs, for SHAP.
 
-    *group_ids* gives each row's (Model, Scenario, Region) series id, so the
-    windows fed to the model never straddle two series.
+    SHAP explains the continuous features only; the categorical codes of the
+    window being explained are held fixed (``set_row``) and broadcast over
+    whatever batch of interpolations it is passed.
+    """
+
+    def __init__(self, lstm_model, seq_len: int):
+        super().__init__()
+        self.lstm_model = lstm_model
+        self.seq_len = seq_len
+        self.fixed_cat = None  # [1, seq_len, num_cat]
+
+    def set_row(self, cat_indices: torch.Tensor) -> None:
+        self.fixed_cat = cat_indices
+
+    def forward(self, x):
+        batch_size = x.shape[0]
+        mask = torch.ones(batch_size, self.seq_len, dtype=torch.float32, device=x.device)
+        cat = self.fixed_cat.to(x.device).expand(batch_size, -1, -1)
+        return self.lstm_model(x, mask=mask, cat_indices=cat)
+
+
+def get_lstm_shap_values(run_id, X_test: pd.DataFrame, sequence_length=1, group_ids=None, out_dir: Optional[str] = None):
+    """Expected-gradients SHAP for the LSTM over a random sample of windows.
+
+    Every window of *X_test* that lies inside one series is a candidate;
+    *group_ids* gives each row's (Model, Scenario, Region) series id, so no
+    window straddles two series.  ``draw_window_sample`` picks the windows to
+    explain and the background from all of them.  Arrays go to *out_dir*
+    (the run's plots directory when None).
     """
     from src.trainers.lstm_trainer import LSTMModel
     logging.info("Loading LSTM model...")
@@ -231,170 +347,134 @@ def get_lstm_shap_values(run_id, X_test: pd.DataFrame, sequence_length=1, group_
         X_cat = np.column_stack([cat_codes[c] for c in categorical_features]) if categorical_features else np.empty((len(data), 0), dtype=np.int64)
         return X_cont_scaled, X_cat
 
-    def create_sequences(X_cont_scaled, X_cat, seq_len, groups):
-        """Sliding windows that stay inside one series.
-
-        The rows arrive sorted by series, so a window whose first and last
-        rows share a group id lies within it -- the windows LSTMDataset
-        builds per group.
-        """
-        cont_seqs, cat_seqs = [], []
-        for i in range(len(X_cont_scaled) - seq_len + 1):
-            if groups is not None and groups[i] != groups[i + seq_len - 1]:
-                continue
-            cont_seqs.append(torch.FloatTensor(X_cont_scaled[i:i+seq_len]))
-            cat_seqs.append(torch.LongTensor(X_cat[i:i+seq_len]))
-        if cont_seqs:
-            return torch.stack(cont_seqs), torch.stack(cat_seqs)
-        return torch.empty(0, seq_len, X_cont_scaled.shape[1]), torch.empty(0, seq_len, X_cat.shape[1], dtype=torch.long)
-
     groups = None if group_ids is None else np.asarray(group_ids)
-    rng = np.random.default_rng(SPLIT_SEED)
+    cont, cat = preprocess_features(X_test, continuous_features, categorical_features, scaler_X)
+    cont = np.asarray(cont, dtype=np.float32)
 
-    background_size = min(200, len(X_test))
-    bg_cont, bg_cat = preprocess_features(X_test.iloc[:background_size], continuous_features, categorical_features, scaler_X)
-    bg_cont_seq, bg_cat_seq = create_sequences(
-        bg_cont, bg_cat, sequence_length, None if groups is None else groups[:background_size],
-    )
-    if len(bg_cont_seq) > 50:
-        idx = rng.choice(len(bg_cont_seq), 50, replace=False)
-        background_data = bg_cont_seq[idx]
-        background_cat = bg_cat_seq[idx]
-    else:
-        background_data = bg_cont_seq
-        background_cat = bg_cat_seq
-    test_size = min(100, len(X_test))
-    test_cont, test_cat = preprocess_features(X_test.iloc[:test_size], continuous_features, categorical_features, scaler_X)
-    test_inputs, test_cat_seq = create_sequences(
-        test_cont, test_cat, sequence_length, None if groups is None else groups[:test_size],
+    # Every sliding window that stays inside one series.  The rows arrive
+    # sorted by series, so a window whose first and last rows share a group
+    # id lies within it -- the windows LSTMDataset builds per group.
+    starts = np.arange(max(len(cont) - sequence_length + 1, 0))
+    if groups is not None and len(starts):
+        starts = starts[groups[starts] == groups[starts + sequence_length - 1]]
+    explained_pos, background_pos = draw_window_sample(len(starts))
+    logging.info(
+        "LSTM SHAP: explaining %d of %d windows against a background of %d",
+        len(explained_pos), len(starts), len(background_pos),
     )
 
-    # SHAP explains continuous features only; categorical embeddings are held fixed
-    class LSTMWrapperForSHAP(torch.nn.Module):
-        def __init__(self, lstm_model, seq_len, fixed_cat):
-            super().__init__()
-            self.lstm_model = lstm_model
-            self.seq_len = seq_len
-            self.fixed_cat = fixed_cat  # [batch, seq_len, num_cat] — expanded per sample
-        def forward(self, x):
-            batch_size = x.shape[0]
-            device = x.device
-            mask = torch.ones(batch_size, self.seq_len, dtype=torch.float32, device=device)
-            # Use the fixed categorical indices (broadcast if needed)
-            if self.fixed_cat.shape[0] >= batch_size:
-                cat = self.fixed_cat[:batch_size]
-            else:
-                # SHAP may pass batches larger than the dataset (background + test);
-                # repeat rows to fill the batch since cat indices are the same per sample.
-                repeats = (batch_size + self.fixed_cat.shape[0] - 1) // self.fixed_cat.shape[0]
-                cat = self.fixed_cat.repeat(repeats, 1, 1)[:batch_size]
-            cat = cat.to(device)
-            return self.lstm_model(x, mask=mask, cat_indices=cat)
-    wrapper = LSTMWrapperForSHAP(model, sequence_length, background_cat)
+    def windows(positions):
+        rows = starts[positions][:, None] + np.arange(sequence_length)[None, :]   # [windows, seq_len]
+        return torch.from_numpy(cont[rows]), torch.from_numpy(cat[rows])
+
+    test_inputs, test_cat_seq = windows(explained_pos)
+    background_data, _ = windows(background_pos)
+
+    wrapper = _LSTMPredictionWrapper(model, sequence_length)
     wrapper.eval()
     device = next(model.parameters()).device
-    background_data = background_data.to(device).requires_grad_(True)
-    test_inputs = test_inputs.to(device).requires_grad_(True)
-    # GradientExplainer, matching the TFT path. Measured on a trained LSTM over
-    # three seeds, expected gradients decomposes the prediction difference about
-    # twice as accurately as DeepLIFT here (~9% vs ~18% additivity error) while
-    # agreeing with it on the attributions themselves (corr ~0.99), so the
-    # rankings the plots show are unchanged.
-    #
-    # Disable cuDNN so the native LSTM backward works in eval mode
-    # (cuDNN's RNN backward requires training mode, but SHAP needs gradients)
-    with torch.backends.cudnn.flags(enabled=False):
-        explainer = shap.GradientExplainer(wrapper, background_data)
+    background_data = background_data.to(device)
+    test_inputs = test_inputs.to(device)
+    test_cat_seq = test_cat_seq.to(device)
+    n_targets = len(targets)
+    if len(test_inputs):
         logging.info("Calculating LSTM SHAP values...")
-        # GradientExplainer explains one row at a time, evaluating the model
-        # on batches of interpolations of that row.  The wrapper cannot tell
-        # which row a batch belongs to, so it is handed that row's categorical
-        # codes before each call and broadcasts them over the batch.  Handing
-        # it the whole test set instead paired every row's interpolations with
-        # the first rows' Region and Model_Family embeddings.
-        per_row = []
-        for j in range(len(test_inputs)):
-            wrapper.fixed_cat = test_cat_seq[j:j + 1]
-            per_row.append(_stack_shap_outputs(explainer.shap_values(
-                test_inputs[j:j + 1], nsamples=SHAP_GRADIENT_NSAMPLES, rseed=SPLIT_SEED,
-            )))
-    if per_row:
-        shap_values = np.concatenate(per_row, axis=0)
+        shap_values, fx, base_values = _explain_windows(
+            wrapper, test_inputs, background_data,
+            [test_cat_seq[j:j + 1] for j in range(len(test_inputs))],
+        )
     else:
-        shap_values = np.empty((0, sequence_length, test_inputs.shape[-1], 1))
+        shap_values = np.empty((0, sequence_length, cont.shape[1], n_targets))
+        fx = base_values = np.empty((0, n_targets))
     original_temporal_shap = shap_values.copy()
     averaged = np.mean(shap_values, axis=1)
-    os.makedirs(os.path.join(get_run_root(run_id), "plots"), exist_ok=True)
-    np.save(os.path.join(get_run_root(run_id), "plots", "lstm_shap_values_temporal.npy"), original_temporal_shap)
-    np.save(os.path.join(get_run_root(run_id), "plots", "lstm_shap_values.npy"), averaged)
-    n_samples = averaged.shape[0]
-    X_processed = X_test.iloc[:min(test_size, n_samples)].loc[:, continuous_features]
+    _log_additivity("LSTM", additivity_report(original_temporal_shap, fx, base_values, targets))
+
     test_sequences_np = _to_numpy(test_inputs)
+    last_rows = starts[explained_pos] + sequence_length - 1
+    _save_shap_arrays(_plots_dir(run_id, out_dir), "lstm", {
+        "temporal_shap": original_temporal_shap,
+        "averaged_shap": averaged,
+        "test_inputs": test_sequences_np,
+        "fx": fx,
+        "base_values": base_values,
+        "feature_names": np.array(continuous_features, dtype=str),
+        "targets": np.array(list(targets), dtype=str),
+        "explained_rows": last_rows,
+        "n_candidate_windows": np.array(len(starts)),
+        "n_background": np.array(len(background_pos)),
+        "encoder_length": np.array(sequence_length),
+    })
+    # The explained windows' latest rows, unscaled.
+    X_processed = X_test.iloc[last_rows].loc[:, continuous_features]
     return original_temporal_shap, averaged, X_processed, test_sequences_np
 
+
 class _TFTPredictionWrapper(torch.nn.Module):
-    """Maps encoder inputs to one target's mean forecast, for SHAP.
+    """Maps a window's continuous inputs to every target's mean forecast, for SHAP.
 
-    SHAP needs a module taking a single tensor and returning ``[batch, 1]``.
-    This rebuilds the batch dict the TFT expects around the encoder features
-    SHAP perturbs, then reduces the output to the mean prediction for
-    ``target_idx`` over its valid forecast horizon.
+    SHAP needs a module taking a single tensor.  That tensor is the window's
+    continuous inputs over the encoder steps followed by the decoder steps,
+    ``[batch, encoder_length + decoder steps, n_continuous]``, so the decoder
+    inputs -- which carry most of what the model reads -- are attributed like
+    the encoder's.  Each call returns ``[batch, n_targets]``: every target's
+    forecast averaged over its valid horizon.
 
-    Note the non-encoder parts of the batch (decoder inputs, target scale,
-    statics) come from ``sample_batch_structure`` and are shared by every row,
-    so attributions are conditioned on that one row's decoder context.
+    Everything else the TFT reads -- categorical codes, encoder and decoder
+    lengths, target scale -- belongs to the one window being explained.
+    ``set_row`` receives that window's batch (batch size 1) and ``forward``
+    broadcasts it over the interpolations it is passed, so no window
+    is scored with another's decoder context and no categorical code is
+    interpolated.
     """
 
-    def __init__(self, tft_model, target_idx: int, sample_batch_structure: dict):
+    # The entries SHAP's tensor replaces.
+    _CONTINUOUS_KEYS = ("encoder_cont", "decoder_cont")
+
+    def __init__(self, tft_model, encoder_length: int):
         super().__init__()
         self.tft_model = tft_model
-        self.target_idx = target_idx
-        self.sample_batch_structure = sample_batch_structure
+        self.encoder_length = int(encoder_length)
+        self.row_context: Optional[dict] = None
+
+    @staticmethod
+    def continuous_inputs(batch: dict) -> torch.Tensor:
+        """The tensor SHAP attributes: encoder then decoder continuous inputs."""
+        return torch.cat([batch["encoder_cont"], batch["decoder_cont"]], dim=1)
+
+    def set_row(self, row_context: dict) -> None:
+        """Fix the non-continuous inputs to those of one window (batch size 1)."""
+        self.row_context = row_context
 
     def _build_batch(self, x):
-        """Reassemble the TFT batch dict, substituting SHAP's encoder inputs."""
-        batch_size, time_steps, n_features = x.shape
-        sample_x = self.sample_batch_structure
+        """The TFT batch dict: SHAP's continuous inputs in the row's own context."""
+        if self.row_context is None:
+            raise RuntimeError("set_row() must be called with the explained window's batch first")
+        batch_size = x.shape[0]
+        device = x.device
 
-        batch_dict = {}
-        for key, value in sample_x.items():
-            if key == 'encoder_cont':
-                n_cont = value.shape[-1]
-                if n_cont > 0:
-                    batch_dict[key] = x[:, :, :n_cont]
-                else:
-                    batch_dict[key] = torch.empty(batch_size, time_steps, 0)
-            elif key == 'encoder_cat':
-                n_cont = sample_x['encoder_cont'].shape[-1] if 'encoder_cont' in sample_x else 0
-                n_cat = value.shape[-1] if value.numel() > 0 else 0
-                if n_cat > 0 and n_features > n_cont:
-                    batch_dict[key] = x[:, :, n_cont:n_cont + n_cat].long()
-                else:
-                    batch_dict[key] = torch.empty(batch_size, time_steps, 0, dtype=torch.long)
-            else:
-                # Everything else is broadcast from the reference row.
-                if isinstance(value, list):
-                    batch_dict[key] = value
-                elif hasattr(value, 'size') and value.size(0) == 1:
-                    batch_dict[key] = value.expand(batch_size, *value.shape[1:])
-                elif hasattr(value, 'size'):
-                    batch_dict[key] = value[:batch_size]
-                else:
-                    batch_dict[key] = value
+        def _broadcast(value):
+            if isinstance(value, torch.Tensor):
+                value = value.to(device)
+                if value.dim() >= 1 and value.size(0) == 1:
+                    return value.expand(batch_size, *value.shape[1:])
+                return value
+            if isinstance(value, (list, tuple)):
+                return type(value)(_broadcast(item) for item in value)
+            return value
 
-        device = next(self.tft_model.parameters()).device
+        batch_dict = {
+            key: _broadcast(value)
+            for key, value in self.row_context.items()
+            if key not in self._CONTINUOUS_KEYS
+        }
+        batch_dict["encoder_cont"] = x[:, :self.encoder_length]
+        batch_dict["decoder_cont"] = x[:, self.encoder_length:]
+        return batch_dict
 
-        def _to_device(v):
-            if isinstance(v, torch.Tensor):
-                return v.to(device)
-            if isinstance(v, (list, tuple)):
-                return type(v)([_to_device(item) for item in v])
-            return v
-
-        return {k: _to_device(v) for k, v in batch_dict.items()}
-
-    def _select_target_prediction(self, output):
-        """Pull this target's point forecast, shaped [batch, horizon].
+    @staticmethod
+    def _point_forecasts(output) -> List[torch.Tensor]:
+        """Each target's point forecast, shaped [batch, horizon].
 
         The TFT returns a NamedTuple whose fields are, in order, ``prediction``,
         ``encoder_attention``, ``decoder_attention``, ... — and with more than
@@ -411,35 +491,59 @@ class _TFTPredictionWrapper(torch.nn.Module):
                     f"TFT output of type {type(output)} has no 'prediction' field"
                 )
 
-        if isinstance(prediction, (list, tuple)):
-            if self.target_idx >= len(prediction):
-                raise IndexError(
-                    f"target_idx {self.target_idx} out of range for "
-                    f"{len(prediction)} predicted targets"
-                )
-            pred = prediction[self.target_idx]
-        else:
-            pred = prediction
-
-        if pred.dim() == 3:
-            # Trailing axis is the loss's output size: 1 for a point forecast,
-            # n_quantiles otherwise (take the median).
-            pred = pred[..., pred.shape[-1] // 2]
-        if pred.dim() == 1:
-            pred = pred.unsqueeze(1)
-        return pred
+        per_target = list(prediction) if isinstance(prediction, (list, tuple)) else [prediction]
+        forecasts = []
+        for pred in per_target:
+            if pred.dim() == 3:
+                # Trailing axis is the loss's output size: 1 for a point forecast,
+                # n_quantiles otherwise (take the median).
+                pred = pred[..., pred.shape[-1] // 2]
+            if pred.dim() == 1:
+                pred = pred.unsqueeze(1)
+            forecasts.append(pred)
+        return forecasts
 
     def forward(self, x):
         batch_dict = self._build_batch(x)
-        pred = self._select_target_prediction(self.tft_model(batch_dict))
+        forecasts = self._point_forecasts(self.tft_model(batch_dict))
 
         # Mean over the forecast horizon, ignoring padded decoder steps.
         lengths = batch_dict.get("decoder_lengths")
-        if lengths is not None and torch.is_tensor(lengths) and lengths.numel() == pred.shape[0]:
-            steps = torch.arange(pred.shape[1], device=pred.device)
-            valid = (steps.unsqueeze(0) < lengths.to(pred.device).reshape(-1, 1)).to(pred.dtype)
-            return (pred * valid).sum(dim=1, keepdim=True) / valid.sum(dim=1, keepdim=True).clamp(min=1)
-        return pred.mean(dim=1, keepdim=True)
+        means = []
+        for pred in forecasts:
+            if lengths is not None and torch.is_tensor(lengths) and lengths.numel() == pred.shape[0]:
+                steps = torch.arange(pred.shape[1], device=pred.device)
+                valid = (steps.unsqueeze(0) < lengths.to(pred.device).reshape(-1, 1)).to(pred.dtype)
+                means.append((pred * valid).sum(dim=1) / valid.sum(dim=1).clamp(min=1))
+            else:
+                means.append(pred.mean(dim=1))
+        return torch.stack(means, dim=1)
+
+
+def _load_shap_cache(cache_path: str):
+    """A cache in the current layout, or None when there is none to trust."""
+    if not os.path.exists(cache_path):
+        return None
+    try:
+        with np.load(cache_path, allow_pickle=True) as cached:
+            if "format" not in cached.files or int(cached["format"]) != SHAP_CACHE_FORMAT:
+                logging.info("Ignoring SHAP cache %s: written in an earlier layout", cache_path)
+                return None
+            return {name: cached[name] for name in cached.files}
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("Failed to load cached SHAP data from %s: %s", cache_path, exc)
+        return None
+
+
+def _slice_batch(batch: dict, j: int) -> dict:
+    """Window *j* of a collated TFT batch, keeping the batch axis (size 1)."""
+    def _pick(value):
+        if isinstance(value, torch.Tensor):
+            return value[j:j + 1]
+        if isinstance(value, (list, tuple)):
+            return type(value)(_pick(item) for item in value)
+        return value
+    return {key: _pick(value) for key, value in batch.items()}
 
 
 def get_tft_shap_values(
@@ -447,41 +551,44 @@ def get_tft_shap_values(
     X_test: pd.DataFrame,
     *,
     use_cached: bool = True,
+    out_dir: Optional[str] = None,
 ):
+    """Expected-gradients SHAP for the TFT over a random sample of windows.
+
+    The candidates are the windows of *X_test* with a full encoder and a full
+    decoder; ``draw_window_sample`` picks the ones to explain and the
+    background from all of them.  The continuous inputs of the encoder and
+    the decoder steps are attributed (see ``_TFTPredictionWrapper``).  Arrays
+    go to *out_dir* (the run's plots directory when None).
+
+    Returns the SHAP values ``[windows, steps, features, targets]``, their
+    mean over steps, the windows' first-step inputs as a frame, the explained
+    inputs ``[windows, steps, features]`` and the feature names.
+    """
     from src.trainers.tft_model import load_tft_checkpoint
     from src.trainers.tft_dataset import load_dataset_template, from_train_template
-    logging.info("Loading TFT model...")
     model_path = os.path.join(get_run_root(run_id), "final", "best.ckpt")
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"TFT model checkpoint not found: {model_path}")
 
-    model = load_tft_checkpoint(run_id)
-    model.eval()
-
     from src.utils.run_store import RunStore
     store = RunStore(run_id)
-    session_features, targets = store.load_features()
-    session_features = list(session_features)
+    _, targets = store.load_features()
 
-    plots_dir = os.path.join(get_run_root(run_id), "plots")
+    plots_dir = _plots_dir(run_id, out_dir)
     cache_path = os.path.join(plots_dir, "tft_shap_cache.npz")
 
-    if use_cached and os.path.exists(cache_path):
-        try:
-            with np.load(cache_path, allow_pickle=True) as cached:
-                original_temporal_shap = cached["temporal_shap"]
-                averaged = cached["averaged_shap"]
-                test_inputs_np = cached["test_inputs"]
-                base_matrix = cached["base_matrix"]
-                feature_names = cached["feature_names"].tolist()
-                feature_columns = cached["feature_columns"].tolist()
-            X_processed = pd.DataFrame(base_matrix, columns=feature_columns)
-            logging.info("Loaded cached TFT SHAP data from %s", cache_path)
-            return original_temporal_shap, averaged, X_processed, test_inputs_np, feature_names
-        except Exception as exc:  # noqa: BLE001
-            logging.warning(
-                "Failed to load cached TFT SHAP data from %s: %s", cache_path, exc
-            )
+    cached = _load_shap_cache(cache_path) if use_cached else None
+    if cached is not None:
+        feature_names = cached["feature_names"].tolist()
+        test_inputs_np = cached["test_inputs"]
+        X_processed = pd.DataFrame(test_inputs_np[:, 0, :], columns=feature_names)
+        logging.info("Loaded cached TFT SHAP data from %s", cache_path)
+        return cached["temporal_shap"], cached["averaged_shap"], X_processed, test_inputs_np, feature_names
+
+    logging.info("Loading TFT model...")
+    model = load_tft_checkpoint(run_id)
+    model.eval()
 
     logging.info("Loading TFT dataset template...")
     try:
@@ -494,7 +601,9 @@ def get_tft_shap_values(
 
     # Only series with room for a full encoder + decoder window are explained;
     # the template carries the lengths the model was trained with.
-    min_required_length = train_template.max_encoder_length + train_template.max_prediction_length
+    encoder_length = int(train_template.max_encoder_length)
+    prediction_length = int(train_template.max_prediction_length)
+    min_required_length = encoder_length + prediction_length
 
     # Group by series and filter by sequence length
     group_cols = ['Model', 'Scenario', 'Region']
@@ -515,134 +624,70 @@ def get_tft_shap_values(
     # Create test dataset from template
     test_dataset = from_train_template(train_template, X_test_filtered, mode="eval")
 
-    # Create background data (smaller subset for SHAP)
-    background_size = min(200, len(X_test_filtered))
-    background_data = X_test_filtered.iloc[:background_size]
-    background_dataset = from_train_template(train_template, background_data, mode="eval")
-
-    # Get data loaders
-    background_loader = background_dataset.to_dataloader(
-        train=False, batch_size=50, num_workers=1, persistent_workers=False
+    # The dataset also cuts windows with a shortened decoder near the end of
+    # each series.  Their padded steps are not inputs of the forecast, and a
+    # background window's padding is no baseline for a real step, so only
+    # full windows are candidates.
+    window_lengths = test_dataset.index["sequence_length"].to_numpy()
+    candidates = np.flatnonzero(window_lengths == min_required_length)
+    explained_pos, background_pos = draw_window_sample(len(candidates))
+    logging.info(
+        "TFT SHAP: explaining %d of %d full windows (%d in all) against a background of %d",
+        len(explained_pos), len(candidates), len(window_lengths), len(background_pos),
     )
-    test_loader = test_dataset.to_dataloader(
-        train=False, batch_size=100, num_workers=1, persistent_workers=False
-    )
+    if len(explained_pos) == 0:
+        raise ValueError("No full encoder + decoder window to explain.")
 
-    # Extract inputs for SHAP
-    def extract_inputs_from_loader(loader, max_batches=1):
-        inputs = []
-        for i, batch in enumerate(loader):
-            if i >= max_batches:
-                break
-            # TFT batch structure: x is dict with 'encoder_cont', 'encoder_cat', etc.
-            x, _ = batch
-            if isinstance(x, dict):
-                # Combine encoder continuous and categorical features
-                encoder_cont = x.get('encoder_cont', torch.empty(0))  # Shape: (batch, time, features)
-                encoder_cat = x.get('encoder_cat', torch.empty(0))    # Shape: (batch, time, cat_features)
+    def collate(positions) -> dict:
+        x, _ = test_dataset._collate_fn([test_dataset[int(i)] for i in candidates[positions]])
+        full = (x["encoder_lengths"] == encoder_length) & (x["decoder_lengths"] == prediction_length)
+        if not bool(full.all()):
+            raise ValueError("A sampled TFT window is shorter than the full encoder + decoder length.")
+        return x
 
-                if encoder_cont.numel() > 0 and encoder_cat.numel() > 0:
-                    # Convert categorical to float and concatenate
-                    encoder_cat_float = encoder_cat.float()
-                    combined = torch.cat([encoder_cont, encoder_cat_float], dim=-1)
-                elif encoder_cont.numel() > 0:
-                    combined = encoder_cont
-                elif encoder_cat.numel() > 0:
-                    combined = encoder_cat.float()
-                else:
-                    raise ValueError("No encoder inputs found in batch")
+    explained_batch = collate(explained_pos)
+    background_batch = collate(background_pos)
 
-                inputs.append(combined)
+    features = list(test_dataset.reals)
+    device = next(model.parameters()).device
+    test_inputs = _TFTPredictionWrapper.continuous_inputs(explained_batch).to(device)
+    background_inputs = _TFTPredictionWrapper.continuous_inputs(background_batch).to(device)
+    if test_inputs.shape[-1] != len(features):
+        raise ValueError(
+            f"The TFT batch carries {test_inputs.shape[-1]} continuous inputs but the dataset names {len(features)}."
+        )
 
-        if not inputs:
-            raise ValueError("No inputs extracted from data loader")
-        return torch.cat(inputs, dim=0)
+    contexts = [_slice_batch(explained_batch, j) for j in range(len(test_inputs))]
+    wrapper = _TFTPredictionWrapper(model, encoder_length)
+    wrapper.eval()
 
-    background_inputs = extract_inputs_from_loader(background_loader, max_batches=1)
-    test_inputs = extract_inputs_from_loader(test_loader, max_batches=1)
-
-    # Extract sample batch structure once for efficiency (avoids recreating DataLoader in forward pass)
-    sample_loader = test_dataset.to_dataloader(train=False, batch_size=1, num_workers=0)
-    sample_batch = next(iter(sample_loader))
-    sample_x, _ = sample_batch
-
-    # Derive feature names from dataset and encoder structure
-    features = _derive_tft_feature_names(
-        train_template,
-        session_features,
-        available_columns=X_test_filtered.columns,
-        sample_batch=sample_x,
-    )
-
-    # Calculate SHAP values for each target separately
-    all_temporal_shap = []
-    all_averaged_shap = []
-
-    for target_idx, target_name in enumerate(targets):
-        logging.info(f"Calculating SHAP values for target {target_idx + 1}/{len(targets)}: {target_name}")
-
-        wrapper = _TFTPredictionWrapper(model, target_idx, sample_x)
-        wrapper.eval()
-
-        device = next(model.parameters()).device
-        background_inputs = background_inputs.to(device).requires_grad_(True)
-        test_inputs = test_inputs.to(device).requires_grad_(True)
-
-        # GradientExplainer (expected gradients) rather than DeepExplainer:
-        # DeepLIFT's rescale rules do not cover the TFT's gating and attention
-        # ops, so DeepExplainer's attributions do not sum to the prediction
-        # difference they are meant to decompose — which is why the original
-        # call had to pass check_additivity=False.
-        #
-        # Disable cuDNN so the native LSTM backward works in eval mode
-        # (cuDNN's RNN backward requires training mode, but SHAP needs gradients)
-        with torch.backends.cudnn.flags(enabled=False):
-            explainer = shap.GradientExplainer(wrapper, background_inputs)
-            # The caller already announced this target with its position in the
-            # list; saying it again adds a line per target and no information.
-            shap_values = explainer.shap_values(
-                test_inputs, nsamples=SHAP_GRADIENT_NSAMPLES
-            )
-
-        shap_values = _stack_shap_outputs(shap_values)
-        all_temporal_shap.append(shap_values)
-        all_averaged_shap.append(np.mean(shap_values, axis=1))
-
-    # Combine all targets into final arrays
-    original_temporal_shap = np.concatenate(all_temporal_shap, axis=-1)  # [samples, time, features, targets]
-    averaged = np.concatenate(all_averaged_shap, axis=-1)  # [samples, features, targets]
-
-    os.makedirs(plots_dir, exist_ok=True)
-    np.save(os.path.join(plots_dir, "tft_shap_values_temporal.npy"), original_temporal_shap)
-    np.save(os.path.join(plots_dir, "tft_shap_values.npy"), averaged)
+    # Expected gradients rather than DeepLIFT (shap.DeepExplainer), whose
+    # rescale rules do not cover the TFT's gating and attention ops, so its
+    # attributions do not sum to the prediction difference they are meant to
+    # decompose.
+    logging.info("Calculating TFT SHAP values for %d targets...", len(targets))
+    original_temporal_shap, fx, base_values = _explain_windows(wrapper, test_inputs, background_inputs, contexts)
+    averaged = np.mean(original_temporal_shap, axis=1)  # [samples, features, targets]
+    _log_additivity("TFT", additivity_report(original_temporal_shap, fx, base_values, targets))
 
     test_inputs_np = _to_numpy(test_inputs)
-    feature_count = test_inputs_np.shape[-1] if test_inputs_np.ndim >= 2 else 0
-    features = _align_feature_names(features, feature_count)
+    decoded = test_dataset.decoded_index.iloc[candidates[explained_pos]]
+    _save_shap_arrays(plots_dir, "tft", {
+        "temporal_shap": original_temporal_shap,
+        "averaged_shap": averaged,
+        "test_inputs": test_inputs_np,
+        "fx": fx,
+        "base_values": base_values,
+        "feature_names": np.array(features, dtype=str),
+        "targets": np.array(list(targets), dtype=str),
+        "explained_windows": decoded.astype(str).to_numpy(),
+        "explained_window_columns": np.array(list(decoded.columns), dtype=str),
+        "n_candidate_windows": np.array(len(candidates)),
+        "n_background": np.array(len(background_pos)),
+        "encoder_length": np.array(encoder_length),
+    })
 
-    if test_inputs_np.ndim == 3:
-        base_matrix = test_inputs_np[:, 0, :feature_count]
-    elif test_inputs_np.ndim == 2:
-        base_matrix = test_inputs_np[:, :feature_count]
-    else:
-        base_matrix = test_inputs_np.reshape(test_inputs_np.shape[0], -1) if test_inputs_np.size else np.empty((0, feature_count))
-
-    X_processed = pd.DataFrame(base_matrix, columns=features)
-
-    try:
-        cache_payload = {
-            "temporal_shap": original_temporal_shap,
-            "averaged_shap": averaged,
-            "test_inputs": test_inputs_np,
-            "base_matrix": base_matrix,
-            "feature_names": np.array(features, dtype=object),
-            "feature_columns": np.array(features, dtype=object),
-        }
-        np.savez_compressed(cache_path, **cache_payload)
-        logging.info("Saved TFT SHAP cache to %s", cache_path)
-    except Exception as exc:  # noqa: BLE001
-        logging.warning("Failed to write TFT SHAP cache to %s: %s", cache_path, exc)
-
+    X_processed = pd.DataFrame(test_inputs_np[:, 0, :], columns=features)
     return original_temporal_shap, averaged, X_processed, test_inputs_np, features
 
 def plot_lstm_shap(
@@ -653,12 +698,14 @@ def plot_lstm_shap(
     sequence_length=1,
     region: Optional[str] = DEFAULT_REGION,
     region_series: Optional[pd.Series] = None,
+    out_dir: Optional[str] = None,
 ):
     """SHAP plots for the LSTM, over *region* only.
 
     The frame's own Region column holds the integer codes the embeddings were
     fit on, so callers pass *region_series* -- the decoded labels, aligned row
-    for row -- for the filter to match against.
+    for row -- for the filter to match against.  Arrays and plots go to
+    *out_dir*, or to the run's plots directory when it is None.
     """
     logging.info("Creating LSTM SHAP plots...")
     model_path = os.path.join(get_run_root(run_id), "final", "best.ckpt")
@@ -716,11 +763,14 @@ def plot_lstm_shap(
     )
     try:
         temporal_shap, averaged, X_proc, test_seq = get_lstm_shap_values(
-            run_id, X_test, sequence_length, group_ids=group_ids,
+            run_id, X_test, sequence_length, group_ids=group_ids, out_dir=out_dir,
         )
-        draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, features, targets, sequence_length, model_type="lstm")
-        draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, features, targets, sequence_length, model_type="lstm", xlim_range=(-0.3, 0.5))
-        draw_temporal_shap_plot(run_id, temporal_shap, features, targets, sequence_length, model_type="lstm")
+        # The saved arrays stay in the model's output units; the plots share
+        # one scale with the other models'.
+        temporal_shap = normalise_temporal_shap(temporal_shap)
+        draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, features, targets, sequence_length, model_type="lstm", out_dir=out_dir)
+        draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, features, targets, sequence_length, model_type="lstm", xlim_range=(-0.3, 0.5), out_dir=out_dir)
+        draw_temporal_shap_plot(run_id, temporal_shap, features, targets, sequence_length, model_type="lstm", out_dir=out_dir)
     except Exception as e:
         logging.error("Failed to create LSTM SHAP plots: %s", e)
         logging.exception("Full error traceback:")
@@ -732,7 +782,13 @@ def plot_tft_shap(
     targets: List[str],
     region: Optional[str] = DEFAULT_REGION,
     use_cached: bool = True,
+    out_dir: Optional[str] = None,
 ):
+    """SHAP plots for the TFT, over *region* only.
+
+    Arrays and plots go to *out_dir*, or to the run's plots directory when it
+    is None.
+    """
     logging.info("Creating TFT SHAP plots...")
     model_path = os.path.join(get_run_root(run_id), "final", "best.ckpt")
     if not os.path.exists(model_path):
@@ -782,24 +838,35 @@ def plot_tft_shap(
 
     try:
         temporal_shap, averaged, X_proc, test_seq, feature_names = get_tft_shap_values(
-            run_id, X_test, use_cached=use_cached,
+            run_id, X_test, use_cached=use_cached, out_dir=out_dir,
         )
-        sequence_length = test_seq.shape[1]  # Get actual sequence length from TFT data
-        draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, feature_names, targets, sequence_length, model_type="tft")
-        draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, feature_names, targets, sequence_length, model_type="tft", xlim_range=(-0.3, 0.5))
-        draw_temporal_shap_plot(run_id, temporal_shap, feature_names, targets, sequence_length, model_type="tft")
+        # Encoder steps followed by decoder steps.
+        sequence_length = test_seq.shape[1]
+        from src.trainers.tft_dataset import load_dataset_template
+        encoder_length = int(load_dataset_template(run_id).max_encoder_length)
+        # The saved arrays stay in the model's output units; the plots share
+        # one scale with the other models'.
+        temporal_shap = normalise_temporal_shap(temporal_shap)
+        draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, feature_names, targets, sequence_length, model_type="tft", out_dir=out_dir)
+        draw_shap_all_timesteps_plot(run_id, temporal_shap, test_seq, feature_names, targets, sequence_length, model_type="tft", xlim_range=(-0.3, 0.5), out_dir=out_dir)
+        draw_temporal_shap_plot(run_id, temporal_shap, feature_names, targets, sequence_length, model_type="tft", encoder_length=encoder_length, out_dir=out_dir)
     except Exception as e:
         logging.error("Failed to create TFT SHAP plots: %s", e)
         logging.exception("Full error traceback:")
 
-def draw_shap_all_timesteps_plot(run_id: str, temporal_shap_values, test_sequences_np, features: List[str], targets: List[str], sequence_length: int, model_type: str = "lstm", xlim_range: Optional[tuple] = None) -> None:
+def draw_shap_all_timesteps_plot(run_id: str, temporal_shap_values, test_sequences_np, features: List[str], targets: List[str], sequence_length: int, model_type: str = "lstm", xlim_range: Optional[tuple] = None, out_dir: Optional[str] = None) -> None:
+    """Beeswarm per target of SHAP summed over the steps, coloured by the mean input.
+
+    *temporal_shap_values* is expected on the shared scale
+    (``normalise_temporal_shap``), which is what the x-axis label states.
+    """
     if sequence_length <= 0:
         logging.warning("Invalid sequence_length=%d; skipping all-timesteps SHAP plot", sequence_length)
         return
     feature_count = temporal_shap_values.shape[2] if temporal_shap_values.ndim >= 3 else 0
     features = _align_feature_names(features, feature_count)
 
-    # Aggregate SHAP values across timesteps: sum absolute contributions per feature
+    # Aggregate SHAP values across timesteps: sum the signed contributions per feature
     # temporal_shap_values shape: [samples, timesteps, features, targets]
     # test_sequences_np shape: [samples, timesteps, features]
     # After aggregation: [samples, features] — one row per feature in beeswarm
@@ -813,7 +880,8 @@ def draw_shap_all_timesteps_plot(run_id: str, temporal_shap_values, test_sequenc
     fig, axes = make_grid(num_targets, base_figsize=SHAP_GRID_FIGSIZE)
 
     # Create directory for individual plots
-    indiv_plots_dir = os.path.join(get_run_root(run_id), 'plots', 'indiv_plots', 'shap')
+    plots_dir = _plots_dir(run_id, out_dir)
+    indiv_plots_dir = os.path.join(plots_dir, 'indiv_plots', 'shap')
     os.makedirs(indiv_plots_dir, exist_ok=True)
 
     for i, ax in enumerate(axes):
@@ -844,21 +912,24 @@ def draw_shap_all_timesteps_plot(run_id: str, temporal_shap_values, test_sequenc
             display_names,
             max_display=SHAP_MAX_DISPLAY,
             xlim_range=xlim_range,
+            title=f"Impact on {targets[i]} ({output_unit(targets[i])})",
         )
-        ax_indiv.set_title(f"Impact on {targets[i]} ({output_unit(targets[i])})")
         fig_indiv.tight_layout()
         indiv_filename = f'{targets[i]}_match_xgb_range.png' if xlim_range is not None else f'{targets[i]}.png'
         fig_indiv.savefig(os.path.join(indiv_plots_dir, indiv_filename), dpi=300, bbox_inches='tight')
         plt.close(fig_indiv)
 
     fig.tight_layout()
-    os.makedirs(os.path.join(get_run_root(run_id), 'plots'), exist_ok=True)
     filename = f'{model_type}_shap_plot_match_xgb_range.png' if xlim_range is not None else f'{model_type}_shap_plot.png'
-    fig.savefig(os.path.join(get_run_root(run_id), 'plots', filename))
+    fig.savefig(os.path.join(plots_dir, filename))
     plt.close(fig)
 
-def draw_temporal_shap_plot(run_id: str, temporal_shap_values, features: List[str], targets: List[str], sequence_length: int, model_type: str = "lstm") -> None:
-    """Heatmap of mean |SHAP| per (encoder step, feature) for each target's top features."""
+def draw_temporal_shap_plot(run_id: str, temporal_shap_values, features: List[str], targets: List[str], sequence_length: int, model_type: str = "lstm", encoder_length: Optional[int] = None, out_dir: Optional[str] = None) -> None:
+    """Heatmap of mean |SHAP| per (step, feature) for each target's top features.
+
+    The steps are encoder steps unless *encoder_length* is shorter than
+    *sequence_length*; the ones after it are then the decoder's.
+    """
     import matplotlib.pyplot as plt
     from tqdm import tqdm
     plt.rcParams.update({'font.size': SHAP_FONT_SIZE})
@@ -866,7 +937,8 @@ def draw_temporal_shap_plot(run_id: str, temporal_shap_values, features: List[st
     fig, axes = make_grid(num_targets, base_figsize=SHAP_GRID_FIGSIZE)
     feature_count = temporal_shap_values.shape[2] if temporal_shap_values.ndim >= 3 else 0
     features = _align_feature_names(features, feature_count)
-    step_labels = _timestep_labels(sequence_length)
+    step_labels = _timestep_labels(sequence_length, encoder_length)
+    step_axis = "Encoder step" if encoder_length is None or encoder_length >= sequence_length else "Step (encoder up to t, decoder after)"
     for i, ax in tqdm(enumerate(axes), total=num_targets, desc="Creating temporal SHAP plots"):
         if i >= num_targets:
             ax.axis('off')
@@ -882,22 +954,23 @@ def draw_temporal_shap_plot(run_id: str, temporal_shap_values, features: List[st
         ax.set_yticks(range(len(top_idx)))
         ax.set_yticklabels([n[:30] + '...' if len(n) > 30 else n for n in display_names], fontsize=10)
         ax.set_title(f"Temporal SHAP: {targets[i]} ({output_unit(targets[i])})", fontsize=14)
-        ax.set_xlabel("Encoder step", fontsize=12)
+        ax.set_xlabel(step_axis, fontsize=12)
         ax.set_ylabel("Features", fontsize=12)
         fig.colorbar(im, ax=ax, shrink=0.6)
     fig.tight_layout()
-    os.makedirs(os.path.join(get_run_root(run_id), 'plots'), exist_ok=True)
-    fig.savefig(os.path.join(get_run_root(run_id), 'plots', f'{model_type}_temporal_shap_heatmap.png'), dpi=300, bbox_inches='tight')
+    os.makedirs(_plots_dir(run_id, out_dir), exist_ok=True)
+    fig.savefig(os.path.join(_plots_dir(run_id, out_dir), f'{model_type}_temporal_shap_heatmap.png'), dpi=300, bbox_inches='tight')
     plt.close(fig)
-    create_timestep_comparison_plots(run_id, temporal_shap_values, features, targets, sequence_length, model_type)
+    create_timestep_comparison_plots(run_id, temporal_shap_values, features, targets, sequence_length, model_type, encoder_length=encoder_length, out_dir=out_dir)
 
 
-def create_timestep_comparison_plots(run_id: str, temporal_shap_values, features: List[str], targets: List[str], sequence_length: int, model_type: str = "lstm") -> None:
-    """Bar chart of mean |SHAP| per encoder step for each target."""
+def create_timestep_comparison_plots(run_id: str, temporal_shap_values, features: List[str], targets: List[str], sequence_length: int, model_type: str = "lstm", encoder_length: Optional[int] = None, out_dir: Optional[str] = None) -> None:
+    """Bar chart of mean |SHAP| per step for each target."""
     import matplotlib.pyplot as plt
     plt.rcParams.update({'font.size': SHAP_FONT_SIZE})
     fig, axes = make_grid(len(targets), base_figsize=SHAP_GRID_FIGSIZE)
-    labels = _timestep_labels(sequence_length)
+    labels = _timestep_labels(sequence_length, encoder_length)
+    step_axis = "Encoder step" if encoder_length is None or encoder_length >= sequence_length else "Step (encoder up to t, decoder after)"
     colors = matplotlib.colormaps['viridis'](np.linspace(0, 1, sequence_length))
     for i, ax in enumerate(axes):
         if i >= len(targets):
@@ -907,7 +980,7 @@ def create_timestep_comparison_plots(run_id: str, temporal_shap_values, features
         timestep_importance = np.mean(np.abs(target_shap), axis=(0, 2))
         bars = ax.bar(range(sequence_length), timestep_importance, color=colors, alpha=0.8)
         ax.set_title(f"Time Step Importance: {targets[i]} ({output_unit(targets[i])})", fontsize=14)
-        ax.set_xlabel("Encoder step", fontsize=12)
+        ax.set_xlabel(step_axis, fontsize=12)
         ax.set_ylabel("Average |SHAP| Value", fontsize=12)
         ax.set_xticks(range(sequence_length))
         ax.set_xticklabels(labels)
@@ -915,7 +988,7 @@ def create_timestep_comparison_plots(run_id: str, temporal_shap_values, features
             h = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., h + h*0.01, f"{h:.3f}", ha='center', va='bottom', fontsize=10)
     fig.tight_layout()
-    os.makedirs(os.path.join(get_run_root(run_id), 'plots'), exist_ok=True)
-    fig.savefig(os.path.join(get_run_root(run_id), 'plots', f'{model_type}_timestep_importance.png'), dpi=300, bbox_inches='tight')
+    os.makedirs(_plots_dir(run_id, out_dir), exist_ok=True)
+    fig.savefig(os.path.join(_plots_dir(run_id, out_dir), f'{model_type}_timestep_importance.png'), dpi=300, bbox_inches='tight')
     plt.close(fig)
     logging.info("Temporal SHAP plots saved")

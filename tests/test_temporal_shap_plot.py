@@ -33,11 +33,3 @@ def test_two_targets_are_drawn_without_error(run):
 
     assert (run / "plots" / "lstm_temporal_shap_heatmap.png").exists()
     assert (run / "plots" / "lstm_timestep_importance.png").exists()
-
-
-def test_shap_outputs_are_stacked_one_way(run):
-    per_output = [np.zeros((5, 3, 4)), np.ones((5, 3, 4))]
-    single = np.zeros((5, 3, 4))
-
-    assert shap_nn._stack_shap_outputs(per_output).shape == (5, 3, 4, 2)
-    assert shap_nn._stack_shap_outputs(single).shape == (5, 3, 4, 1)

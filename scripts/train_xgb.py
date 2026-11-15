@@ -33,6 +33,7 @@ def derive_splits(data, store=None, n_lags=None):
     split_assignment = store.splits_for(data) if store is not None else None
     prepared, features, targets = prepare_features_and_targets(
         data, lag_required=True, n_lags=n_lags,
+        lag_fill=store.lag_fill() if store is not None else None,
     )
     (
         X_train, y_train, X_train_index_columns,
@@ -97,7 +98,9 @@ def search_xgb(store):
             n_lags, len(splits["X_train"]), len(splits["X_val"]), len(splits["features"]),
         )
 
-    best_params, _ = hyperparameter_search(splits_by_n_lags, store.run_id, use_cv=False)
+    best_params, _ = hyperparameter_search(
+        splits_by_n_lags, store.run_id, use_cv=False, lag_scope=store.lag_scope(),
+    )
 
     store.save_best_params(best_params)
     # The winning lag count decides the feature set the later phases rebuild,
@@ -128,6 +131,7 @@ def train_xgb(store):
         splits["X_train"], splits["y_train"],
         splits["X_val"], splits["y_val"],
         splits["targets"], best_params, store.run_id,
+        lag_scope=store.lag_scope(),
     )
 
     # Save scalers for autoregressive test

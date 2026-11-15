@@ -320,6 +320,15 @@ def main(argv=None):
         _seed(model)
 
         store = RunStore(run_id)
+        if model in ("xgb", "linear"):
+            # train_from_config.py records this for the runs it creates; a run
+            # created here needs it too, or its later phases would read it as
+            # a run that predates the setting.
+            from configs.data import LAG_FILL
+            store.record_settings(model=model, run_id=run_id, dataset=args.dataset, lag_fill=LAG_FILL)
+        if model == "xgb":
+            from configs.models.xgb import XGBTrainerConfig
+            store.record_settings(lag_scope=XGBTrainerConfig().lag_scope)
         _log_run_header(run_id, model, args, {"phases": list(_ALLOWED_PHASES)})
 
         for phase in _ALLOWED_PHASES:
@@ -349,8 +358,12 @@ def main(argv=None):
 
     # Runs without a search phase still need parameters to train with, so the
     # defaults are written while preprocess is still the phase in progress.
+    # A run that plans a search gets none: if its search then fails or covers
+    # only a shard, a train phase must stop for lack of parameters rather
+    # than fit the defaults under the name of a search winner.
     inject_defaults = (
-        (lambda: _set_default_params(model, store)) if args.resume == "preprocess" else None
+        (lambda: _set_default_params(model, store))
+        if args.resume == "preprocess" and "search" not in phases else None
     )
     _run(model, args.resume, store, args, phases=phases, after=inject_defaults)
 

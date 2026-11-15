@@ -10,4 +10,8 @@ dataset: pipeline-min10100-comp0.4-out=9vars-exclude-year-apply-base-year-interp
 # No search phase: the baseline is not tuned.
 phases: [preprocess, train, test, plot]
 
+# Optional: the lag scope of the XGBoost run the baseline is compared against
+# (own_and_complete, own, all; see configs/models/xgb.py).  Default: all.
+# lag_scope: own
+
 note: "Ridge (default alpha) baseline: XGB features, train-median imputation, one-hot Region and Model_Family."

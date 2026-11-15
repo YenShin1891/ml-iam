@@ -26,6 +26,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from scripts.train import _ALLOWED_MODELS, _ALLOWED_PHASES, _assert_resume_run_exists
 
 
+# The models whose features include lagged targets.
+_LAG_MODELS = ("xgb", "linear")
+
+
 @dataclass(frozen=True)
 class RunConfig:
     model: str
@@ -39,6 +43,8 @@ class RunConfig:
     keep_partial_targets: Optional[bool] = None
     target_normalizer_mode: Optional[str] = None  # TFT: "encoder_floored" or "global"
     search_shard: Optional[str] = None  # "index/count" when several machines split one search
+    lag_fill: Optional[str] = None  # XGB/linear: how target gaps are filled before lagging
+    lag_scope: Optional[str] = None  # XGB, linear: which lagged outputs each per-output model reads
     note: Optional[str] = None
 
 
@@ -233,6 +239,24 @@ def _parse_config(obj: Dict[str, Any]) -> RunConfig:
 
     search_shard = _parse_search_shard(obj.get("search_shard"))
 
+    lag_fill = obj.get("lag_fill")
+    if lag_fill is not None:
+        from configs.data import LAG_FILL_METHODS
+
+        if lag_fill not in LAG_FILL_METHODS:
+            raise ValueError(f"'lag_fill' must be one of {sorted(LAG_FILL_METHODS)}")
+        if model not in _LAG_MODELS:
+            raise ValueError(f"'lag_fill' applies to {sorted(_LAG_MODELS)} runs only; {model} builds no lag features")
+
+    lag_scope = obj.get("lag_scope")
+    if lag_scope is not None:
+        from configs.models.xgb import LAG_SCOPES
+
+        if lag_scope not in LAG_SCOPES:
+            raise ValueError(f"'lag_scope' must be one of {sorted(LAG_SCOPES)}")
+        if model not in _LAG_MODELS:
+            raise ValueError(f"'lag_scope' applies to {sorted(_LAG_MODELS)} runs only; {model} builds no lag features")
+
     note = obj.get("note")
     if note is not None and not isinstance(note, str):
         raise ValueError("'note' must be a string when provided")
@@ -249,6 +273,8 @@ def _parse_config(obj: Dict[str, Any]) -> RunConfig:
         keep_partial_targets=keep_partial_targets,
         target_normalizer_mode=target_normalizer_mode,
         search_shard=search_shard,
+        lag_fill=lag_fill,
+        lag_scope=lag_scope,
         note=note,
     )
 
@@ -306,6 +332,34 @@ def _write_run_metadata(
     except Exception as e:
         logging.warning("Could not copy original run config for provenance: %s", e)
 
+    # Always a concrete value for a model with lag features: a record without
+    # one marks a run that predates the setting (RunStore.lag_fill reads those
+    # as "linear").
+    from configs.data import LAG_FILL
+
+    lag_fill = (cfg.lag_fill or LAG_FILL) if cfg.model in _LAG_MODELS else None
+
+    # The same for the lag scope: a record without one marks a run whose
+    # per-output models read every lag (RunStore.lag_scope).  The linear
+    # baseline reads every lag unless its YAML names the scope of the XGBoost
+    # run it is compared against.
+    lag_scope = None
+    if cfg.model == "xgb":
+        from configs.models.xgb import XGBTrainerConfig
+
+        lag_scope = cfg.lag_scope or XGBTrainerConfig().lag_scope
+    elif cfg.model == "linear":
+        lag_scope = cfg.lag_scope or "all"
+
+    # A new TFT run normalizes its targets globally unless its YAML says
+    # otherwise.  The per-sample mode takes each window's center and scale
+    # from the true targets of its encoder steps, so such a model cannot
+    # emulate a scenario whose outputs are unknown.  A record without a value
+    # marks an older run fitted under the code default (encoder_floored).
+    target_normalizer_mode = cfg.target_normalizer_mode
+    if cfg.model == "tft" and target_normalizer_mode is None:
+        target_normalizer_mode = "global"
+
     # Write resolved config (JSON for easy parsing)
     resolved = {
         "model": cfg.model,
@@ -315,9 +369,11 @@ def _write_run_metadata(
         "cuda_visible_devices_by_phase": dict(cfg.cuda_visible_devices_by_phase),
         "cuda_visible_devices_resolved_by_phase": dict(cuda_by_phase_resolved),
         "two_window": cfg.two_window,
-        "target_normalizer_mode": cfg.target_normalizer_mode,
+        "target_normalizer_mode": target_normalizer_mode,
         "search_shard": cfg.search_shard,
         "keep_partial_targets": cfg.keep_partial_targets,
+        "lag_fill": lag_fill,
+        "lag_scope": lag_scope,
         "note": cfg.note,
         "phases": list(cfg.phases),
     }
@@ -390,6 +446,18 @@ def _validate_model_constraints(cfg: RunConfig) -> None:
             f"run_id '{cfg.run_id}' does not match model '{cfg.model}'. Expected prefix '{cfg.model}_'."
         )
 
+    if cfg.lag_fill is not None and _continues_existing_run(cfg):
+        raise ValueError(
+            "'lag_fill' is fixed when a run is created: its model was fitted on lags built "
+            "that way.  Start a new run to change it."
+        )
+
+    if cfg.lag_scope is not None and _continues_existing_run(cfg):
+        raise ValueError(
+            "'lag_scope' is fixed when a run is created: its search and its final fit must "
+            "read the same lags.  Start a new run to change it."
+        )
+
     if cfg.run_id is None and cfg.phases[0] != "preprocess":
         raise ValueError(
             f"phases start with '{cfg.phases[0]}' but no run_id is set: a new run must begin "
@@ -452,6 +520,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # Before anything below creates the directory, which would let the
         # child's own existence check pass on an empty run.
         _assert_resume_run_exists(run_id)
+    elif cfg.run_id is not None and _meta_dir(run_id).joinpath("run_config.resolved.json").exists():
+        # Starting at preprocess means a new run, whose settings record is
+        # written from this config and today's defaults.  Over an existing
+        # run that would replace the lag fill, lag scope and prediction
+        # settings its model was fitted with.
+        raise ValueError(
+            f"Run '{run_id}' already exists and its phases start at 'preprocess', which would "
+            "rewrite the settings the run was trained with. Use 'resume: preprocess' to redo "
+            "that phase of the existing run, or drop 'run_id' to start a new one."
+        )
 
     # Prepare env for subprocesses
     child_env = dict(os.environ)

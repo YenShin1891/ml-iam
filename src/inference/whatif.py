@@ -112,7 +112,9 @@ def load_prepared_run(store: RunStore) -> PreparedRun:
 
         saved_features, targets = store.load_features()
         n_lags = max(int(match.group(1) or 1) for f in saved_features if (match := re.match(r"prev(\d*)_", f)))
-        rows, _, _ = prepare_features_and_targets(data, lag_required=False, n_lags=n_lags)
+        rows, _, _ = prepare_features_and_targets(
+            data, lag_required=False, n_lags=n_lags, lag_fill=store.lag_fill(),
+        )
         # Lag inputs belong to the autoregressive model, not to the sliders.
         inputs = [f for f in saved_features if not re.match(r"prev\d*_", f)]
         for feature in raw_feature_names(inputs):

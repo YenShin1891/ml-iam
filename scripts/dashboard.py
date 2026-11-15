@@ -141,6 +141,15 @@ def apply_filters():
         st.error("Required data not found in session state. Please ensure the model has been trained.")
         return
 
+    # A value the IAM did not report is stored at its fill value (zero for the
+    # sequence models).  Blank it, as the metrics files and the paper figures
+    # do, so it is neither drawn as an IAM value nor scored.
+    from src.data.preprocess import observed_mask_from_frame
+    observed = observed_mask_from_frame(test_data, list(st.session_state.targets))
+    y_test = np.asarray(y_test, dtype=float)
+    if observed is not None and observed.shape == y_test.shape:
+        y_test = np.where(observed.astype(bool), y_test, np.nan)
+
     # Build filter mask.  A filter whose column the rows lack cannot apply;
     # say so rather than silently showing every value.
     selections = {

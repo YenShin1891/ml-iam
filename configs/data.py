@@ -54,6 +54,15 @@ INCLUDE_DATE = True
 DATE_FMT = "%Y-%m-%d"
 # Tags include dynamic count of output variables
 # Pre-defined tags: include-intermediate, apply-base-year, with-ssp
+#
+# include-intermediate is off by default and was off for every run reported in
+# the paper.  The classification table (metadata/variable_classification_full.csv)
+# types each AR6 variable as input, intermediate or output:
+#   intermediate  not the exogenous input end of a model, but usable in place
+#                 of an input the models do not report as a variable;
+#   output        anything a model computes, investment as much as emissions.
+# Without the tag an intermediate variable is treated as an output and is never
+# a model input; with it, the intermediate variables join the inputs.
 TAGS = [f"out={len(OUTPUT_VARIABLES)}vars", "exclude-year", "apply-base-year"]
 SAVE_ANALYSIS = True
 
@@ -109,6 +118,18 @@ REGION_SCALE_ORDER = ["World", "R5", "R6", "R10", "ISO3"]
 # This fills partial year coverage so lags are computed from real values.
 INTERPOLATE_TARGETS = True
 
+# How a gap in a target series is filled before the lag features are built
+# (XGBoost and the linear baseline; only with INTERPOLATE_TARGETS).
+#   "carry_forward"  the last reported value: a lag never holds anything
+#                    reported after the timestep it stands for.
+#   "linear"         the straight line between the reports either side of the
+#                    gap.  The lag of the step after a gap then contains that
+#                    step's own target.  Runs up to xgb_85 were built this way.
+# A run records its setting (meta/run_config.resolved.json) and later phases
+# read it back, so changing this affects new runs only.
+LAG_FILL = "carry_forward"
+LAG_FILL_METHODS = ("carry_forward", "linear")
+
 # When True, impute missing continuous features using train medians
 # computed per Region_Scale group instead of a single global median.
 SCALE_AWARE_IMPUTATION = True
@@ -129,6 +150,15 @@ POPULATION_COLUMN = "Population"
 # (original behaviour) so all models see complete target vectors — XGBoost
 # uses native multi-output regression with cross-target tree splits.
 KEEP_PARTIAL_TARGETS = True
+
+# The TFT's batches carry one <target>__observed flag per target and timestep
+# so its masked loss can skip unreported elements.  When False (the default)
+# the flags stop there: the network does not read them, so emulating a new
+# scenario needs no knowledge of which targets its IAM would have reported.
+# When True they are also model inputs at every timestep, as in runs up to
+# tft_95.  A trained checkpoint keeps whichever input list it was fitted
+# with, so this only affects models created from here on.
+TFT_OBSERVED_FLAGS_AS_INPUTS = False
 
 # When True, resample groups that have only 10- or 20-year intervals onto a
 # uniform 5-year grid by inserting intermediate rows with interpolated values.
