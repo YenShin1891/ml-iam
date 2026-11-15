@@ -70,7 +70,9 @@ def _safe_members(tar: tarfile.TarFile, run_id: str):
 
 def install(run_id: str, archive: Path, expected_sha256: str, results_path: Path, force: bool = False) -> Path:
     actual = _sha256(archive)
-    if expected_sha256 and actual != expected_sha256:
+    if not expected_sha256:
+        raise RuntimeError(f"{archive.name}: the registry lists no SHA-256 for {run_id}; refusing an unverified archive.")
+    if actual != expected_sha256:
         raise RuntimeError(f"{archive.name}: SHA-256 {actual} does not match the published {expected_sha256}")
 
     kind = run_id.split("_", 1)[0]

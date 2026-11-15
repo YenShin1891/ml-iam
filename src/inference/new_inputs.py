@@ -113,13 +113,28 @@ def complete_scenario_table(table: pd.DataFrame) -> pd.DataFrame:
     if not year_columns:
         raise InputError("The scenario table has no year columns (headers such as 2020, 2025, ...).")
 
-    if "Model_Family" not in table.columns:
-        table["Model_Family"] = table["Model"].astype(str).map(get_model_family)
-    if "Scenario_Category" not in table.columns:
-        table["Scenario_Category"] = PLACEHOLDER_CATEGORY
-    table["Scenario_Category"] = table["Scenario_Category"].fillna(PLACEHOLDER_CATEGORY)
-    if "Region_Scale" not in table.columns:
-        table["Region_Scale"] = region_scales(table["Region"]).to_numpy()
+    # The optional identifiers are part of a series' identity downstream: a
+    # series whose rows disagree on one would be split in two, and rows left
+    # blank would be dropped.  Give each series one value, or say why not.
+    derived = {
+        "Model_Family": lambda: table["Model"].astype(str).map(get_model_family),
+        "Scenario_Category": lambda: pd.Series(PLACEHOLDER_CATEGORY, index=table.index),
+        "Region_Scale": lambda: pd.Series(region_scales(table["Region"]).to_numpy(), index=table.index),
+    }
+    for column, derive in derived.items():
+        if column not in table.columns:
+            table[column] = derive()
+            continue
+        values = table[column].where(table[column].astype(str).str.strip() != "")
+        per_series = values.groupby([table[c] for c in ID_COLUMNS], sort=False)
+        distinct = per_series.transform("nunique")
+        if (distinct > 1).any():
+            example = table.loc[distinct > 1, ID_COLUMNS].iloc[0].tolist()
+            raise InputError(
+                f"{column} takes more than one value within a (Model, Scenario, Region) series, "
+                f"e.g. {example}. Give each series one value, or drop the column."
+            )
+        table[column] = values.fillna(per_series.transform("first")).fillna(derive())
 
     duplicated = table.duplicated(ID_COLUMNS + ["Variable"])
     if duplicated.any():
