@@ -1,14 +1,11 @@
 """Dashboard configuration — default run IDs per model type and the what-if view."""
 
 from configs.data import OUTPUT_VARIABLES
+from configs.paper import PAPER_RUNS
 
-# When the URL has just ?run_id=xgb (or lstm, tft), resolve to these defaults.
-# Update these when you have a new best run for each model.
-DEFAULT_RUNS = {
-    "xgb": "xgb_85",
-    "lstm": "lstm_89",
-    "tft": "tft_95",
-}
+# When the URL has just ?run_id=xgb (or lstm, tft), resolve to the run the
+# paper reports for that model (configs/paper.py).
+DEFAULT_RUNS = dict(PAPER_RUNS)
 
 # ── What-if emulator view ─────────────────────────────────────────────────
 # Model types supported by the saved-checkpoint CPU inference adapters.

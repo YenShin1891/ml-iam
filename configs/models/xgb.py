@@ -25,7 +25,8 @@ class XGBTrainerConfig:
     # each booster to lags that are always present removes both the mismatch
     # and the reporting pattern from its inputs.  The choice is saved with the
     # model, so later phases follow the model rather than this default.
-    lag_scope: str = "own_and_complete"
+    # "own" is the setting of the run the paper reports (configs/paper.py).
+    lag_scope: str = "own"
 
     # Training loop controls
     early_stopping_rounds: int = 15

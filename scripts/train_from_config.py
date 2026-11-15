@@ -340,16 +340,14 @@ def _write_run_metadata(
     lag_fill = (cfg.lag_fill or LAG_FILL) if cfg.model in _LAG_MODELS else None
 
     # The same for the lag scope: a record without one marks a run whose
-    # per-output models read every lag (RunStore.lag_scope).  The linear
-    # baseline reads every lag unless its YAML names the scope of the XGBoost
-    # run it is compared against.
+    # per-output models read every lag (RunStore.lag_scope).  A new run takes
+    # the XGBoost default unless its YAML names a scope; the linear baseline
+    # follows the same default, so it is compared like for like.
     lag_scope = None
-    if cfg.model == "xgb":
+    if cfg.model in ("xgb", "linear"):
         from configs.models.xgb import XGBTrainerConfig
 
         lag_scope = cfg.lag_scope or XGBTrainerConfig().lag_scope
-    elif cfg.model == "linear":
-        lag_scope = cfg.lag_scope or "all"
 
     # A new TFT run normalizes its targets globally unless its YAML says
     # otherwise.  The per-sample mode takes each window's center and scale

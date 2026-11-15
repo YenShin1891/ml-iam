@@ -41,6 +41,7 @@ from configs.data import (
     REGION_CODE_TO_LABEL,
     SPLIT_SEED,
 )
+from configs.paper import MODEL_NAMES, PAPER_RUNS
 from configs.visualization import DEFAULT_REGION, SHAP_MAX_DISPLAY, SHAP_NORMALISED_XLABEL
 from src.data.preprocess import encode_categorical_columns
 from src.data.process_data import SCENARIO_CATEGORY_CSV, relabel_scenario_categories
@@ -67,7 +68,8 @@ ANNOT = 14
 LEGEND = 12
 PANEL_LABEL = 17
 KFMT = FuncFormatter(lambda x, p: f"{x/1000:.0f}k" if abs(x) >= 1000 else f"{x:.0f}")
-RUNS: List[Tuple[str, str]] = [("xgb_85", "XGBoost"), ("lstm_89", "LSTM"), ("tft_95", "TFT")]
+# The paper's runs and their panel titles (configs/paper.py).
+RUNS: List[Tuple[str, str]] = [(run, MODEL_NAMES[kind]) for kind, run in PAPER_RUNS.items()]
 META_COLUMNS = ["Model", "Scenario", "Region", "Model_Family", "Scenario_Category", "Year"]
 
 # Figure 6 (SHAP beeswarm panels): one panel is drawn per model at

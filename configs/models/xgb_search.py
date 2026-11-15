@@ -16,19 +16,20 @@ from src.trainers.search import (
 class XGBDefaultParams:
     """Default XGBoost hyperparameters used when search is skipped.
 
-    The previous search's winner (xgb_85); independent of the space below.
+    The winner of the search behind the run the paper reports (xgb_90);
+    independent of the space below.
     No round count: like a searched run, the final fit early-stops on the
     validation set rather than training for a number fixed in advance.
     """
 
-    max_depth: int = 17
-    min_child_weight: int = 3
-    gamma: float = 0.05988567454877808
-    eta: float = 0.03323227712717957
-    reg_alpha: float = 0.0006118466600411781
-    reg_lambda: float = 24.067485967955477
-    subsample: float = 0.8145098177471501
-    colsample_bytree: float = 0.8968951911726731
+    max_depth: int = 14
+    min_child_weight: int = 2
+    gamma: float = 0.009993832704379368
+    eta: float = 0.058412524024147025
+    reg_alpha: float = 1.717909082256476e-05
+    reg_lambda: float = 0.8386372010706861
+    subsample: float = 0.8754644731223081
+    colsample_bytree: float = 0.6222858774806425
     # Context length, not a booster argument; see XGBSearchSpace.
     n_lags: int = 2
 
