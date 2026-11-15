@@ -164,7 +164,7 @@ Example configs are provided for each model under `configs/runs/`.
 | `cuda_visible_devices` | `default` for all phases, override `search` for multi-GPU (e.g. `{default: "0", search: "0,1,2,3"}`) |
 | `note` | Free-text note saved with the run |
 | `two_window` | Use two-window prediction (TFT only, affects the test phase) |
-| `target_normalizer_mode` | TFT only: `encoder_floored` (default) or `global` |
+| `target_normalizer_mode` | TFT only: `global` (default for new runs) or `encoder_floored`, which reads true target values at prediction time |
 | `keep_partial_targets` | Train on rows where only some targets are observed (default from `configs/data.py`) |
 | `run_id` | Existing run ID to resume (e.g. `tft_01`). Required when using `resume`. |
 | `resume` | Phase to resume from: `preprocess`, `search`, `train`, `test`, or `plot`. Runs only that single phase using the existing run's data/config. |
@@ -421,7 +421,7 @@ IAM's own and next to the emulator's forecast of the unchanged inputs.
 
 The model runs on the CPU, so the dashboard environment needs the deep
 learning stack (`requirements-dashboard.txt` pulls it in; a CPU-only torch
-wheel is enough). TFT runs only, for now.
+wheel is enough). It works with TFT, LSTM and XGBoost runs.
 
 ---
 
