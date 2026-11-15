@@ -346,13 +346,13 @@ make unit-test        # or: python -m pytest tests -q
 
 The paper reports four runs: `xgb_90` (XGBoost), `lstm_89` (LSTM), `tft_106` (TFT) and the ridge baseline `linear_04`.
 They are named in one place, `configs/paper.py`, which the dashboard shortcuts and the figure scripts' defaults follow.
-The archives on Zenodo ([10.5281/zenodo.22828667](https://doi.org/10.5281/zenodo.22828667)) hold `xgb_85`, `lstm_89` and `tft_95`: the LSTM is the paper's run, and the XGBoost and TFT archives are the runs of the previous manuscript version, which `xgb_90` and `tft_106` replace. `metadata/published_models.json` lists what `make fetch-models` downloads.
+The three emulators are archived on Zenodo ([10.5281/zenodo.24247480](https://doi.org/10.5281/zenodo.24247480)); `metadata/published_models.json` lists what `make fetch-models` downloads. The first version of that record ([10.5281/zenodo.22828667](https://doi.org/10.5281/zenodo.22828667)) holds `xgb_85` and `tft_95`, the XGBoost and TFT runs of the previous manuscript version.
 
 ```bash
 cp configs/paths-template.py configs/paths.py      # RESULTS_PATH is where the runs are unpacked
-make fetch-models                                  # or MODELS=tft_95
-make predict RUN_ID=tft_95 DESCRIBE=1              # inputs, regions and model families the run knows
-make predict RUN_ID=tft_95 INPUT=my_scenarios.csv OUTPUT=emulated.csv
+make fetch-models                                  # or MODELS=tft_106
+make predict RUN_ID=tft_106 DESCRIBE=1             # inputs, regions and model families the run knows
+make predict RUN_ID=tft_106 INPUT=my_scenarios.csv OUTPUT=emulated.csv
 ```
 
 The input is a CSV in the IAMC wide layout (`Model, Scenario, Region, Variable, 2020, 2025, ...`) holding the input Variables of your scenarios. The LSTM and TFT read inputs only; XGBoost also needs the target values at the first three timesteps. Input Variables you do not have can be left out.

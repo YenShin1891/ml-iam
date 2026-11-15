@@ -3,14 +3,14 @@
 """Regenerate the manuscript figures from run artifacts.
 
 Usage:
-  python scripts/plot_paper_figures.py fig3 --runs xgb_85 lstm_89 tft_95 \
+  python scripts/plot_paper_figures.py fig3 --runs xgb_90 lstm_89 tft_106 \
       --out /root/paper_figures/fig3_scatter_CO2.png
-  python scripts/plot_paper_figures.py fig4 --runs xgb_85 lstm_89 tft_95 \
+  python scripts/plot_paper_figures.py fig4 --runs xgb_90 lstm_89 tft_106 \
       --categories C1 C2 C3 --region World \
       --out /root/paper_figures/fig4_trajectories_CO2.png
-  python scripts/plot_paper_figures.py fig6 --runs xgb_85 lstm_89 tft_95 \
+  python scripts/plot_paper_figures.py fig6 --runs xgb_90 lstm_89 tft_106 \
       --out /root/paper_figures/fig6_shap_CO2.png
-  python scripts/plot_paper_figures.py figS10 --runs tft_95 lstm_89 \
+  python scripts/plot_paper_figures.py figS10 --runs tft_106 lstm_89 \
       --out /root/paper_figures/figS10_embeddings.png
 
 fig3: IAM vs. emulated CO2 scatter per model (prints R^2 per model).

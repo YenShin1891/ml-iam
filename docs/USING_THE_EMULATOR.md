@@ -12,9 +12,9 @@ summary statistics, listed in `metadata/published_models.json`.
 
 | Run | Model | Needs target history | Timesteps needed | Leading steps without a prediction |
 |---|---|---|---|---|
-| `xgb_85` | XGBoost, one booster per target, autoregressive | yes, first 3 timesteps | 4 | 3 |
+| `xgb_90` | XGBoost, one booster per target, autoregressive | yes, first 3 timesteps | 4 | 3 |
 | `lstm_89` | LSTM with Region and Model_Family embeddings | no | 3 | 2 |
-| `tft_95` | Temporal Fusion Transformer, two-window forecast | no | 15 | 3 |
+| `tft_106` | Temporal Fusion Transformer, two-window forecast | no | 15 | 3 |
 
 The archives contain **no AR6 data**. They hold the weights, the feature and
 target lists, the category vocabularies, the scalers, the imputation medians,
@@ -31,14 +31,14 @@ git clone https://github.com/YenShin1891/ml-iam && cd ml-iam
 pip install -r requirements.txt            # add requirements-advanced.txt for LSTM and TFT
 cp configs/paths-template.py configs/paths.py
 
-make fetch-models                          # all three, or MODELS=tft_95
-make predict RUN_ID=tft_95 DESCRIBE=1      # what this run expects
-make predict RUN_ID=tft_95 INPUT=my_scenarios.csv OUTPUT=emulated.csv
+make fetch-models                          # all three, or MODELS=tft_106
+make predict RUN_ID=tft_106 DESCRIBE=1     # what this run expects
+make predict RUN_ID=tft_106 INPUT=my_scenarios.csv OUTPUT=emulated.csv
 ```
 
 `fetch-models` checks every archive against its published SHA-256 and unpacks
 it under `RESULTS_PATH/<model>/<run_id>/`. If you downloaded an archive by
-hand, pass it with `ARCHIVE=path/to/tft_95.tar.gz`.
+hand, pass it with `ARCHIVE=path/to/tft_106.tar.gz`.
 
 Prediction runs on the CPU and needs neither a GPU nor the AR6 data.
 
@@ -93,11 +93,6 @@ because the models use them as context.
 - Accuracy differs by region and variable. `metrics/performance_by_region.csv`
   in each bundle and Appendix F of the paper give the numbers. Country-level
   series are the weakest.
-- The TFT was trained with a per-target flag marking whether the source IAM
-  reported that target at that timestep, which the masked loss requires. For a
-  new scenario every flag is set to "reported". On the AR6 test set this
-  lowers the per-target average R² from 0.984 to 0.979, so expect accuracy at
-  the lower figure.
 
 ## 5. Reproducing the paper's test metrics
 
@@ -107,13 +102,13 @@ download:
 
 ```bash
 make process-data                          # prints the dataset version it wrote
-python scripts/train.py --model xgb --resume preprocess --run_id xgb_85 --dataset <that version>
-python scripts/train.py --model xgb --resume test       --run_id xgb_85 --dataset <that version>
+python scripts/train.py --model xgb --resume preprocess --run_id xgb_90 --dataset <that version>
+python scripts/train.py --model xgb --resume test       --run_id xgb_90 --dataset <that version>
 ```
 
 `preprocess` rebuilds the run's cached data and reuses the published split.
 `test` rewrites `metrics/performance.csv`, which should match the copy in the
-bundle. The dashboard (`make dashboard RUN_ID=xgb_85`) works after the same
+bundle. The dashboard (`make dashboard RUN_ID=xgb_90`) works after the same
 two steps. Use `--model lstm` or `--model tft` for the other runs. The TFT
 test phase expects a GPU.
 

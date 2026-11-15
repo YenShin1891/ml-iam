@@ -2,8 +2,8 @@
 """Download a published trained run and unpack it under RESULTS_PATH.
 
     python scripts/fetch_models.py --list
-    python scripts/fetch_models.py --run_id tft_95
-    python scripts/fetch_models.py --run_id tft_95 --archive ~/Downloads/tft_95.tar.gz
+    python scripts/fetch_models.py --run_id tft_106
+    python scripts/fetch_models.py --run_id tft_106 --archive ~/Downloads/tft_106.tar.gz
 
 The published runs, their archive names and SHA-256 sums are listed in
 metadata/published_models.json.  Every download (or local ``--archive``) is

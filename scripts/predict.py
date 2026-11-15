@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """Emulate new scenarios with a trained run.
 
-    python scripts/predict.py --run_id tft_95 --describe
-    python scripts/predict.py --run_id tft_95 --input my_scenarios.csv --output emulated.csv
+    python scripts/predict.py --run_id tft_106 --describe
+    python scripts/predict.py --run_id tft_106 --input my_scenarios.csv --output emulated.csv
 
 The input is a CSV in the layout of the processed dataset: columns Model,
 Scenario, Region, Variable, then one column per year.  Model_Family and
@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--run_id", required=True, help="e.g. xgb_85, lstm_89, tft_95")
+    parser.add_argument("--run_id", required=True, help="e.g. xgb_90, lstm_89, tft_106")
     parser.add_argument("--input", help="scenario table (CSV)")
     parser.add_argument("--output", help="where to write the predictions (CSV)")
     parser.add_argument("--format", choices=("tidy", "iamc"), default="tidy",
