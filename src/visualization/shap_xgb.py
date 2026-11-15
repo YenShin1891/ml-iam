@@ -50,14 +50,14 @@ def get_shap_values(run_id, X_test: pd.DataFrame, targets: Optional[List[str]] =
         logging.info("Calculating SHAP values for %d per-target models...", len(per_target_models))
         shap_values = np.stack(
             [
-                shap.TreeExplainer(m, approximate=True).shap_values(X_test)
+                shap.TreeExplainer(m).shap_values(X_test)
                 for m in per_target_models
             ],
             axis=-1,
         )
     else:
         logging.info("Calculating SHAP values...")
-        shap_values = shap.TreeExplainer(model, approximate=True).shap_values(X_test)
+        shap_values = shap.TreeExplainer(model).shap_values(X_test)
 
     os.makedirs(os.path.join(get_run_root(run_id), "plots"), exist_ok=True)
     np.save(os.path.join(get_run_root(run_id), "plots", "shap_values.npy"), shap_values)
